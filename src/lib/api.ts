@@ -1,23 +1,58 @@
+import { aiManager } from '@/lib/ai';
+import type { GeneratedSEOResult } from '@/lib/ai';
+import { apiClient } from '@/lib/api/client';
 import { supabase } from '@/lib/supabase';
-import type {
-  Scene, Voice, PexelsImage, PexelsVideo, BulkJob, TrendTopic, Thumbnail, VisualMode,
-  HookVariation, ScriptAnalysis,
-  PredictiveScore, AutoClipJob, ViralFormula, ContentGap,
-  AvatarPreset, VoiceClone, BrollSuggestion, DubJob, SilenceRemovalJob,
-  MusicMatchSuggestion, VideoChapter, ABTest, ThumbnailHeatmap,
-  AutoReply, OptimalTime, TrendAlert, RetentionReplay, CrossPlatformPost,
-  FacelessProject, TeamMember, WorkflowAutomation, RevenueForecast,
-  PromptTemplate, HashtagStrategy, RepurposingJob, AudiencePersona,
-  ScriptTemplateLib, IntroOutroDesign, CollaborationNote, BulkThumbnailJob,
-  NicheTrend, SubscriberGrowth, TitleOptimization, CommentSentiment,
-  ContentPillar, HookTest, CrossPlatformSchedule, Storyboard,
-} from '@/lib/types';
 
-const FUNCTION_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-const HEADERS = {
-  Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-  'Content-Type': 'application/json',
-};
+import type {
+  Scene,
+  Voice,
+  PexelsImage,
+  PexelsVideo,
+  BulkJob,
+  TrendTopic,
+  Thumbnail,
+  VisualMode,
+  HookVariation,
+  ScriptAnalysis,
+  PredictiveScore,
+  AutoClipJob,
+  ViralFormula,
+  ContentGap,
+  AvatarPreset,
+  VoiceClone,
+  BrollSuggestion,
+  DubJob,
+  SilenceRemovalJob,
+  MusicMatchSuggestion,
+  VideoChapter,
+  ABTest,
+  ThumbnailHeatmap,
+  AutoReply,
+  OptimalTime,
+  TrendAlert,
+  RetentionReplay,
+  CrossPlatformPost,
+  FacelessProject,
+  TeamMember,
+  WorkflowAutomation,
+  RevenueForecast,
+  PromptTemplate,
+  HashtagStrategy,
+  RepurposingJob,
+  AudiencePersona,
+  ScriptTemplateLib,
+  IntroOutroDesign,
+  CollaborationNote,
+  BulkThumbnailJob,
+  NicheTrend,
+  SubscriberGrowth,
+  TitleOptimization,
+  CommentSentiment,
+  ContentPillar,
+  HookTest,
+  CrossPlatformSchedule,
+  Storyboard,
+} from '@/lib/types';
 
 export interface GeneratedScript {
   title: string;
@@ -25,6 +60,46 @@ export interface GeneratedScript {
   script: string;
   cta: string;
   scenes: Scene[];
+}
+
+interface VoiceoverResponse {
+  audio: string;
+}
+
+interface VoiceListResponse {
+  voices?: Voice[];
+}
+
+interface YouTubeAuthResponse {
+  authUrl: string;
+}
+
+interface YouTubePublishResponse {
+  youtubeVideoId: string;
+}
+
+interface ImageSearchResponse {
+  images?: PexelsImage[];
+}
+
+interface VideoSearchResponse {
+  videos?: PexelsVideo[];
+}
+
+function base64ToBlob(
+  base64: string,
+  contentType = 'audio/mpeg',
+): Blob {
+  const audioBytes = atob(base64);
+  const byteArray = new Uint8Array(audioBytes.length);
+
+  for (let index = 0; index < audioBytes.length; index += 1) {
+    byteArray[index] = audioBytes.charCodeAt(index);
+  }
+
+  return new Blob([byteArray], {
+    type: contentType,
+  });
 }
 
 export async function generateScript(params: {
@@ -36,136 +111,192 @@ export async function generateScript(params: {
   bodyStructure?: string;
   cta?: string;
 }): Promise<GeneratedScript> {
-  const response = await fetch(`${FUNCTION_BASE}/generate-script`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || `Failed to generate script (${response.status})`);
-  }
-  return response.json();
+  return aiManager.generateScript(params);
 }
 
-export async function generateVoiceover(text: string, voiceId?: string): Promise<Blob> {
-  const response = await fetch(`${FUNCTION_BASE}/generate-voiceover`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify({ text, voiceId }),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || `Failed to generate voiceover (${response.status})`);
+export async function generateVoiceover(
+  text: string,
+  voiceId?: string,
+): Promise<Blob> {
+  const data = await apiClient.post<VoiceoverResponse>(
+    'generate-voiceover',
+    {
+      text,
+      voiceId,
+    },
+    {
+      retryCount: 0,
+      timeoutMs: 90_000,
+    },
+  );
+
+  if (!data.audio) {
+    throw new Error('Ses dosyası sunucudan alınamadı.');
   }
-  const data = await response.json();
-  const audioBytes = atob(data.audio);
-  const arrayBuffer = new Uint8Array(audioBytes.length);
-  for (let i = 0; i < audioBytes.length; i++) {
-    arrayBuffer[i] = audioBytes.charCodeAt(i);
-  }
-  return new Blob([arrayBuffer], { type: 'audio/mpeg' });
+
+  return base64ToBlob(data.audio);
 }
 
 export async function listVoices(): Promise<Voice[]> {
-  const response = await fetch(`${FUNCTION_BASE}/list-voices`, {
-    headers: HEADERS,
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || `Failed to list voices (${response.status})`);
-  }
-  const data = await response.json();
+  const data = await apiClient.get<VoiceListResponse>(
+    'list-voices',
+    {
+      retryCount: 2,
+    },
+  );
+
   return data.voices ?? [];
 }
 
-export async function getYouTubeAuthUrl(channelId: string): Promise<string> {
-  const response = await fetch(`${FUNCTION_BASE}/youtube-auth?state=${channelId}`, {
-    headers: HEADERS,
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || `Failed to get auth URL (${response.status})`);
+export async function getYouTubeAuthUrl(
+  channelId: string,
+): Promise<string> {
+  const state = encodeURIComponent(channelId);
+
+  const data = await apiClient.get<YouTubeAuthResponse>(
+    `youtube-auth?state=${state}`,
+    {
+      retryCount: 1,
+    },
+  );
+
+  if (!data.authUrl) {
+    throw new Error('YouTube yetkilendirme adresi alınamadı.');
   }
-  const data = await response.json();
+
   return data.authUrl;
 }
 
-export async function publishToYouTube(channelId: string, videoId: string): Promise<string> {
-  const response = await fetch(`${FUNCTION_BASE}/youtube-publish`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify({ channelId, videoId }),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || `Failed to publish (${response.status})`);
+export async function publishToYouTube(
+  channelId: string,
+  videoId: string,
+): Promise<string> {
+  const data = await apiClient.post<YouTubePublishResponse>(
+    'youtube-publish',
+    {
+      channelId,
+      videoId,
+    },
+    {
+      retryCount: 0,
+      timeoutMs: 120_000,
+    },
+  );
+
+  if (!data.youtubeVideoId) {
+    throw new Error('YouTube video kimliği alınamadı.');
   }
-  const data = await response.json();
+
   return data.youtubeVideoId;
 }
 
-export async function uploadMedia(file: Blob, path: string): Promise<string> {
-  const { data, error } = await supabase.storage.from('media').upload(path, file, {
-    contentType: file.type,
-    upsert: true,
-  });
-  if (error) throw new Error(error.message);
-  return supabase.storage.from('media').getPublicUrl(path).data.publicUrl;
+export async function uploadMedia(
+  file: Blob,
+  path: string,
+): Promise<string> {
+  const { error } = await supabase.storage
+    .from('media')
+    .upload(path, file, {
+      contentType: file.type || undefined,
+      upsert: true,
+    });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return supabase.storage
+    .from('media')
+    .getPublicUrl(path)
+    .data.publicUrl;
 }
 
-export async function saveApiKey(key: string, value: string): Promise<void> {
-  const { error } = await supabase.from('api_keys').upsert({
-    key,
-    value,
-    updated_at: new Date().toISOString(),
-  });
-  if (error) throw new Error(error.message);
+export async function saveApiKey(
+  key: string,
+  value: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('api_keys')
+    .upsert({
+      key,
+      value,
+      updated_at: new Date().toISOString(),
+    });
+
+  if (error) {
+    throw new Error(error.message);
+  }
 }
 
-export async function getApiKey(key: string): Promise<string | null> {
-  const { data } = await supabase.from('api_keys').select('value').eq('key', key).maybeSingle();
+export async function getApiKey(
+  key: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('api_keys')
+    .select('value')
+    .eq('key', key)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
   return data?.value ?? null;
 }
 
-export async function getApiKeyKeys(): Promise<Record<string, boolean>> {
-  const { data } = await supabase.from('api_keys').select('key');
+export async function getApiKeyKeys(): Promise<
+  Record<string, boolean>
+> {
+  const { data, error } = await supabase
+    .from('api_keys')
+    .select('key');
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
   const result: Record<string, boolean> = {};
-  data?.forEach((row: { key: string }) => { result[row.key] = true; });
+
+  data?.forEach((row: { key: string }) => {
+    result[row.key] = true;
+  });
+
   return result;
 }
 
-export async function searchImages(query: string, perPage = 3): Promise<PexelsImage[]> {
-  const response = await fetch(`${FUNCTION_BASE}/search-images`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+export async function searchImages(
+  query: string,
+  perPage = 3,
+): Promise<PexelsImage[]> {
+  const data = await apiClient.post<ImageSearchResponse>(
+    'search-images',
+    {
+      query,
+      perPage,
     },
-    body: JSON.stringify({ query, perPage }),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to search images' }));
-    throw new Error(err.error || 'Failed to search images');
-  }
-  const data = await response.json();
+    {
+      retryCount: 2,
+    },
+  );
+
   return data.images ?? [];
 }
 
-export async function searchVideos(query: string, perPage = 5): Promise<PexelsVideo[]> {
-  const response = await fetch(`${FUNCTION_BASE}/search-videos`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+export async function searchVideos(
+  query: string,
+  perPage = 5,
+): Promise<PexelsVideo[]> {
+  const data = await apiClient.post<VideoSearchResponse>(
+    'search-videos',
+    {
+      query,
+      perPage,
     },
-    body: JSON.stringify({ query, perPage }),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to search videos' }));
-    throw new Error(err.error || 'Failed to search videos');
-  }
-  const data = await response.json();
+    {
+      retryCount: 2,
+    },
+  );
+
   return data.videos ?? [];
 }
 
@@ -179,29 +310,36 @@ export async function createBulkJob(params: {
   topics: string[];
   settings?: Record<string, unknown>;
 }): Promise<BulkJob> {
-  const { data, error } = await supabase.from('bulk_jobs').insert({
-    channel_id: params.channelId,
-    name: params.name,
-    topics: params.topics,
-    total: params.topics.length,
-    settings: params.settings ?? {},
-    status: 'pending',
-  }).select().single();
-  if (error) throw new Error(error.message);
+  const { data, error } = await supabase
+    .from('bulk_jobs')
+    .insert({
+      channel_id: params.channelId,
+      name: params.name,
+      topics: params.topics,
+      total: params.topics.length,
+      settings: params.settings ?? {},
+      status: 'pending',
+    })
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
   return data;
 }
 
-export async function fetchTrendTopics(source: string, region?: string): Promise<TrendTopic[]> {
-  const response = await fetch(`${FUNCTION_BASE}/trend-research`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify({ source, region: region ?? 'global' }),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to fetch trends' }));
-    throw new Error(err.error || 'Failed to fetch trends');
-  }
-  const data = await response.json();
+export async function fetchTrendTopics(
+  source: string,
+  region?: string,
+): Promise<TrendTopic[]> {
+  const data = await apiClient.post<{ topics?: TrendTopic[] }>(
+    'trend-research',
+    { source, region: region ?? 'global' },
+    { retryCount: 1, timeoutMs: 45_000 },
+  );
+
   return data.topics ?? [];
 }
 
@@ -237,16 +375,11 @@ export async function generateAIImage(params: {
   characterDesc?: string;
   sceneContext?: string;
 }): Promise<{ imageUrl: string; revisedPrompt?: string }> {
-  const response = await fetch(`${FUNCTION_BASE}/generate-image`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to generate image' }));
-    throw new Error(err.error || 'Failed to generate image');
-  }
-  return response.json();
+  return apiClient.post<{ imageUrl: string; revisedPrompt?: string }>(
+    'generate-image',
+    params,
+    { retryCount: 0, timeoutMs: 90_000 },
+  );
 }
 
 // ============================================================
@@ -257,17 +390,27 @@ export async function researchFootage(params: {
   topic: string;
   scenes: Scene[];
   mode?: string;
-}): Promise<Array<{ sceneIndex: number; imageUrl?: string; videoUrl?: string; query: string }>> {
-  const response = await fetch(`${FUNCTION_BASE}/research-footage`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to research footage' }));
-    throw new Error(err.error || 'Failed to research footage');
-  }
-  const data = await response.json();
+}): Promise<
+  Array<{
+    sceneIndex: number;
+    imageUrl?: string;
+    videoUrl?: string;
+    query: string;
+  }>
+> {
+  const data = await apiClient.post<{
+    results?: Array<{
+      sceneIndex: number;
+      imageUrl?: string;
+      videoUrl?: string;
+      query: string;
+    }>;
+  }>(
+    'research-footage',
+    params,
+    { retryCount: 1, timeoutMs: 60_000 },
+  );
+
   return data.results ?? [];
 }
 
@@ -281,23 +424,8 @@ export async function generateSEO(params: {
   hook?: string;
   niche?: string;
   topic?: string;
-}): Promise<{
-  optimizedTitle: string;
-  optimizedDescription: string;
-  tags: string[];
-  hashtags: string[];
-  thumbnailText: string;
-}> {
-  const response = await fetch(`${FUNCTION_BASE}/generate-seo`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to generate SEO' }));
-    throw new Error(err.error || 'Failed to generate SEO');
-  }
-  return response.json();
+}): Promise<GeneratedSEOResult> {
+  return aiManager.generateSEO(params);
 }
 
 // ============================================================
@@ -341,17 +469,7 @@ export async function generateHooks(params: {
   niche?: string;
   tone?: string;
 }): Promise<HookVariation[]> {
-  const response = await fetch(`${FUNCTION_BASE}/generate-hooks`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to generate hooks' }));
-    throw new Error(err.error || 'Failed to generate hooks');
-  }
-  const data = await response.json();
-  return data.hooks ?? [];
+  return aiManager.generateHooks(params);
 }
 
 // ============================================================
@@ -363,16 +481,7 @@ export async function analyzeScript(params: {
   hook?: string;
   niche?: string;
 }): Promise<ScriptAnalysis> {
-  const response = await fetch(`${FUNCTION_BASE}/analyze-script`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to analyze script' }));
-    throw new Error(err.error || 'Failed to analyze script');
-  }
-  return response.json();
+  return aiManager.analyzeScript(params);
 }
 
 // ============================================================
@@ -383,16 +492,11 @@ export async function translateSubtitles(params: {
   srt: string;
   targetLanguage: string;
 }): Promise<{ translatedSrt: string; language: string }> {
-  const response = await fetch(`${FUNCTION_BASE}/translate-subtitles`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(params),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: 'Failed to translate subtitles' }));
-    throw new Error(err.error || 'Failed to translate subtitles');
-  }
-  return response.json();
+  return apiClient.post<{ translatedSrt: string; language: string }>(
+    'translate-subtitles',
+    params,
+    { retryCount: 0, timeoutMs: 60_000 },
+  );
 }
 
 // ============================================================
@@ -400,16 +504,11 @@ export async function translateSubtitles(params: {
 // ============================================================
 
 async function postJSON<T>(fn: string, body: unknown): Promise<T> {
-  const response = await fetch(`${FUNCTION_BASE}/${fn}`, {
-    method: 'POST',
-    headers: HEADERS,
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: `Failed to call ${fn}` }));
-    throw new Error(err.error || `Failed to call ${fn}`);
-  }
-  return response.json();
+  return apiClient.post<T>(
+    fn,
+    body,
+    { retryCount: 0, timeoutMs: 60_000 },
+  );
 }
 
 // 1. Predictive Virality Engine
