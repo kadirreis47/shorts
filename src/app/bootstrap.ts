@@ -18,12 +18,20 @@ async function runBootstrap() {
   const persistenceManager = applicationContainer.resolve(
     dependencyTokens.persistenceManager,
   );
+  const eventBus = applicationContainer.resolve(dependencyTokens.eventBus);
 
+  const startedAt = new Date().toISOString();
   appStore.beginBootstrap();
   appStore.setOffline(!navigator.onLine || !isSupabaseConfigured);
+  await eventBus.emit('app:bootstrap-started', { startedAt });
 
   try {
     const hydrationResult = await persistenceManager.hydrate();
+
+    await eventBus.emit('app:hydration-completed', {
+      completedAt: new Date().toISOString(),
+      result: hydrationResult,
+    });
 
     if (hydrationResult.failedStores.length > 0) {
       console.warn(
@@ -35,11 +43,22 @@ async function runBootstrap() {
     useUIStore.getState().resetTransientUI();
     await useChannelStore.getState().loadChannels();
     useAppStore.getState().markReady();
+
+    await eventBus.emit('app:ready', {
+      readyAt: new Date().toISOString(),
+    });
   } catch (error) {
+    const message = getErrorMessage(error);
+
     useAppStore.getState().setError({
-      message: getErrorMessage(error),
+      message,
       code: 'APP_BOOTSTRAP_FAILED',
       occurredAt: new Date().toISOString(),
+    });
+
+    await eventBus.emit('app:bootstrap-failed', {
+      failedAt: new Date().toISOString(),
+      error: message,
     });
   }
 }

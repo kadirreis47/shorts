@@ -1,13 +1,14 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { createPersistentStorage } from '@/persistence/storeStorage';
 import { applicationContainer, dependencyTokens } from '@/core/di';
+import type { EventBus, ApplicationEventMap } from '@/core/events';
+import type { Channel } from '@/lib/types';
+import { createPersistentStorage } from '@/persistence/storeStorage';
 import type {
   ChannelService,
   CreateChannelInput,
   UpdateChannelInput,
 } from '@/services/channelService';
-import type { Channel } from '@/lib/types';
 
 interface ChannelState {
   channels: Channel[];
@@ -34,6 +35,17 @@ function getChannelService(): ChannelService {
   return applicationContainer.resolve(dependencyTokens.channelService);
 }
 
+function getEventBus(): EventBus<ApplicationEventMap> {
+  return applicationContainer.resolve(dependencyTokens.eventBus);
+}
+
+function publish<TKey extends keyof ApplicationEventMap>(
+  event: TKey,
+  payload: ApplicationEventMap[TKey],
+) {
+  void getEventBus().emit(event, payload);
+}
+
 export const useChannelStore = create<ChannelState>()(
   persist(
     (set, get) => ({
@@ -53,6 +65,8 @@ export const useChannelStore = create<ChannelState>()(
 
         try {
           const channels = await getChannelService().list();
+          const loadedAt = new Date().toISOString();
+
           set((current) => ({
             channels,
             selectedChannelId:
@@ -61,8 +75,10 @@ export const useChannelStore = create<ChannelState>()(
                 ? current.selectedChannelId
                 : null,
             initialized: true,
-            lastUpdated: new Date().toISOString(),
+            lastUpdated: loadedAt,
           }));
+
+          publish('channel:list-loaded', { channels, loadedAt });
         } catch (error) {
           console.warn('Kanallar yüklenemedi:', error);
           set({
@@ -80,10 +96,14 @@ export const useChannelStore = create<ChannelState>()(
 
         try {
           const channel = await getChannelService().create(input);
+          const createdAt = new Date().toISOString();
+
           set((state) => ({
             channels: [...state.channels, channel],
-            lastUpdated: new Date().toISOString(),
+            lastUpdated: createdAt,
           }));
+
+          publish('channel:created', { channel, createdAt });
           return channel;
         } catch (error) {
           set({ error: getErrorMessage(error, 'Kanal oluşturulamadı.') });
@@ -98,12 +118,16 @@ export const useChannelStore = create<ChannelState>()(
 
         try {
           const channel = await getChannelService().update(id, input);
+          const updatedAt = new Date().toISOString();
+
           set((state) => ({
             channels: state.channels.map((item) =>
               item.id === id ? channel : item,
             ),
-            lastUpdated: new Date().toISOString(),
+            lastUpdated: updatedAt,
           }));
+
+          publish('channel:updated', { channel, updatedAt });
           return channel;
         } catch (error) {
           set({ error: getErrorMessage(error, 'Kanal güncellenemedi.') });
@@ -118,12 +142,16 @@ export const useChannelStore = create<ChannelState>()(
 
         try {
           await getChannelService().remove(id);
+          const deletedAt = new Date().toISOString();
+
           set((state) => ({
             channels: state.channels.filter((channel) => channel.id !== id),
             selectedChannelId:
               state.selectedChannelId === id ? null : state.selectedChannelId,
-            lastUpdated: new Date().toISOString(),
+            lastUpdated: deletedAt,
           }));
+
+          publish('channel:deleted', { channelId: id, deletedAt });
         } catch (error) {
           set({ error: getErrorMessage(error, 'Kanal silinemedi.') });
           throw error;
@@ -132,7 +160,14 @@ export const useChannelStore = create<ChannelState>()(
         }
       },
 
-      selectChannel: (selectedChannelId) => set({ selectedChannelId }),
+      selectChannel: (selectedChannelId) => {
+        set({ selectedChannelId });
+        publish('channel:selected', {
+          channelId: selectedChannelId,
+          selectedAt: new Date().toISOString(),
+        });
+      },
+
       clearError: () => set({ error: null }),
       clear: () =>
         set({

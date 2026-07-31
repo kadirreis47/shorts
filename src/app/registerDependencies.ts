@@ -1,4 +1,5 @@
 import { applicationContainer, dependencyTokens } from '@/core/di';
+import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { persistenceManager } from '@/persistence';
 import { createChannelService } from '@/services/channelService';
 
@@ -13,6 +14,11 @@ export function registerApplicationDependencies() {
   );
 
   applicationContainer.registerSingleton(
+    dependencyTokens.eventBus,
+    () => new TypedEventBus<ApplicationEventMap>(),
+  );
+
+  applicationContainer.registerSingleton(
     dependencyTokens.channelService,
     () => createChannelService(),
   );
@@ -22,6 +28,10 @@ export function registerApplicationDependencies() {
 }
 
 export function resetApplicationDependencies() {
+  if (applicationContainer.has(dependencyTokens.eventBus)) {
+    applicationContainer.resolve(dependencyTokens.eventBus).clear();
+  }
+
   applicationContainer.reset();
   dependenciesRegistered = false;
 }
