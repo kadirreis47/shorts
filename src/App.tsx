@@ -1,16 +1,18 @@
-import { Suspense, useState } from 'react';
+import { Suspense } from 'react';
 import { Bell, Search } from 'lucide-react';
-import { Sidebar, type ViewKey } from '@/components/Sidebar';
+import { Sidebar } from '@/components/Sidebar';
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 import { I18nProvider, useI18n } from '@/lib/i18n';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useChannels } from '@/hooks/useChannels';
 import { useNavigationItems } from '@/app/navigation';
 import { ViewHost } from '@/app/ViewHost';
+import { useUIStore } from '@/store';
 
 function AppContent() {
   const { t } = useI18n();
-  const [view, setView] = useState<ViewKey>('dashboard');
+  const view = useUIStore((state) => state.currentView);
+  const navigate = useUIStore((state) => state.navigate);
   const { channels, loading } = useChannels();
   const navigationItems = useNavigationItems();
 
@@ -26,7 +28,7 @@ function AppContent() {
     <div className="flex h-screen bg-slate-50">
       <Sidebar
         current={view}
-        onNavigate={setView}
+        onNavigate={navigate}
         items={navigationItems}
         channels={channels}
       />
@@ -84,7 +86,7 @@ function AppContent() {
               <ViewHost
                 view={view}
                 channels={channels}
-                onNavigate={setView}
+                onNavigate={navigate}
               />
             </AppErrorBoundary>
           </Suspense>
