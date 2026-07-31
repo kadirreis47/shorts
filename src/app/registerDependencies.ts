@@ -3,7 +3,11 @@ import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
 import { persistenceManager } from '@/persistence';
-import { createChannelService, createServiceExecutor } from '@/services';
+import {
+  createAIApplicationService,
+  createChannelService,
+  createServiceExecutor,
+} from '@/services';
 
 let dependenciesRegistered = false;
 
@@ -29,6 +33,13 @@ export function registerApplicationDependencies() {
     dependencyTokens.aiPipelineRunner,
     (container) => createAIPipelineRunner(
       container.resolve(dependencyTokens.eventBus),
+    ),
+  );
+
+  applicationContainer.registerSingleton(
+    dependencyTokens.aiApplicationService,
+    (container) => createAIApplicationService(
+      container.resolve(dependencyTokens.aiPipelineRunner),
     ),
   );
 

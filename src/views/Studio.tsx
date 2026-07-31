@@ -8,10 +8,9 @@ import {
 import { supabase } from '@/lib/supabase';
 import type { Channel, Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
 import {
-  generateScript, generateVoiceover, listVoices, uploadMedia, publishToYouTube,
+  generateVoiceover, listVoices, uploadMedia, publishToYouTube,
   getYouTubeAuthUrl, getApiKeyKeys, searchImages, searchVideos,
-  generateAIImage, researchFootage, generateSEO, generateSRT,
-  generateHooks, analyzeScript, translateSubtitles,
+  generateAIImage, researchFootage, generateSRT, translateSubtitles,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
 import {
@@ -22,6 +21,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, saveStudioDraft, type StudioDraft, type StudioStep } from '@/lib/studioDraft';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
+import { applicationContainer, dependencyTokens } from '@/core/di';
 
 interface StudioProps {
   channels: Channel[];
@@ -74,6 +74,10 @@ const MUSIC_TRACKS: { id: string; name: string; url: string; mood: string }[] = 
 
 export function Studio({ channels }: StudioProps) {
   const { t } = useI18n();
+  const aiService = useMemo(
+    () => applicationContainer.resolve(dependencyTokens.aiApplicationService),
+    [],
+  );
   const [step, setStep] = useState<Step>('topic');
   const [channelId, setChannelId] = useState(channels[0]?.id ?? '');
   const [topic, setTopic] = useState('');
@@ -332,7 +336,10 @@ export function Studio({ channels }: StudioProps) {
     setGenerating(true);
     setError('');
     try {
-      const result = await generateScript({ topic, niche, tone, duration });
+      const result = await aiService.generateScript(
+        { topic, niche, tone, duration },
+        { metadata: { source: 'studio', action: 'generate-script' } },
+      );
       setTitle(result.title);
       setHook(result.hook);
       setScript(result.script);
@@ -415,12 +422,14 @@ export function Studio({ channels }: StudioProps) {
     if (!script.trim()) return;
     setGeneratingSEOState(true);
     try {
-      const result = await generateSEO({
+      const result = await aiService.generateSEO({
         title: title || 'Untitled',
         script,
         hook: hook || undefined,
         niche: channel?.niche || undefined,
         topic: title,
+      }, {
+        metadata: { source: 'studio', action: 'generate-seo' },
       });
       setSeoResult(result);
     } catch { /* ignore */ }
@@ -443,7 +452,10 @@ export function Studio({ channels }: StudioProps) {
     if (!topic.trim()) return;
     setGeneratingHooks(true);
     try {
-      const hooks = await generateHooks({ topic, niche, tone });
+      const hooks = await aiService.generateHooks(
+        { topic, niche, tone },
+        { metadata: { source: 'studio', action: 'generate-hooks' } },
+      );
       setHookVariations(hooks);
     } catch { /* ignore */ }
     setGeneratingHooks(false);
@@ -453,7 +465,10 @@ export function Studio({ channels }: StudioProps) {
     if (!script.trim()) return;
     setAnalyzingScript(true);
     try {
-      const result = await analyzeScript({ script, hook, niche });
+      const result = await aiService.analyzeScript(
+        { script, hook, niche },
+        { metadata: { source: 'studio', action: 'analyze-script' } },
+      );
       setScriptAnalysis(result);
     } catch { /* ignore */ }
     setAnalyzingScript(false);

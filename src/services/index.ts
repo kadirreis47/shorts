@@ -15,3 +15,6 @@ export type {
   ServiceExecutionOptions,
   ServiceExecutor,
 } from './serviceExecutor';
+
+export { createAIApplicationService } from './aiApplicationService';
+export type { AIApplicationService, AIOperationOptions } from './aiApplicationService';
