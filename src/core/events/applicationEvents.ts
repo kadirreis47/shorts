@@ -96,6 +96,8 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     durationMs: number;
     sceneCount: number;
     trackCount: number;
+    markerCount: number;
+    pacingScore: number;
     builtAt: string;
   };
   'media:manifest-built': {

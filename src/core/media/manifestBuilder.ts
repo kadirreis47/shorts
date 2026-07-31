@@ -2,7 +2,7 @@ import type { MediaProject, RenderManifest } from './types';
 
 export function buildRenderManifest(project: MediaProject): RenderManifest {
   return {
-    schemaVersion: '1.0',
+    schemaVersion: '1.1',
     projectId: project.id,
     createdAt: new Date().toISOString(),
     durationMs: project.timeline.durationMs,

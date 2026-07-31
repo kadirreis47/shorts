@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { MediaProject, RenderManifest } from '@/core/media';
+import type { MediaProject, RenderManifest, TimelineMetrics } from '@/core/media';
 
 interface MediaState {
   project: MediaProject | null;
@@ -7,6 +7,8 @@ interface MediaState {
   renderReady: boolean;
   building: boolean;
   error: string | null;
+  timelineMetrics: TimelineMetrics | null;
+  markerCount: number;
   setBuildStarted: () => void;
   setBuildResult: (project: MediaProject, manifest: RenderManifest, renderReady: boolean) => void;
   setBuildError: (message: string) => void;
@@ -19,6 +21,8 @@ export const useMediaStore = create<MediaState>()((set) => ({
   renderReady: false,
   building: false,
   error: null,
+  timelineMetrics: null,
+  markerCount: 0,
   setBuildStarted: () => set({ building: true, error: null }),
   setBuildResult: (project, manifest, renderReady) => set({
     project,
@@ -26,6 +30,8 @@ export const useMediaStore = create<MediaState>()((set) => ({
     renderReady,
     building: false,
     error: null,
+    timelineMetrics: project.timeline.metrics,
+    markerCount: project.timeline.markers.length,
   }),
   setBuildError: (error) => set({ building: false, error, renderReady: false }),
   clearMediaProject: () => set({
@@ -34,5 +40,7 @@ export const useMediaStore = create<MediaState>()((set) => ({
     renderReady: false,
     building: false,
     error: null,
+    timelineMetrics: null,
+    markerCount: 0,
   }),
 }));

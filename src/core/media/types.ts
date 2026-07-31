@@ -1,33 +1,17 @@
 import type { Scene } from '@/lib/types';
 
 export type MediaAssetType =
-  | 'image'
-  | 'video'
-  | 'ai_image'
-  | 'broll'
-  | 'overlay'
-  | 'logo'
-  | 'intro'
-  | 'outro'
-  | 'music'
-  | 'voice'
-  | 'sfx';
+  | 'image' | 'video' | 'ai_image' | 'broll' | 'overlay' | 'logo'
+  | 'intro' | 'outro' | 'music' | 'voice' | 'sfx';
 
-export type MediaTrackType =
-  | 'video'
-  | 'voice'
-  | 'music'
-  | 'subtitle'
-  | 'overlay'
-  | 'effects';
-
+export type MediaTrackType = 'video' | 'voice' | 'music' | 'subtitle' | 'overlay' | 'effects';
 export type CameraMotion = 'none' | 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right' | 'ken_burns';
 export type TransitionType = 'cut' | 'fade' | 'crossfade' | 'slide' | 'zoom' | 'blur';
+export type SceneRole = 'hook' | 'setup' | 'development' | 'payoff' | 'cta' | 'outro';
+export type PacingPreset = 'calm' | 'balanced' | 'dynamic' | 'viral';
+export type TimelineMarkerType = 'scene-start' | 'scene-end' | 'transition' | 'beat' | 'emphasis';
 
-export interface MediaResolution {
-  width: number;
-  height: number;
-}
+export interface MediaResolution { width: number; height: number; }
 
 export interface MediaProjectSettings {
   fps: number;
@@ -37,6 +21,10 @@ export interface MediaProjectSettings {
   wordsPerMinute: number;
   minimumSceneDurationMs: number;
   maximumSceneDurationMs: number;
+  pacingPreset: PacingPreset;
+  transitionOverlap: number;
+  beatIntervalMs: number;
+  snapToFrames: boolean;
 }
 
 export interface MediaAsset {
@@ -48,24 +36,25 @@ export interface MediaAsset {
   metadata: Readonly<Record<string, unknown>>;
 }
 
-export interface MediaTransition {
-  type: TransitionType;
-  durationMs: number;
-}
+export interface MediaTransition { type: TransitionType; durationMs: number; }
 
 export interface MediaScene {
   id: string;
   index: number;
+  role: SceneRole;
   text: string;
   visualPrompt: string;
   keywords: string[];
   startMs: number;
   endMs: number;
   durationMs: number;
+  overlapBeforeMs: number;
+  overlapAfterMs: number;
   assetIds: string[];
   cameraMotion: CameraMotion;
   transition: MediaTransition;
   subtitleText: string;
+  intensity: number;
   sourceScene: Scene;
 }
 
@@ -89,10 +78,31 @@ export interface MediaTrack {
   clips: MediaClip[];
 }
 
+export interface TimelineMarker {
+  id: string;
+  type: TimelineMarkerType;
+  timeMs: number;
+  sceneId?: string;
+  label: string;
+  metadata: Readonly<Record<string, unknown>>;
+}
+
+export interface TimelineMetrics {
+  durationMs: number;
+  averageSceneDurationMs: number;
+  shortestSceneDurationMs: number;
+  longestSceneDurationMs: number;
+  cutsPerMinute: number;
+  transitionCoverage: number;
+  pacingScore: number;
+}
+
 export interface MediaTimeline {
   durationMs: number;
   scenes: MediaScene[];
   tracks: MediaTrack[];
+  markers: TimelineMarker[];
+  metrics: TimelineMetrics;
 }
 
 export interface MediaProjectMetadata {
@@ -115,16 +125,11 @@ export interface MediaProject {
 }
 
 export interface RenderManifest {
-  schemaVersion: '1.0';
+  schemaVersion: '1.1';
   projectId: string;
   createdAt: string;
   durationMs: number;
-  render: {
-    fps: number;
-    width: number;
-    height: number;
-    aspectRatio: string;
-  };
+  render: { fps: number; width: number; height: number; aspectRatio: string; };
   assets: MediaAsset[];
   timeline: MediaTimeline;
   metadata: MediaProjectMetadata;

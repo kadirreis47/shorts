@@ -3,16 +3,11 @@ import { createAssetResolver, type AssetResolver } from './assetResolver';
 import { normalizeMediaSettings } from './durationPlanner';
 import { buildRenderManifest, isRenderManifestReady } from './manifestBuilder';
 import { planScenes } from './scenePlanner';
+import { buildIntelligentTimeline } from './timelineIntelligence';
 import { composeTracks } from './trackComposer';
-import type {
-  CreateMediaProjectInput,
-  MediaProject,
-  MediaProjectBuildResult,
-} from './types';
+import type { CreateMediaProjectInput, MediaProject, MediaProjectBuildResult } from './types';
 
-export interface MediaEngine {
-  buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>;
-}
+export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
 
 export function createMediaEngine(
   eventBus: EventBus<ApplicationEventMap>,
@@ -21,26 +16,22 @@ export function createMediaEngine(
   return {
     async buildProject(input) {
       const settings = normalizeMediaSettings(input.settings);
-      const scenes = planScenes(input.scenes, settings);
+      const plannedScenes = planScenes(input.scenes, settings);
+      const timelinePlan = buildIntelligentTimeline(plannedScenes, settings);
+      const scenes = timelinePlan.scenes;
       const now = new Date().toISOString();
       const projectId = createId('media-project');
 
       await eventBus.emit('media:project-created', {
-        projectId,
-        title: input.title,
-        sceneCount: scenes.length,
-        createdAt: now,
+        projectId, title: input.title, sceneCount: scenes.length, createdAt: now,
       });
 
       const assets = await assetResolver.resolve(scenes);
       await eventBus.emit('media:assets-resolved', {
-        projectId,
-        assetCount: assets.length,
-        resolvedAt: new Date().toISOString(),
+        projectId, assetCount: assets.length, resolvedAt: new Date().toISOString(),
       });
 
       const tracks = composeTracks(scenes);
-      const durationMs = scenes.length > 0 ? scenes[scenes.length - 1].endMs : 0;
       const project: MediaProject = {
         id: projectId,
         version: 1,
@@ -56,30 +47,29 @@ export function createMediaEngine(
         assets,
         tracks,
         timeline: {
-          durationMs,
+          durationMs: timelinePlan.durationMs,
           scenes,
           tracks,
+          markers: timelinePlan.markers,
+          metrics: timelinePlan.metrics,
         },
       };
 
       await eventBus.emit('media:timeline-built', {
         projectId,
-        durationMs,
+        durationMs: timelinePlan.durationMs,
         sceneCount: scenes.length,
         trackCount: tracks.length,
+        markerCount: timelinePlan.markers.length,
+        pacingScore: timelinePlan.metrics.pacingScore,
         builtAt: new Date().toISOString(),
       });
 
       const manifest = buildRenderManifest(project);
       const renderReady = isRenderManifestReady(manifest);
-
       await eventBus.emit('media:manifest-built', {
-        projectId,
-        durationMs,
-        renderReady,
-        builtAt: manifest.createdAt,
+        projectId, durationMs: timelinePlan.durationMs, renderReady, builtAt: manifest.createdAt,
       });
-
       return { project, manifest, renderReady };
     },
   };
