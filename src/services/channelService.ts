@@ -1,8 +1,10 @@
-import { withTimeout } from '@/lib/async';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import type { Channel } from '@/lib/types';
-
-const REQUEST_TIMEOUT_MS = 8000;
+import {
+  configurationError,
+  createServiceExecutor,
+  type ServiceExecutor,
+} from './serviceExecutor';
 
 export interface CreateChannelInput {
   name: string;
@@ -29,83 +31,89 @@ export interface ChannelService {
   remove(id: string): Promise<void>;
 }
 
-function assertConfigured() {
+function assertConfigured(operation: string) {
   if (!isSupabaseConfigured) {
-    throw new Error('Supabase bağlantısı yapılandırılmamış.');
+    throw configurationError(
+      operation,
+      'Supabase bağlantısı yapılandırılmamış.',
+    );
   }
 }
 
-async function execute<T>(request: PromiseLike<T>, timeoutMessage: string): Promise<T> {
-  return withTimeout(request, REQUEST_TIMEOUT_MS, timeoutMessage);
-}
-
-export function createChannelService(): ChannelService {
+export function createChannelService(
+  executor: ServiceExecutor = createServiceExecutor(),
+): ChannelService {
   return {
     async list(): Promise<Channel[]> {
-      if (!isSupabaseConfigured) {
-        return [];
-      }
+      if (!isSupabaseConfigured) return [];
 
-      const { data, error } = await execute(
-        supabase.from('channels').select('*').order('created_at', { ascending: true }),
-        'Kanallar yüklenirken Supabase bağlantısı zaman aşımına uğradı.',
-      );
+      return executor.execute(async () => {
+        const { data, error } = await supabase
+          .from('channels')
+          .select('*')
+          .order('created_at', { ascending: true });
 
-      if (error) throw error;
-      return data ?? [];
+        if (error) throw error;
+        return data ?? [];
+      }, {
+        operation: 'channel.list',
+        fallbackMessage: 'Kanallar yüklenemedi.',
+        timeoutMessage: 'Kanallar yüklenirken sunucu zaman aşımına uğradı.',
+      });
     },
 
     async create(input: CreateChannelInput): Promise<Channel> {
-      assertConfigured();
+      assertConfigured('channel.create');
 
-      const { data, error } = await execute(
-        supabase
+      return executor.execute(async () => {
+        const { data, error } = await supabase
           .from('channels')
-          .insert({
-            ...input,
-            status: input.status ?? 'active',
-          })
+          .insert({ ...input, status: input.status ?? 'active' })
           .select('*')
-          .single(),
-        'Kanal oluşturulurken Supabase bağlantısı zaman aşımına uğradı.',
-      );
+          .single();
 
-      if (error) throw error;
-      return data;
+        if (error) throw error;
+        return data;
+      }, {
+        operation: 'channel.create',
+        fallbackMessage: 'Kanal oluşturulamadı.',
+        timeoutMessage: 'Kanal oluşturulurken sunucu zaman aşımına uğradı.',
+      });
     },
 
     async update(id: string, input: UpdateChannelInput): Promise<Channel> {
-      assertConfigured();
+      assertConfigured('channel.update');
 
-      const { data, error } = await execute(
-        supabase
+      return executor.execute(async () => {
+        const { data, error } = await supabase
           .from('channels')
-          .update({
-            ...input,
-            updated_at: new Date().toISOString(),
-          })
+          .update({ ...input, updated_at: new Date().toISOString() })
           .eq('id', id)
           .select('*')
-          .single(),
-        'Kanal güncellenirken Supabase bağlantısı zaman aşımına uğradı.',
-      );
+          .single();
 
-      if (error) throw error;
-      return data;
+        if (error) throw error;
+        return data;
+      }, {
+        operation: 'channel.update',
+        fallbackMessage: 'Kanal güncellenemedi.',
+        timeoutMessage: 'Kanal güncellenirken sunucu zaman aşımına uğradı.',
+      });
     },
 
     async remove(id: string): Promise<void> {
-      assertConfigured();
+      assertConfigured('channel.remove');
 
-      const { error } = await execute(
-        supabase.from('channels').delete().eq('id', id),
-        'Kanal silinirken Supabase bağlantısı zaman aşımına uğradı.',
-      );
-
-      if (error) throw error;
+      await executor.execute(async () => {
+        const { error } = await supabase.from('channels').delete().eq('id', id);
+        if (error) throw error;
+      }, {
+        operation: 'channel.remove',
+        fallbackMessage: 'Kanal silinemedi.',
+        timeoutMessage: 'Kanal silinirken sunucu zaman aşımına uğradı.',
+      });
     },
   };
 }
 
-// Backwards-compatible default instance for modules not migrated to DI yet.
 export const channelService = createChannelService();

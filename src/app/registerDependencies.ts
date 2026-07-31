@@ -1,7 +1,7 @@
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { persistenceManager } from '@/persistence';
-import { createChannelService } from '@/services/channelService';
+import { createChannelService, createServiceExecutor } from '@/services';
 
 let dependenciesRegistered = false;
 
@@ -19,8 +19,17 @@ export function registerApplicationDependencies() {
   );
 
   applicationContainer.registerSingleton(
+    dependencyTokens.serviceExecutor,
+    (container) => createServiceExecutor(
+      container.resolve(dependencyTokens.eventBus),
+    ),
+  );
+
+  applicationContainer.registerSingleton(
     dependencyTokens.channelService,
-    () => createChannelService(),
+    (container) => createChannelService(
+      container.resolve(dependencyTokens.serviceExecutor),
+    ),
   );
 
   dependenciesRegistered = true;

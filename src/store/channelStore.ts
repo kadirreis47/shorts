@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { applicationContainer, dependencyTokens } from '@/core/di';
+import { getUserErrorMessage } from '@/core/errors';
 import type { EventBus, ApplicationEventMap } from '@/core/events';
 import type { Channel } from '@/lib/types';
 import { createPersistentStorage } from '@/persistence/storeStorage';
@@ -25,10 +26,6 @@ interface ChannelState {
   selectChannel: (channelId: string | null) => void;
   clearError: () => void;
   clear: () => void;
-}
-
-function getErrorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
 }
 
 function getChannelService(): ChannelService {
@@ -84,7 +81,7 @@ export const useChannelStore = create<ChannelState>()(
           set({
             channels: [],
             initialized: true,
-            error: getErrorMessage(error, 'Kanallar yüklenemedi.'),
+            error: getUserErrorMessage(error, 'Kanallar yüklenemedi.'),
           });
         } finally {
           set({ loading: false });
@@ -106,7 +103,7 @@ export const useChannelStore = create<ChannelState>()(
           publish('channel:created', { channel, createdAt });
           return channel;
         } catch (error) {
-          set({ error: getErrorMessage(error, 'Kanal oluşturulamadı.') });
+          set({ error: getUserErrorMessage(error, 'Kanal oluşturulamadı.') });
           throw error;
         } finally {
           set({ mutating: false });
@@ -130,7 +127,7 @@ export const useChannelStore = create<ChannelState>()(
           publish('channel:updated', { channel, updatedAt });
           return channel;
         } catch (error) {
-          set({ error: getErrorMessage(error, 'Kanal güncellenemedi.') });
+          set({ error: getUserErrorMessage(error, 'Kanal güncellenemedi.') });
           throw error;
         } finally {
           set({ mutating: false });
@@ -153,7 +150,7 @@ export const useChannelStore = create<ChannelState>()(
 
           publish('channel:deleted', { channelId: id, deletedAt });
         } catch (error) {
-          set({ error: getErrorMessage(error, 'Kanal silinemedi.') });
+          set({ error: getUserErrorMessage(error, 'Kanal silinemedi.') });
           throw error;
         } finally {
           set({ mutating: false });
