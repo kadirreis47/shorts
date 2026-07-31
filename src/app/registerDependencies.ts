@@ -1,5 +1,6 @@
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
+import { createQueryClient } from '@/core/query';
 import { persistenceManager } from '@/persistence';
 import { createChannelService, createServiceExecutor } from '@/services';
 
@@ -16,6 +17,11 @@ export function registerApplicationDependencies() {
   applicationContainer.registerSingleton(
     dependencyTokens.eventBus,
     () => new TypedEventBus<ApplicationEventMap>(),
+  );
+
+  applicationContainer.registerSingleton(
+    dependencyTokens.queryClient,
+    () => createQueryClient(),
   );
 
   applicationContainer.registerSingleton(
@@ -37,6 +43,10 @@ export function registerApplicationDependencies() {
 }
 
 export function resetApplicationDependencies() {
+  if (applicationContainer.has(dependencyTokens.queryClient)) {
+    applicationContainer.resolve(dependencyTokens.queryClient).clear();
+  }
+
   if (applicationContainer.has(dependencyTokens.eventBus)) {
     applicationContainer.resolve(dependencyTokens.eventBus).clear();
   }

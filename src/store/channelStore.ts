@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { getUserErrorMessage } from '@/core/errors';
 import type { EventBus, ApplicationEventMap } from '@/core/events';
+import { queryKeys, type QueryClient } from '@/core/query';
 import type { Channel } from '@/lib/types';
 import { createPersistentStorage } from '@/persistence/storeStorage';
 import type {
@@ -30,6 +31,10 @@ interface ChannelState {
 
 function getChannelService(): ChannelService {
   return applicationContainer.resolve(dependencyTokens.channelService);
+}
+
+function getQueryClient(): QueryClient {
+  return applicationContainer.resolve(dependencyTokens.queryClient);
 }
 
 function getEventBus(): EventBus<ApplicationEventMap> {
@@ -61,7 +66,12 @@ export const useChannelStore = create<ChannelState>()(
         set({ loading: true, error: null });
 
         try {
-          const channels = await getChannelService().list();
+          const channels = await getQueryClient().fetchQuery({
+            key: queryKeys.channels.list(),
+            queryFn: () => getChannelService().list(),
+            force,
+            staleTime: 30_000,
+          });
           const loadedAt = new Date().toISOString();
 
           set((current) => ({
@@ -95,6 +105,11 @@ export const useChannelStore = create<ChannelState>()(
           const channel = await getChannelService().create(input);
           const createdAt = new Date().toISOString();
 
+          getQueryClient().updateQueryData<Channel[]>(
+            queryKeys.channels.list(),
+            (current) => [...(current ?? get().channels), channel],
+          );
+
           set((state) => ({
             channels: [...state.channels, channel],
             lastUpdated: createdAt,
@@ -116,6 +131,14 @@ export const useChannelStore = create<ChannelState>()(
         try {
           const channel = await getChannelService().update(id, input);
           const updatedAt = new Date().toISOString();
+
+          getQueryClient().updateQueryData<Channel[]>(
+            queryKeys.channels.list(),
+            (current) => (current ?? get().channels).map((item) =>
+              item.id === id ? channel : item,
+            ),
+          );
+          getQueryClient().setQueryData(queryKeys.channels.detail(id), channel);
 
           set((state) => ({
             channels: state.channels.map((item) =>
@@ -140,6 +163,14 @@ export const useChannelStore = create<ChannelState>()(
         try {
           await getChannelService().remove(id);
           const deletedAt = new Date().toISOString();
+
+          getQueryClient().updateQueryData<Channel[]>(
+            queryKeys.channels.list(),
+            (current) => (current ?? get().channels).filter(
+              (channel) => channel.id !== id,
+            ),
+          );
+          getQueryClient().removeQueries(queryKeys.channels.detail(id));
 
           set((state) => ({
             channels: state.channels.filter((channel) => channel.id !== id),
@@ -166,7 +197,8 @@ export const useChannelStore = create<ChannelState>()(
       },
 
       clearError: () => set({ error: null }),
-      clear: () =>
+      clear: () => {
+        getQueryClient().removeQueries(queryKeys.channels.all);
         set({
           channels: [],
           selectedChannelId: null,
@@ -175,7 +207,8 @@ export const useChannelStore = create<ChannelState>()(
           initialized: false,
           error: null,
           lastUpdated: null,
-        }),
+        });
+      },
     }),
     {
       name: 'shortsflow-channels',

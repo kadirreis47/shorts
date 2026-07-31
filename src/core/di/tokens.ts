@@ -1,5 +1,6 @@
 import type { EventBus, ApplicationEventMap } from '@/core/events';
 import type { PersistenceManager } from '@/persistence/persistenceManager';
+import type { QueryClient } from '@/core/query';
 import type { ChannelService, ServiceExecutor } from '@/services';
 import type { DependencyToken } from './types';
 
@@ -11,5 +12,6 @@ export const dependencyTokens = {
   persistenceManager: createToken<PersistenceManager>('PersistenceManager'),
   eventBus: createToken<EventBus<ApplicationEventMap>>('ApplicationEventBus'),
   serviceExecutor: createToken<ServiceExecutor>('ServiceExecutor'),
+  queryClient: createToken<QueryClient>('QueryClient'),
   channelService: createToken<ChannelService>('ChannelService'),
 } as const;
