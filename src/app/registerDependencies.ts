@@ -1,3 +1,4 @@
+import { createAIPipelineRunner } from '@/core/ai-pipeline';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
@@ -25,6 +26,13 @@ export function registerApplicationDependencies() {
   );
 
   applicationContainer.registerSingleton(
+    dependencyTokens.aiPipelineRunner,
+    (container) => createAIPipelineRunner(
+      container.resolve(dependencyTokens.eventBus),
+    ),
+  );
+
+  applicationContainer.registerSingleton(
     dependencyTokens.serviceExecutor,
     (container) => createServiceExecutor(
       container.resolve(dependencyTokens.eventBus),
@@ -43,6 +51,10 @@ export function registerApplicationDependencies() {
 }
 
 export function resetApplicationDependencies() {
+  if (applicationContainer.has(dependencyTokens.aiPipelineRunner)) {
+    applicationContainer.resolve(dependencyTokens.aiPipelineRunner).cancelAll();
+  }
+
   if (applicationContainer.has(dependencyTokens.queryClient)) {
     applicationContainer.resolve(dependencyTokens.queryClient).clear();
   }

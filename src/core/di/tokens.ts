@@ -1,3 +1,4 @@
+import type { AIPipelineRunner } from '@/core/ai-pipeline';
 import type { EventBus, ApplicationEventMap } from '@/core/events';
 import type { PersistenceManager } from '@/persistence/persistenceManager';
 import type { QueryClient } from '@/core/query';
@@ -13,5 +14,6 @@ export const dependencyTokens = {
   eventBus: createToken<EventBus<ApplicationEventMap>>('ApplicationEventBus'),
   serviceExecutor: createToken<ServiceExecutor>('ServiceExecutor'),
   queryClient: createToken<QueryClient>('QueryClient'),
+  aiPipelineRunner: createToken<AIPipelineRunner>('AIPipelineRunner'),
   channelService: createToken<ChannelService>('ChannelService'),
 } as const;
