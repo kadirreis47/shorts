@@ -1,10 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createPersistentStorage } from '@/persistence/storeStorage';
-import {
-  channelService,
-  type CreateChannelInput,
-  type UpdateChannelInput,
+import { applicationContainer, dependencyTokens } from '@/core/di';
+import type {
+  ChannelService,
+  CreateChannelInput,
+  UpdateChannelInput,
 } from '@/services/channelService';
 import type { Channel } from '@/lib/types';
 
@@ -29,6 +30,10 @@ function getErrorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function getChannelService(): ChannelService {
+  return applicationContainer.resolve(dependencyTokens.channelService);
+}
+
 export const useChannelStore = create<ChannelState>()(
   persist(
     (set, get) => ({
@@ -47,7 +52,7 @@ export const useChannelStore = create<ChannelState>()(
         set({ loading: true, error: null });
 
         try {
-          const channels = await channelService.list();
+          const channels = await getChannelService().list();
           set((current) => ({
             channels,
             selectedChannelId:
@@ -74,7 +79,7 @@ export const useChannelStore = create<ChannelState>()(
         set({ mutating: true, error: null });
 
         try {
-          const channel = await channelService.create(input);
+          const channel = await getChannelService().create(input);
           set((state) => ({
             channels: [...state.channels, channel],
             lastUpdated: new Date().toISOString(),
@@ -92,7 +97,7 @@ export const useChannelStore = create<ChannelState>()(
         set({ mutating: true, error: null });
 
         try {
-          const channel = await channelService.update(id, input);
+          const channel = await getChannelService().update(id, input);
           set((state) => ({
             channels: state.channels.map((item) =>
               item.id === id ? channel : item,
@@ -112,7 +117,7 @@ export const useChannelStore = create<ChannelState>()(
         set({ mutating: true, error: null });
 
         try {
-          await channelService.remove(id);
+          await getChannelService().remove(id);
           set((state) => ({
             channels: state.channels.filter((channel) => channel.id !== id),
             selectedChannelId:

@@ -1,6 +1,7 @@
-import { persistenceManager } from '@/persistence';
+import { applicationContainer, dependencyTokens } from '@/core/di';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useAppStore, useChannelStore, useUIStore } from '@/store';
+import { registerApplicationDependencies } from './registerDependencies';
 
 let bootstrapPromise: Promise<void> | null = null;
 
@@ -11,7 +12,12 @@ function getErrorMessage(error: unknown) {
 }
 
 async function runBootstrap() {
+  registerApplicationDependencies();
+
   const appStore = useAppStore.getState();
+  const persistenceManager = applicationContainer.resolve(
+    dependencyTokens.persistenceManager,
+  );
 
   appStore.beginBootstrap();
   appStore.setOffline(!navigator.onLine || !isSupabaseConfigured);
@@ -47,7 +53,13 @@ export function bootstrapApplication() {
 }
 
 export function retryApplicationBootstrap() {
+  registerApplicationDependencies();
   bootstrapPromise = null;
+
+  const persistenceManager = applicationContainer.resolve(
+    dependencyTokens.persistenceManager,
+  );
+
   void persistenceManager.retryHydration();
   return bootstrapApplication();
 }

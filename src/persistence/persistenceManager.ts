@@ -81,3 +81,5 @@ export const persistenceManager = {
     await Promise.all(stores.map(({ persist }) => persist.clearStorage()));
   },
 };
+
+export type PersistenceManager = typeof persistenceManager;
