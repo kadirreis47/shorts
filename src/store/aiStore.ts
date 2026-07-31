@@ -10,6 +10,14 @@ export interface AIUsage {
   estimatedCost: number;
 }
 
+interface PersistedAIState {
+  activeProvider: AIProviderId;
+  activeModel: string | null;
+  temperature: number;
+  maxTokens: number;
+  streaming: boolean;
+}
+
 interface AIState {
   activeProvider: AIProviderId;
   activeModel: string | null;
@@ -72,7 +80,7 @@ export const useAIStore = create<AIState>()(
     {
       name: 'shortsflow-ai',
       version: 1,
-      storage: createPersistentStorage<AIState>(),
+      storage: createPersistentStorage<PersistedAIState>(),
       skipHydration: true,
       partialize: (state) => ({
         activeProvider: state.activeProvider,

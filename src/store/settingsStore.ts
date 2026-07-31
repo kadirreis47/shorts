@@ -7,6 +7,15 @@ import type {
   ThemeMode,
 } from '@/store/types';
 
+interface PersistedSettingsState {
+  language: string;
+  theme: ThemeMode;
+  aiProvider: AIProviderId;
+  autosaveEnabled: boolean;
+  cacheEnabled: boolean;
+  renderQuality: RenderQuality;
+}
+
 interface SettingsState {
   language: string;
   theme: ThemeMode;
@@ -47,7 +56,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'shortsflow-settings',
       version: 2,
-      storage: createPersistentStorage<SettingsState>(),
+      storage: createPersistentStorage<PersistedSettingsState>(),
       skipHydration: true,
       partialize: (state) => ({
         language: state.language,

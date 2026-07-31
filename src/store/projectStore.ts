@@ -7,6 +7,13 @@ import type {
   SaveStatus,
 } from '@/store/types';
 
+interface PersistedProjectState {
+  currentProject: ProjectSummary | null;
+  recentProjects: ProjectSummary[];
+  drafts: ProjectDraft[];
+  lastSavedAt: string | null;
+}
+
 interface ProjectState {
   currentProject: ProjectSummary | null;
   recentProjects: ProjectSummary[];
@@ -61,7 +68,7 @@ export const useProjectStore = create<ProjectState>()(
     {
       name: 'shortsflow-projects',
       version: 1,
-      storage: createPersistentStorage<ProjectState>(),
+      storage: createPersistentStorage<PersistedProjectState>(),
       skipHydration: true,
       partialize: (state) => ({
         currentProject: state.currentProject,

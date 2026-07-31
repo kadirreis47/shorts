@@ -12,6 +12,10 @@ import type {
   UpdateChannelInput,
 } from '@/services/channelService';
 
+interface PersistedChannelState {
+  selectedChannelId: string | null;
+}
+
 interface ChannelState {
   channels: Channel[];
   selectedChannelId: string | null;
@@ -213,7 +217,7 @@ export const useChannelStore = create<ChannelState>()(
     {
       name: 'shortsflow-channels',
       version: 1,
-      storage: createPersistentStorage<ChannelState>(),
+      storage: createPersistentStorage<PersistedChannelState>(),
       skipHydration: true,
       partialize: (state) => ({
         selectedChannelId: state.selectedChannelId,
