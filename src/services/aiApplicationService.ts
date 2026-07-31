@@ -108,6 +108,13 @@ function createSingleOperationPipeline<T>(
         id: 'provider-request',
         title: 'AI sağlayıcı isteği',
         timeoutMs,
+        retry: {
+          maxAttempts: 3,
+          initialDelayMs: 750,
+          backoffMultiplier: 2,
+          maxDelayMs: 4_000,
+          retryableCodes: ['NETWORK_ERROR', 'TIMEOUT', 'SERVICE_ERROR'],
+        },
         run: async ({ signal }) => ({ result: await execute(signal) }),
       },
       {

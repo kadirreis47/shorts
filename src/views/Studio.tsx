@@ -17,6 +17,7 @@ import {
   renderVideo, type CaptionStyle, type TransitionStyle, type MotionStyle,
 } from '@/lib/videoRenderer';
 import { Card, Button } from '@/components/ui';
+import { AIPipelineMonitor } from '@/components/AIPipelineMonitor';
 import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, saveStudioDraft, type StudioDraft, type StudioStep } from '@/lib/studioDraft';
@@ -737,6 +738,8 @@ export function Studio({ channels }: StudioProps) {
           )}
         </div>
       </div>
+
+      <AIPipelineMonitor />
 
       <Card className="p-4">
         <div className="mb-3 flex items-center justify-between gap-4">

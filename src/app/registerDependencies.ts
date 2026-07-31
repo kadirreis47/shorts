@@ -5,6 +5,7 @@ import { createQueryClient } from '@/core/query';
 import { persistenceManager } from '@/persistence';
 import {
   createAIApplicationService,
+  createAIPipelineMonitor,
   createChannelService,
   createServiceExecutor,
 } from '@/services';
@@ -44,6 +45,13 @@ export function registerApplicationDependencies() {
   );
 
   applicationContainer.registerSingleton(
+    dependencyTokens.aiPipelineMonitor,
+    (container) => createAIPipelineMonitor(
+      container.resolve(dependencyTokens.eventBus),
+    ),
+  );
+
+  applicationContainer.registerSingleton(
     dependencyTokens.serviceExecutor,
     (container) => createServiceExecutor(
       container.resolve(dependencyTokens.eventBus),
@@ -57,11 +65,17 @@ export function registerApplicationDependencies() {
     ),
   );
 
+  applicationContainer.resolve(dependencyTokens.aiPipelineMonitor).start();
+
   dependenciesRegistered = true;
   return applicationContainer;
 }
 
 export function resetApplicationDependencies() {
+  if (applicationContainer.has(dependencyTokens.aiPipelineMonitor)) {
+    applicationContainer.resolve(dependencyTokens.aiPipelineMonitor).stop();
+  }
+
   if (applicationContainer.has(dependencyTokens.aiPipelineRunner)) {
     applicationContainer.resolve(dependencyTokens.aiPipelineRunner).cancelAll();
   }
