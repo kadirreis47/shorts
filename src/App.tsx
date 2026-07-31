@@ -3,8 +3,8 @@ import { Bell, Search } from 'lucide-react';
 import { Sidebar } from '@/components/Sidebar';
 import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 import { I18nProvider, useI18n } from '@/lib/i18n';
-import { isSupabaseConfigured } from '@/lib/supabase';
 import { useChannels } from '@/hooks/useChannels';
+import { useAppBootstrap } from '@/hooks/useAppBootstrap';
 import { useNavigationItems } from '@/app/navigation';
 import { ViewHost } from '@/app/ViewHost';
 import { useUIStore } from '@/store';
@@ -13,10 +13,31 @@ function AppContent() {
   const { t } = useI18n();
   const view = useUIStore((state) => state.currentView);
   const navigate = useUIStore((state) => state.navigate);
-  const { channels, loading } = useChannels();
+  const { channels } = useChannels();
+  const { ready, error, offline, retry } = useAppBootstrap();
   const navigationItems = useNavigationItems();
 
-  if (loading) {
+  if (error) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 p-6">
+        <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-6 text-center shadow-sm">
+          <h1 className="text-lg font-semibold text-slate-900">
+            Uygulama başlatılamadı
+          </h1>
+          <p className="mt-2 text-sm text-slate-500">{error.message}</p>
+          <button
+            type="button"
+            onClick={() => void retry()}
+            className="mt-5 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            Tekrar dene
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!ready) {
     return (
       <div className="flex h-screen items-center justify-center bg-slate-50">
         <div className="text-slate-400">{t('app.loading')}</div>
@@ -67,7 +88,7 @@ function AppContent() {
           </div>
         </header>
 
-        {!isSupabaseConfigured && (
+        {offline && (
           <div className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm text-amber-900">
             <span className="font-semibold">{t('app.offline')}:</span>{' '}
             {t('app.offlineDetail')}
