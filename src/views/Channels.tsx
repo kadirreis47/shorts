@@ -1,35 +1,34 @@
-import { useEffect, useState } from 'react';
-import { Plus, Users, Eye, Video as VideoIcon, MoreVertical, Trash2 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { useState } from 'react';
+import { Plus, Users, Eye, Video as VideoIcon, Trash2 } from 'lucide-react';
 import type { Channel } from '@/lib/types';
+import { useChannelStore } from '@/store';
 import { formatNumber, classNames } from '@/lib/utils';
 import { Card, Button, Modal, StatusBadge, EmptyState } from '@/components/ui';
 
 export function Channels() {
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
-
-  useEffect(() => {
-    loadChannels();
-  }, []);
-
-  async function loadChannels() {
-    setLoading(true);
-    const { data } = await supabase.from('channels').select('*').order('created_at', { ascending: false });
-    setChannels(data ?? []);
-    setLoading(false);
-  }
+  const channels = useChannelStore((state) => state.channels);
+  const loading = useChannelStore((state) => state.loading);
+  const mutating = useChannelStore((state) => state.mutating);
+  const error = useChannelStore((state) => state.error);
+  const updateChannel = useChannelStore((state) => state.updateChannel);
+  const removeChannel = useChannelStore((state) => state.deleteChannel);
 
   async function toggleStatus(ch: Channel) {
     const newStatus = ch.status === 'active' ? 'paused' : 'active';
-    await supabase.from('channels').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('id', ch.id);
-    await loadChannels();
+    try {
+      await updateChannel(ch.id, { status: newStatus });
+    } catch {
+      // Store hata mesajını merkezi olarak yönetir.
+    }
   }
 
   async function deleteChannel(ch: Channel) {
-    await supabase.from('channels').delete().eq('id', ch.id);
-    await loadChannels();
+    try {
+      await removeChannel(ch.id);
+    } catch {
+      // Store hata mesajını merkezi olarak yönetir.
+    }
   }
 
   const totalSubs = channels.reduce((s, c) => s + c.subscriber_count, 0);
@@ -40,6 +39,11 @@ export function Channels() {
 
   return (
     <div className="space-y-5">
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Channels</h1>
@@ -102,10 +106,10 @@ export function Channels() {
                   </div>
                 )}
                 <div className="mt-4 flex gap-2">
-                  <Button size="sm" variant={ch.status === 'active' ? 'secondary' : 'primary'} onClick={() => toggleStatus(ch)} className="flex-1">
+                  <Button size="sm" variant={ch.status === 'active' ? 'secondary' : 'primary'} onClick={() => void toggleStatus(ch)} disabled={mutating} className="flex-1">
                     {ch.status === 'active' ? 'Pause' : 'Activate'}
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => deleteChannel(ch)}>
+                  <Button size="sm" variant="ghost" onClick={() => void deleteChannel(ch)} disabled={mutating}>
                     <Trash2 size={14} />
                   </Button>
                 </div>
@@ -115,14 +119,16 @@ export function Channels() {
         </div>
       )}
 
-      <NewChannelModal open={showNew} onClose={() => setShowNew(false)} onCreated={loadChannels} />
+      <NewChannelModal open={showNew} onClose={() => setShowNew(false)} />
     </div>
   );
 }
 
 const COLORS = ['#10b981', '#3b82f6', '#ef4444', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
-function NewChannelModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+function NewChannelModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const createChannel = useChannelStore((state) => state.createChannel);
+  const mutating = useChannelStore((state) => state.mutating);
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
   const [niche, setNiche] = useState('');
@@ -131,13 +137,22 @@ function NewChannelModal({ open, onClose, onCreated }: { open: boolean; onClose:
 
   async function create() {
     if (!name.trim()) return;
-    await supabase.from('channels').insert({
-      name, handle: handle || null, niche: niche || null, description: description || null,
-      avatar_color: color, status: 'active',
-    });
-    setName(''); setHandle(''); setNiche(''); setDescription('');
-    onCreated();
-    onClose();
+
+    try {
+      await createChannel({
+        name: name.trim(),
+        handle: handle.trim() || null,
+        niche: niche.trim() || null,
+        description: description.trim() || null,
+        avatar_color: color,
+        status: 'active',
+      });
+
+      setName(''); setHandle(''); setNiche(''); setDescription('');
+      onClose();
+    } catch {
+      // Store hata mesajını merkezi olarak yönetir.
+    }
   }
 
   return (
@@ -175,7 +190,7 @@ function NewChannelModal({ open, onClose, onCreated }: { open: boolean; onClose:
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={create} disabled={!name.trim()}>Create Channel</Button>
+          <Button onClick={() => void create()} disabled={!name.trim() || mutating}>{mutating ? 'Creating…' : 'Create Channel'}</Button>
         </div>
       </div>
     </Modal>
