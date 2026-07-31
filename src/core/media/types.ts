@@ -2,6 +2,7 @@ import type { Scene } from '@/lib/types';
 import type { AssetResolutionReport } from './assetProviderTypes';
 import type { SubtitleTimeline } from './subtitleTypes';
 import type { AudioBuildOptions, AudioTimeline } from './audioTypes';
+import type { MediaValidationReport } from './validationTypes';
 
 export type MediaAssetType =
   | 'image' | 'video' | 'ai_image' | 'broll' | 'overlay' | 'logo'
@@ -130,7 +131,7 @@ export interface MediaProject {
 }
 
 export interface RenderManifest {
-  schemaVersion: '1.3';
+  schemaVersion: '1.4';
   projectId: string;
   createdAt: string;
   durationMs: number;
@@ -139,6 +140,7 @@ export interface RenderManifest {
   timeline: MediaTimeline;
   subtitles: SubtitleTimeline;
   audio: AudioTimeline;
+  validation: MediaValidationReport | null;
   metadata: MediaProjectMetadata;
 }
 
@@ -157,4 +159,5 @@ export interface MediaProjectBuildResult {
   assetResolution: AssetResolutionReport;
   subtitleTimeline: SubtitleTimeline;
   audioTimeline: AudioTimeline;
+  validation: MediaValidationReport;
 }

@@ -122,6 +122,14 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     voiceCoverage: number;
     builtAt: string;
   };
+  'media:validation-completed': {
+    projectId: string;
+    score: number;
+    renderReady: boolean;
+    errorCount: number;
+    warningCount: number;
+    validatedAt: string;
+  };
   'media:manifest-built': {
     projectId: string;
     durationMs: number;

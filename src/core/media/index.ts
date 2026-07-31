@@ -16,3 +16,6 @@ export * from './subtitleTypes';
 export * from './subtitleSynchronizer';
 export * from './audioTypes';
 export * from './audioComposer';
+
+export * from './validationTypes';
+export * from './mediaValidator';

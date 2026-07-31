@@ -3,6 +3,7 @@ import type {
   AssetResolutionReport,
   AudioMixMetrics,
   MediaProject,
+  MediaValidationReport,
   RenderManifest,
   SubtitleMetrics,
   TimelineMetrics,
@@ -21,12 +22,16 @@ interface MediaState {
   subtitleCueCount: number;
   audioMetrics: AudioMixMetrics | null;
   audioSegmentCount: number;
+  validation: MediaValidationReport | null;
+  qualityScore: number;
+  validationIssueCount: number;
   setBuildStarted: () => void;
   setBuildResult: (
     project: MediaProject,
     manifest: RenderManifest,
     renderReady: boolean,
     assetResolution?: AssetResolutionReport,
+    validation?: MediaValidationReport,
   ) => void;
   setBuildError: (message: string) => void;
   clearMediaProject: () => void;
@@ -45,8 +50,11 @@ export const useMediaStore = create<MediaState>()((set) => ({
   subtitleCueCount: 0,
   audioMetrics: null,
   audioSegmentCount: 0,
+  validation: null,
+  qualityScore: 0,
+  validationIssueCount: 0,
   setBuildStarted: () => set({ building: true, error: null }),
-  setBuildResult: (project, manifest, renderReady, assetResolution) => set({
+  setBuildResult: (project, manifest, renderReady, assetResolution, validation) => set({
     project,
     manifest,
     renderReady,
@@ -59,6 +67,9 @@ export const useMediaStore = create<MediaState>()((set) => ({
     subtitleCueCount: project.subtitles.cues.length,
     audioMetrics: project.audio.metrics,
     audioSegmentCount: project.audio.voice.length + project.audio.music.length + project.audio.sfx.length,
+    validation: validation ?? manifest.validation,
+    qualityScore: (validation ?? manifest.validation)?.score ?? 0,
+    validationIssueCount: (validation ?? manifest.validation)?.issues.length ?? 0,
   }),
   setBuildError: (error) => set({ building: false, error, renderReady: false }),
   clearMediaProject: () => set({
@@ -74,5 +85,8 @@ export const useMediaStore = create<MediaState>()((set) => ({
     subtitleCueCount: 0,
     audioMetrics: null,
     audioSegmentCount: 0,
+    validation: null,
+    qualityScore: 0,
+    validationIssueCount: 0,
   }),
 }));

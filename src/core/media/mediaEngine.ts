@@ -7,6 +7,7 @@ import { buildIntelligentTimeline } from './timelineIntelligence';
 import { buildSubtitleTimeline } from './subtitleSynchronizer';
 import { buildAudioTimeline } from './audioComposer';
 import { composeTracks } from './trackComposer';
+import { validateMediaProject } from './mediaValidator';
 import type { CreateMediaProjectInput, MediaProject, MediaProjectBuildResult } from './types';
 
 export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
@@ -94,7 +95,18 @@ export function createMediaEngine(
       });
 
       const manifest = buildRenderManifest(project);
+      const validation = validateMediaProject({ project, manifest, assetResolution });
+      manifest.validation = validation;
       const renderReady = isRenderManifestReady(manifest);
+      await eventBus.emit('media:validation-completed', {
+        projectId,
+        score: validation.score,
+        renderReady: validation.renderReady,
+        errorCount: validation.errorCount,
+        warningCount: validation.warningCount,
+        validatedAt: validation.validatedAt,
+      });
+
       await eventBus.emit('media:manifest-built', {
         projectId, durationMs: timelinePlan.durationMs, renderReady, builtAt: manifest.createdAt,
       });
@@ -105,6 +117,7 @@ export function createMediaEngine(
         assetResolution,
         subtitleTimeline,
         audioTimeline,
+        validation,
       };
     },
   };
