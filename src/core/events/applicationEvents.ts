@@ -39,6 +39,19 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     totalSteps: number;
     startedAt: string;
   };
+  'ai:pipeline-step-retrying': {
+    runId: string;
+    pipelineId: string;
+    stepId: string;
+    stepIndex: number;
+    attempt: number;
+    nextAttempt: number;
+    maxAttempts: number;
+    delayMs: number;
+    code: AppErrorCode;
+    message: string;
+    retryingAt: string;
+  };
   'ai:pipeline-step-completed': {
     runId: string;
     pipelineId: string;
@@ -66,6 +79,30 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     runId: string;
     pipelineId: string;
     cancelledAt: string;
+  };
+  'media:project-created': {
+    projectId: string;
+    title: string;
+    sceneCount: number;
+    createdAt: string;
+  };
+  'media:assets-resolved': {
+    projectId: string;
+    assetCount: number;
+    resolvedAt: string;
+  };
+  'media:timeline-built': {
+    projectId: string;
+    durationMs: number;
+    sceneCount: number;
+    trackCount: number;
+    builtAt: string;
+  };
+  'media:manifest-built': {
+    projectId: string;
+    durationMs: number;
+    renderReady: boolean;
+    builtAt: string;
   };
   'channel:list-loaded': { channels: Channel[]; loadedAt: string };
   'channel:created': { channel: Channel; createdAt: string };

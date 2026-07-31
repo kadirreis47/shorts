@@ -2,7 +2,7 @@ import type { AIPipelineRunner } from '@/core/ai-pipeline';
 import type { EventBus, ApplicationEventMap } from '@/core/events';
 import type { PersistenceManager } from '@/persistence/persistenceManager';
 import type { QueryClient } from '@/core/query';
-import type { AIApplicationService, AIPipelineMonitor, ChannelService, ServiceExecutor } from '@/services';
+import type { AIApplicationService, AIPipelineMonitor, ChannelService, MediaEngine, ServiceExecutor } from '@/services';
 import type { DependencyToken } from './types';
 
 function createToken<T>(name: string): DependencyToken<T> {
@@ -18,4 +18,5 @@ export const dependencyTokens = {
   aiApplicationService: createToken<AIApplicationService>('AIApplicationService'),
   aiPipelineMonitor: createToken<AIPipelineMonitor>('AIPipelineMonitor'),
   channelService: createToken<ChannelService>('ChannelService'),
+  mediaEngine: createToken<MediaEngine>('MediaEngine'),
 } as const;

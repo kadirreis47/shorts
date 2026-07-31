@@ -6,3 +6,4 @@ export * from '@/store/aiStore';
 export * from '@/store/channelStore';
 export * from '@/store/projectStore';
 export * from '@/store/aiPipelineStore';
+export * from '@/store/mediaStore';

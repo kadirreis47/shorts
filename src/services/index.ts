@@ -20,3 +20,5 @@ export { createAIApplicationService } from './aiApplicationService';
 export type { AIApplicationService, AIOperationOptions } from './aiApplicationService';
 
 export * from '@/services/aiPipelineMonitor';
+
+export * from '@/services/mediaEngineService';

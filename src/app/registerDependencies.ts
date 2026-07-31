@@ -7,6 +7,7 @@ import {
   createAIApplicationService,
   createAIPipelineMonitor,
   createChannelService,
+  createMediaEngine,
   createServiceExecutor,
 } from '@/services';
 
@@ -62,6 +63,13 @@ export function registerApplicationDependencies() {
     dependencyTokens.channelService,
     (container) => createChannelService(
       container.resolve(dependencyTokens.serviceExecutor),
+    ),
+  );
+
+  applicationContainer.registerSingleton(
+    dependencyTokens.mediaEngine,
+    (container) => createMediaEngine(
+      container.resolve(dependencyTokens.eventBus),
     ),
   );
 
