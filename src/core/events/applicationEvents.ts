@@ -80,6 +80,13 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     pipelineId: string;
     cancelledAt: string;
   };
+  'asset:search-started': { sceneId: string; queries: string[]; startedAt: string; };
+  'asset:provider-selected': { sceneId: string; providerId: string; selectedAt: string; };
+  'asset:cache-hit': { sceneId: string; providerId: string; candidateCount: number; hitAt: string; };
+  'asset:provider-failed': { sceneId: string; providerId: string; message: string; failedAt: string; };
+  'asset:candidate-ranked': { sceneId: string; providerId: string; candidateId: string; score: number; rankedAt: string; };
+  'asset:resolved': { sceneId: string; assetId: string; providerId: string; resolvedAt: string; };
+  'asset:unresolved': { sceneId: string; queries: string[]; unresolvedAt: string; };
   'media:project-created': {
     projectId: string;
     title: string;
@@ -98,6 +105,21 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     trackCount: number;
     markerCount: number;
     pacingScore: number;
+    builtAt: string;
+  };
+  'subtitle:timeline-built': {
+    projectId: string;
+    wordCount: number;
+    cueCount: number;
+    readingSpeedWpm: number;
+    builtAt: string;
+  };
+  'audio:timeline-built': {
+    projectId: string;
+    voiceSegmentCount: number;
+    sfxCount: number;
+    duckingEventCount: number;
+    voiceCoverage: number;
     builtAt: string;
   };
   'media:manifest-built': {

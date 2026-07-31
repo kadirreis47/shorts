@@ -1,9 +1,11 @@
 import type { ApplicationEventMap, EventBus } from '@/core/events';
-import { createAssetResolver, type AssetResolver } from './assetResolver';
+import type { AssetProviderEngine } from './assetProviderTypes';
 import { normalizeMediaSettings } from './durationPlanner';
 import { buildRenderManifest, isRenderManifestReady } from './manifestBuilder';
 import { planScenes } from './scenePlanner';
 import { buildIntelligentTimeline } from './timelineIntelligence';
+import { buildSubtitleTimeline } from './subtitleSynchronizer';
+import { buildAudioTimeline } from './audioComposer';
 import { composeTracks } from './trackComposer';
 import type { CreateMediaProjectInput, MediaProject, MediaProjectBuildResult } from './types';
 
@@ -11,7 +13,7 @@ export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Pro
 
 export function createMediaEngine(
   eventBus: EventBus<ApplicationEventMap>,
-  assetResolver: AssetResolver = createAssetResolver(),
+  assetProviderEngine: AssetProviderEngine,
 ): MediaEngine {
   return {
     async buildProject(input) {
@@ -26,12 +28,19 @@ export function createMediaEngine(
         projectId, title: input.title, sceneCount: scenes.length, createdAt: now,
       });
 
-      const assets = await assetResolver.resolve(scenes);
+      const { assets, report: assetResolution } = await assetProviderEngine.resolve(scenes, settings);
       await eventBus.emit('media:assets-resolved', {
         projectId, assetCount: assets.length, resolvedAt: new Date().toISOString(),
       });
 
-      const tracks = composeTracks(scenes);
+      const subtitleTimeline = buildSubtitleTimeline(scenes, settings);
+      const audioTimeline = buildAudioTimeline(
+        scenes,
+        timelinePlan.markers,
+        timelinePlan.durationMs,
+        input.audio,
+      );
+      const tracks = composeTracks(scenes, subtitleTimeline, audioTimeline);
       const project: MediaProject = {
         id: projectId,
         version: 1,
@@ -46,6 +55,8 @@ export function createMediaEngine(
         scenes,
         assets,
         tracks,
+        subtitles: subtitleTimeline,
+        audio: audioTimeline,
         timeline: {
           durationMs: timelinePlan.durationMs,
           scenes,
@@ -54,6 +65,23 @@ export function createMediaEngine(
           metrics: timelinePlan.metrics,
         },
       };
+
+      await eventBus.emit('subtitle:timeline-built', {
+        projectId,
+        wordCount: subtitleTimeline.metrics.wordCount,
+        cueCount: subtitleTimeline.metrics.cueCount,
+        readingSpeedWpm: subtitleTimeline.metrics.readingSpeedWpm,
+        builtAt: new Date().toISOString(),
+      });
+
+      await eventBus.emit('audio:timeline-built', {
+        projectId,
+        voiceSegmentCount: audioTimeline.voice.length,
+        sfxCount: audioTimeline.metrics.sfxCount,
+        duckingEventCount: audioTimeline.metrics.duckingEventCount,
+        voiceCoverage: audioTimeline.metrics.voiceCoverage,
+        builtAt: new Date().toISOString(),
+      });
 
       await eventBus.emit('media:timeline-built', {
         projectId,
@@ -70,7 +98,14 @@ export function createMediaEngine(
       await eventBus.emit('media:manifest-built', {
         projectId, durationMs: timelinePlan.durationMs, renderReady, builtAt: manifest.createdAt,
       });
-      return { project, manifest, renderReady };
+      return {
+        project,
+        manifest,
+        renderReady,
+        assetResolution,
+        subtitleTimeline,
+        audioTimeline,
+      };
     },
   };
 }

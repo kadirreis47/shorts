@@ -2,7 +2,17 @@ export * from './types';
 export * from './durationPlanner';
 export * from './scenePlanner';
 export * from './timelineIntelligence';
-export * from './assetResolver';
 export * from './trackComposer';
 export * from './manifestBuilder';
 export * from './mediaEngine';
+export * from './assetProviderTypes';
+export * from './assetQueryBuilder';
+export * from './assetScoring';
+export * from './assetCache';
+export * from './assetProviderEngine';
+export * from './providers';
+
+export * from './subtitleTypes';
+export * from './subtitleSynchronizer';
+export * from './audioTypes';
+export * from './audioComposer';

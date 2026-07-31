@@ -2,7 +2,7 @@ import type { MediaProject, RenderManifest } from './types';
 
 export function buildRenderManifest(project: MediaProject): RenderManifest {
   return {
-    schemaVersion: '1.1',
+    schemaVersion: '1.3',
     projectId: project.id,
     createdAt: new Date().toISOString(),
     durationMs: project.timeline.durationMs,
@@ -14,6 +14,8 @@ export function buildRenderManifest(project: MediaProject): RenderManifest {
     },
     assets: project.assets,
     timeline: project.timeline,
+    subtitles: project.subtitles,
+    audio: project.audio,
     metadata: project.metadata,
   };
 }
@@ -24,6 +26,8 @@ export function isRenderManifestReady(manifest: RenderManifest): boolean {
     manifest.durationMs > 0 &&
     manifest.render.fps > 0 &&
     manifest.render.width > 0 &&
-    manifest.render.height > 0
+    manifest.render.height > 0 &&
+    manifest.subtitles.cues.length > 0 &&
+    manifest.audio.voice.length > 0
   );
 }

@@ -1,4 +1,7 @@
 import type { Scene } from '@/lib/types';
+import type { AssetResolutionReport } from './assetProviderTypes';
+import type { SubtitleTimeline } from './subtitleTypes';
+import type { AudioBuildOptions, AudioTimeline } from './audioTypes';
 
 export type MediaAssetType =
   | 'image' | 'video' | 'ai_image' | 'broll' | 'overlay' | 'logo'
@@ -122,16 +125,20 @@ export interface MediaProject {
   assets: MediaAsset[];
   tracks: MediaTrack[];
   timeline: MediaTimeline;
+  subtitles: SubtitleTimeline;
+  audio: AudioTimeline;
 }
 
 export interface RenderManifest {
-  schemaVersion: '1.1';
+  schemaVersion: '1.3';
   projectId: string;
   createdAt: string;
   durationMs: number;
   render: { fps: number; width: number; height: number; aspectRatio: string; };
   assets: MediaAsset[];
   timeline: MediaTimeline;
+  subtitles: SubtitleTimeline;
+  audio: AudioTimeline;
   metadata: MediaProjectMetadata;
 }
 
@@ -140,10 +147,14 @@ export interface CreateMediaProjectInput {
   scenes: Scene[];
   tags?: string[];
   settings?: Partial<MediaProjectSettings>;
+  audio?: AudioBuildOptions;
 }
 
 export interface MediaProjectBuildResult {
   project: MediaProject;
   manifest: RenderManifest;
   renderReady: boolean;
+  assetResolution: AssetResolutionReport;
+  subtitleTimeline: SubtitleTimeline;
+  audioTimeline: AudioTimeline;
 }
