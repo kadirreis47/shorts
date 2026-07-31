@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { createPersistentStorage } from '@/persistence/storeStorage';
 import type {
   ProjectDraft,
   ProjectSummary,
@@ -28,29 +30,45 @@ const initialState = {
   lastSavedAt: null,
 };
 
-export const useProjectStore = create<ProjectState>()((set) => ({
-  ...initialState,
-  setCurrentProject: (currentProject) => set({ currentProject }),
-  setRecentProjects: (recentProjects) => set({ recentProjects }),
-  upsertDraft: (draft) =>
-    set((state) => {
-      const exists = state.drafts.some((item) => item.id === draft.id);
+export const useProjectStore = create<ProjectState>()(
+  persist(
+    (set) => ({
+      ...initialState,
+      setCurrentProject: (currentProject) => set({ currentProject }),
+      setRecentProjects: (recentProjects) => set({ recentProjects }),
+      upsertDraft: (draft) =>
+        set((state) => {
+          const exists = state.drafts.some((item) => item.id === draft.id);
 
-      return {
-        drafts: exists
-          ? state.drafts.map((item) => (item.id === draft.id ? draft : item))
-          : [draft, ...state.drafts],
-      };
+          return {
+            drafts: exists
+              ? state.drafts.map((item) => (item.id === draft.id ? draft : item))
+              : [draft, ...state.drafts],
+          };
+        }),
+      removeDraft: (draftId) =>
+        set((state) => ({
+          drafts: state.drafts.filter((draft) => draft.id !== draftId),
+        })),
+      setSaveStatus: (saveStatus) => set({ saveStatus }),
+      markSaved: () =>
+        set({
+          saveStatus: 'saved',
+          lastSavedAt: new Date().toISOString(),
+        }),
+      reset: () => set(initialState),
     }),
-  removeDraft: (draftId) =>
-    set((state) => ({
-      drafts: state.drafts.filter((draft) => draft.id !== draftId),
-    })),
-  setSaveStatus: (saveStatus) => set({ saveStatus }),
-  markSaved: () =>
-    set({
-      saveStatus: 'saved',
-      lastSavedAt: new Date().toISOString(),
-    }),
-  reset: () => set(initialState),
-}));
+    {
+      name: 'shortsflow-projects',
+      version: 1,
+      storage: createPersistentStorage<ProjectState>(),
+      skipHydration: true,
+      partialize: (state) => ({
+        currentProject: state.currentProject,
+        recentProjects: state.recentProjects,
+        drafts: state.drafts,
+        lastSavedAt: state.lastSavedAt,
+      }),
+    },
+  ),
+);

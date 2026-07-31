@@ -1,3 +1,4 @@
+import { persistenceManager } from '@/persistence';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useAppStore, useChannelStore, useUIStore } from '@/store';
 
@@ -14,9 +15,18 @@ async function runBootstrap() {
 
   appStore.beginBootstrap();
   appStore.setOffline(!navigator.onLine || !isSupabaseConfigured);
-  useUIStore.getState().resetTransientUI();
 
   try {
+    const hydrationResult = await persistenceManager.hydrate();
+
+    if (hydrationResult.failedStores.length > 0) {
+      console.warn(
+        '[Bootstrap] Some stores could not be restored:',
+        hydrationResult.failedStores,
+      );
+    }
+
+    useUIStore.getState().resetTransientUI();
     await useChannelStore.getState().loadChannels();
     useAppStore.getState().markReady();
   } catch (error) {
@@ -38,5 +48,6 @@ export function bootstrapApplication() {
 
 export function retryApplicationBootstrap() {
   bootstrapPromise = null;
+  void persistenceManager.retryHydration();
   return bootstrapApplication();
 }

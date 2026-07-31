@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { createPersistentStorage } from '@/persistence/storeStorage';
 import type {
   AIProviderId,
   RenderQuality,
@@ -45,7 +46,17 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'shortsflow-settings',
-      version: 1,
+      version: 2,
+      storage: createPersistentStorage<SettingsState>(),
+      skipHydration: true,
+      partialize: (state) => ({
+        language: state.language,
+        theme: state.theme,
+        aiProvider: state.aiProvider,
+        autosaveEnabled: state.autosaveEnabled,
+        cacheEnabled: state.cacheEnabled,
+        renderQuality: state.renderQuality,
+      }),
     },
   ),
 );

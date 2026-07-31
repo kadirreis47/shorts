@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { createPersistentStorage } from '@/persistence/storeStorage';
 import type { AIProviderId } from '@/store/types';
 
 export interface AIUsage {
@@ -35,33 +37,50 @@ const createEmptyUsage = (): AIUsage => ({
   estimatedCost: 0,
 });
 
-export const useAIStore = create<AIState>()((set) => ({
-  activeProvider: 'openai',
-  activeModel: null,
-  temperature: 0.7,
-  maxTokens: 2048,
-  streaming: false,
-  busy: false,
-  lastError: null,
-  usage: createEmptyUsage(),
-  setActiveProvider: (activeProvider) => set({ activeProvider }),
-  setActiveModel: (activeModel) => set({ activeModel }),
-  setTemperature: (temperature) =>
-    set({ temperature: Math.min(2, Math.max(0, temperature)) }),
-  setMaxTokens: (maxTokens) =>
-    set({ maxTokens: Math.max(1, Math.round(maxTokens)) }),
-  setStreaming: (streaming) => set({ streaming }),
-  setBusy: (busy) => set({ busy }),
-  setLastError: (lastError) => set({ lastError }),
-  recordUsage: (usage) =>
-    set((state) => ({
-      usage: {
-        requests: state.usage.requests + (usage.requests ?? 0),
-        inputTokens: state.usage.inputTokens + (usage.inputTokens ?? 0),
-        outputTokens: state.usage.outputTokens + (usage.outputTokens ?? 0),
-        estimatedCost:
-          state.usage.estimatedCost + (usage.estimatedCost ?? 0),
-      },
-    })),
-  resetUsage: () => set({ usage: createEmptyUsage() }),
-}));
+export const useAIStore = create<AIState>()(
+  persist(
+    (set) => ({
+      activeProvider: 'openai',
+      activeModel: null,
+      temperature: 0.7,
+      maxTokens: 2048,
+      streaming: false,
+      busy: false,
+      lastError: null,
+      usage: createEmptyUsage(),
+      setActiveProvider: (activeProvider) => set({ activeProvider }),
+      setActiveModel: (activeModel) => set({ activeModel }),
+      setTemperature: (temperature) =>
+        set({ temperature: Math.min(2, Math.max(0, temperature)) }),
+      setMaxTokens: (maxTokens) =>
+        set({ maxTokens: Math.max(1, Math.round(maxTokens)) }),
+      setStreaming: (streaming) => set({ streaming }),
+      setBusy: (busy) => set({ busy }),
+      setLastError: (lastError) => set({ lastError }),
+      recordUsage: (usage) =>
+        set((state) => ({
+          usage: {
+            requests: state.usage.requests + (usage.requests ?? 0),
+            inputTokens: state.usage.inputTokens + (usage.inputTokens ?? 0),
+            outputTokens: state.usage.outputTokens + (usage.outputTokens ?? 0),
+            estimatedCost:
+              state.usage.estimatedCost + (usage.estimatedCost ?? 0),
+          },
+        })),
+      resetUsage: () => set({ usage: createEmptyUsage() }),
+    }),
+    {
+      name: 'shortsflow-ai',
+      version: 1,
+      storage: createPersistentStorage<AIState>(),
+      skipHydration: true,
+      partialize: (state) => ({
+        activeProvider: state.activeProvider,
+        activeModel: state.activeModel,
+        temperature: state.temperature,
+        maxTokens: state.maxTokens,
+        streaming: state.streaming,
+      }),
+    },
+  ),
+);

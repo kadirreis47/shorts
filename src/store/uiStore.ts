@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { createPersistentStorage } from '@/persistence/storeStorage';
 import type { ModalState, ViewKey } from '@/store/types';
 
 interface UIState {
@@ -39,7 +40,9 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'shortsflow-ui',
-      version: 1,
+      version: 2,
+      storage: createPersistentStorage<UIState>(),
+      skipHydration: true,
       partialize: (state) => ({
         currentView: state.currentView,
         sidebarOpen: state.sidebarOpen,
