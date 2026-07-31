@@ -1,0 +1,106 @@
+import {
+  Activity,
+  BarChart3,
+  BellRing,
+  Calendar,
+  Camera,
+  Clapperboard,
+  Compass,
+  Dna,
+  DollarSign,
+  FileText,
+  Film,
+  FlaskConical,
+  FolderOpen,
+  GitBranch,
+  Hash,
+  Image as ImageIcon,
+  LayoutDashboard,
+  LayoutGrid,
+  Lightbulb,
+  MessageSquare,
+  Mic,
+  Palette,
+  Radar,
+  Repeat,
+  Send,
+  Settings as SettingsIcon,
+  Smile,
+  Sparkles,
+  TrendingUp,
+  Trophy,
+  Type,
+  UserCircle,
+  Users,
+  Video as VideoIcon,
+  Wand2,
+  Zap,
+  Layers,
+} from 'lucide-react';
+import { useMemo, type ReactNode } from 'react';
+import type { ViewKey } from '@/components/Sidebar';
+import { useI18n } from '@/lib/i18n';
+
+export interface NavigationItem {
+  key: ViewKey;
+  label: string;
+  icon: ReactNode;
+  section?: string;
+}
+
+export function useNavigationItems(): NavigationItem[] {
+  const { t } = useI18n();
+
+  return useMemo(
+    () => [
+      { key: 'dashboard', label: t('nav.dashboard'), icon: <LayoutDashboard size={18} />, section: t('nav.section.overview') },
+      { key: 'studio', label: t('nav.studio'), icon: <Clapperboard size={18} />, section: t('nav.section.create') },
+      { key: 'faceless', label: t('nav.faceless'), icon: <Film size={18} /> },
+      { key: 'videos', label: t('nav.videos'), icon: <VideoIcon size={18} /> },
+      { key: 'calendar', label: t('nav.calendar'), icon: <Calendar size={18} />, section: t('nav.section.manage') },
+      { key: 'automation', label: t('nav.automation'), icon: <Zap size={18} /> },
+      { key: 'workflow', label: t('nav.workflow'), icon: <GitBranch size={18} /> },
+      { key: 'analytics', label: t('nav.analytics'), icon: <BarChart3 size={18} /> },
+      { key: 'assets', label: t('nav.assets'), icon: <FolderOpen size={18} /> },
+      { key: 'channels', label: t('nav.channels'), icon: <Users size={18} /> },
+      { key: 'team', label: t('nav.team'), icon: <Users size={18} /> },
+      { key: 'templates', label: t('nav.templates'), icon: <FileText size={18} /> },
+      { key: 'comments', label: t('nav.comments'), icon: <MessageSquare size={18} /> },
+      { key: 'collabnotes', label: t('nav.collabnotes'), icon: <MessageSquare size={18} /> },
+      { key: 'aitools', label: t('nav.aitools'), icon: <Wand2 size={18} />, section: t('nav.section.aiTools') },
+      { key: 'prompts', label: t('nav.prompts'), icon: <Sparkles size={18} /> },
+      { key: 'bulk', label: t('nav.bulk'), icon: <Layers size={18} /> },
+      { key: 'bulkthumbs', label: t('nav.bulkthumbs'), icon: <ImageIcon size={18} /> },
+      { key: 'trends', label: t('nav.trends'), icon: <TrendingUp size={18} />, section: t('nav.section.research') },
+      { key: 'nichetrends', label: t('nav.nichetrends'), icon: <Compass size={18} /> },
+      { key: 'ideas', label: t('ideas.title'), icon: <Lightbulb size={18} /> },
+      { key: 'competitor', label: t('nav.competitor'), icon: <Radar size={18} /> },
+      { key: 'trendalerts', label: t('nav.trendalerts'), icon: <BellRing size={18} /> },
+      { key: 'contentgap', label: t('nav.contentgap'), icon: <Compass size={18} /> },
+      { key: 'monetization', label: t('nav.monetization'), icon: <DollarSign size={18} />, section: t('nav.section.growth') },
+      { key: 'revenue', label: t('nav.revenue'), icon: <DollarSign size={18} /> },
+      { key: 'subgrowth', label: t('nav.subgrowth'), icon: <TrendingUp size={18} /> },
+      { key: 'series', label: t('nav.series'), icon: <Film size={18} /> },
+      { key: 'thumbnails', label: t('thumbnail.title'), icon: <ImageIcon size={18} /> },
+      { key: 'titleopt', label: t('nav.titleopt'), icon: <Type size={18} /> },
+      { key: 'hooktester', label: t('nav.hooktester'), icon: <Trophy size={18} /> },
+      { key: 'brandkit', label: t('nav.brandkit'), icon: <Palette size={18} />, section: t('nav.section.branding') },
+      { key: 'introoutro', label: t('nav.introoutro'), icon: <Clapperboard size={18} /> },
+      { key: 'abtest', label: t('nav.abtest'), icon: <FlaskConical size={18} />, section: t('nav.section.optimize') },
+      { key: 'retention', label: t('nav.retention'), icon: <Activity size={18} /> },
+      { key: 'sentiment', label: t('nav.sentiment'), icon: <Smile size={18} /> },
+      { key: 'avatars', label: t('nav.avatars'), icon: <UserCircle size={18} />, section: t('nav.section.advanced') },
+      { key: 'voiceclones', label: t('nav.voiceclones'), icon: <Mic size={18} /> },
+      { key: 'viraldna', label: t('nav.viraldna'), icon: <Dna size={18} /> },
+      { key: 'storyboard', label: t('nav.storyboard'), icon: <Camera size={18} /> },
+      { key: 'repurpose', label: t('nav.repurpose'), icon: <Repeat size={18} /> },
+      { key: 'personas', label: t('nav.personas'), icon: <Users size={18} /> },
+      { key: 'scriptlib', label: t('nav.scriptlib'), icon: <FileText size={18} /> },
+      { key: 'hashtags', label: t('nav.hashtags'), icon: <Hash size={18} /> },
+      { key: 'pillars', label: t('nav.pillars'), icon: <LayoutGrid size={18} /> },
+      { key: 'crossplatform', label: t('nav.crossplatform'), icon: <Send size={18} /> },
+      { key: 'settings', label: t('nav.settings'), icon: <SettingsIcon size={18} />, section: t('nav.section.system') },
+    ],
+    [t],
+  );
+}
