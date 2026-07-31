@@ -1,0 +1,392 @@
+import type { ApplicationEventMap, EventBus } from '@/core/events';
+import type {
+  RenderAdapter,
+  RenderEngine,
+  RenderEngineOptions,
+  RenderJobRequest,
+  RenderJobSnapshot,
+  RenderPreset,
+  RenderProgress,
+} from './types';
+import { DEFAULT_RENDER_PRESET } from './types';
+
+interface InternalRenderJob {
+  request: RenderJobRequest;
+  snapshot: RenderJobSnapshot;
+  controller: AbortController;
+}
+
+export function createRenderEngine(
+  eventBus: EventBus<ApplicationEventMap>,
+  initialAdapters: RenderAdapter[] = [],
+  options: RenderEngineOptions = {},
+): RenderEngine {
+  const adapters = new Map<string, RenderAdapter>();
+  const jobs = new Map<string, InternalRenderJob>();
+  const queue: string[] = [];
+  const concurrency = Math.max(1, Math.floor(options.concurrency ?? 1));
+  const defaultPreset = normalizePreset(options.defaultPreset);
+  let activeCount = 0;
+  let disposed = false;
+
+  initialAdapters.forEach((adapter) => adapters.set(adapter.id, adapter));
+
+  const engine: RenderEngine = {
+    async submit(request) {
+      ensureNotDisposed();
+
+      if (request.manifest.validation?.renderReady !== true) {
+        throw new Error(
+          'Render manifest kalite kapısından geçmedi. Validation raporundaki hataları düzeltin.',
+        );
+      }
+
+      const preset = normalizePreset({
+        ...defaultPreset,
+        ...request.preset,
+      });
+      const adapter = selectAdapter(adapters, request.manifest, preset);
+      const now = new Date().toISOString();
+      const jobId = createId('render-job');
+      const snapshot: RenderJobSnapshot = {
+        id: jobId,
+        projectId: request.manifest.projectId,
+        adapterId: adapter.id,
+        status: 'queued',
+        stage: 'queued',
+        progress: 0,
+        message: 'Render işi kuyruğa alındı',
+        preset,
+        outputPath: request.outputPath,
+        output: null,
+        error: null,
+        queuedAt: now,
+        startedAt: null,
+        completedAt: null,
+        elapsedMs: 0,
+      };
+
+      jobs.set(jobId, {
+        request,
+        snapshot,
+        controller: new AbortController(),
+      });
+      queue.push(jobId);
+
+      await eventBus.emit('render:job-queued', {
+        jobId,
+        projectId: snapshot.projectId,
+        adapterId: adapter.id,
+        queuedAt: now,
+      });
+
+      scheduleDrain();
+      return cloneSnapshot(snapshot);
+    },
+
+    cancel(jobId) {
+      const job = jobs.get(jobId);
+      if (!job || isTerminal(job.snapshot.status)) return false;
+
+      job.controller.abort();
+      const queueIndex = queue.indexOf(jobId);
+      if (queueIndex >= 0) {
+        queue.splice(queueIndex, 1);
+        void markCancelled(job);
+      }
+      return true;
+    },
+
+    cancelAll() {
+      for (const job of jobs.values()) {
+        if (!isTerminal(job.snapshot.status)) {
+          job.controller.abort();
+        }
+      }
+      queue.splice(0);
+    },
+
+    getJob(jobId) {
+      const job = jobs.get(jobId);
+      return job ? cloneSnapshot(job.snapshot) : null;
+    },
+
+    listJobs() {
+      return Array.from(jobs.values())
+        .map((job) => cloneSnapshot(job.snapshot))
+        .sort((a, b) => Date.parse(b.queuedAt) - Date.parse(a.queuedAt));
+    },
+
+    registerAdapter(adapter) {
+      ensureNotDisposed();
+      adapters.set(adapter.id, adapter);
+    },
+
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      engine.cancelAll();
+      adapters.clear();
+    },
+  };
+
+  function scheduleDrain(): void {
+    queueMicrotask(() => {
+      void drainQueue();
+    });
+  }
+
+  async function drainQueue(): Promise<void> {
+    if (disposed) return;
+
+    while (activeCount < concurrency && queue.length > 0) {
+      const jobId = queue.shift();
+      if (!jobId) continue;
+
+      const job = jobs.get(jobId);
+      if (!job || job.controller.signal.aborted) {
+        if (job) await markCancelled(job);
+        continue;
+      }
+
+      activeCount += 1;
+      void executeJob(job).finally(() => {
+        activeCount = Math.max(0, activeCount - 1);
+        scheduleDrain();
+      });
+    }
+  }
+
+  async function executeJob(job: InternalRenderJob): Promise<void> {
+    const adapter = adapters.get(job.snapshot.adapterId ?? '');
+    if (!adapter) {
+      await markFailed(job, 'Seçilen render adapter bulunamadı.');
+      return;
+    }
+
+    const startedAt = new Date().toISOString();
+    patchSnapshot(job, {
+      status: 'preparing',
+      stage: 'validating',
+      progress: 1,
+      message: 'Render işi hazırlanıyor',
+      startedAt,
+    });
+
+    await eventBus.emit('render:job-started', {
+      jobId: job.snapshot.id,
+      projectId: job.snapshot.projectId,
+      adapterId: adapter.id,
+      startedAt,
+    });
+
+    try {
+      const output = await adapter.render({
+        jobId: job.snapshot.id,
+        manifest: job.request.manifest,
+        preset: job.snapshot.preset,
+        outputPath: job.request.outputPath,
+        signal: job.controller.signal,
+        reportProgress: async (progress) => {
+          if (job.controller.signal.aborted) {
+            throw new DOMException('Render işlemi iptal edildi', 'AbortError');
+          }
+          await applyProgress(job, progress);
+        },
+      });
+
+      if (job.controller.signal.aborted) {
+        await markCancelled(job);
+        return;
+      }
+
+      const completedAt = new Date().toISOString();
+      patchSnapshot(job, {
+        status: 'completed',
+        stage: 'completed',
+        progress: 100,
+        message:
+          output.kind === 'video'
+            ? 'Video render tamamlandı'
+            : 'Render yürütme planı hazır',
+        output,
+        completedAt,
+        elapsedMs: calculateElapsed(job.snapshot, completedAt),
+      });
+
+      await eventBus.emit('render:job-completed', {
+        jobId: job.snapshot.id,
+        projectId: job.snapshot.projectId,
+        outputKind: output.kind,
+        outputUri: output.uri,
+        durationMs: job.snapshot.elapsedMs,
+        completedAt,
+      });
+    } catch (error) {
+      if (isAbortError(error) || job.controller.signal.aborted) {
+        await markCancelled(job);
+        return;
+      }
+
+      await markFailed(
+        job,
+        error instanceof Error ? error.message : 'Render işlemi başarısız oldu.',
+      );
+    }
+  }
+
+  async function applyProgress(
+    job: InternalRenderJob,
+    progress: Omit<RenderProgress, 'jobId' | 'updatedAt'>,
+  ): Promise<void> {
+    const updatedAt = new Date().toISOString();
+    const normalizedProgress = clamp(progress.progress, 0, 99);
+    patchSnapshot(job, {
+      status:
+        progress.stage === 'finalizing'
+          ? 'finalizing'
+          : progress.stage === 'validating' || progress.stage === 'planning'
+            ? 'preparing'
+            : 'rendering',
+      stage: progress.stage,
+      progress: normalizedProgress,
+      message: progress.message,
+      elapsedMs: calculateElapsed(job.snapshot, updatedAt),
+    });
+
+    await eventBus.emit('render:job-progress', {
+      jobId: job.snapshot.id,
+      projectId: job.snapshot.projectId,
+      stage: progress.stage,
+      progress: normalizedProgress,
+      message: progress.message,
+      frame: progress.frame,
+      totalFrames: progress.totalFrames,
+      updatedAt,
+    });
+  }
+
+  async function markCancelled(job: InternalRenderJob): Promise<void> {
+    if (job.snapshot.status === 'cancelled') return;
+    const cancelledAt = new Date().toISOString();
+    patchSnapshot(job, {
+      status: 'cancelled',
+      message: 'Render işlemi iptal edildi',
+      completedAt: cancelledAt,
+      elapsedMs: calculateElapsed(job.snapshot, cancelledAt),
+    });
+    await eventBus.emit('render:job-cancelled', {
+      jobId: job.snapshot.id,
+      projectId: job.snapshot.projectId,
+      cancelledAt,
+    });
+  }
+
+  async function markFailed(
+    job: InternalRenderJob,
+    message: string,
+  ): Promise<void> {
+    const failedAt = new Date().toISOString();
+    patchSnapshot(job, {
+      status: 'failed',
+      message: 'Render işlemi başarısız oldu',
+      error: message,
+      completedAt: failedAt,
+      elapsedMs: calculateElapsed(job.snapshot, failedAt),
+    });
+    await eventBus.emit('render:job-failed', {
+      jobId: job.snapshot.id,
+      projectId: job.snapshot.projectId,
+      message,
+      failedAt,
+    });
+  }
+
+  function ensureNotDisposed(): void {
+    if (disposed) {
+      throw new Error('Render Engine kapatılmış.');
+    }
+  }
+
+  return engine;
+}
+
+function selectAdapter(
+  adapters: Map<string, RenderAdapter>,
+  manifest: RenderJobRequest['manifest'],
+  preset: RenderPreset,
+): RenderAdapter {
+  const adapter = Array.from(adapters.values()).find((candidate) =>
+    candidate.canRender(manifest, preset),
+  );
+
+  if (!adapter) {
+    throw new Error('Bu render manifestini işleyebilecek adapter bulunamadı.');
+  }
+
+  return adapter;
+}
+
+function normalizePreset(preset: Partial<RenderPreset> = {}): RenderPreset {
+  return {
+    ...DEFAULT_RENDER_PRESET,
+    ...preset,
+    id: preset.id?.trim() || DEFAULT_RENDER_PRESET.id,
+    name: preset.name?.trim() || DEFAULT_RENDER_PRESET.name,
+  };
+}
+
+function patchSnapshot(
+  job: InternalRenderJob,
+  patch: Partial<RenderJobSnapshot>,
+): void {
+  job.snapshot = {
+    ...job.snapshot,
+    ...patch,
+  };
+}
+
+function cloneSnapshot(snapshot: RenderJobSnapshot): RenderJobSnapshot {
+  return {
+    ...snapshot,
+    preset: { ...snapshot.preset },
+    output: snapshot.output
+      ? { ...snapshot.output, metadata: { ...snapshot.output.metadata } }
+      : null,
+  };
+}
+
+function calculateElapsed(
+  snapshot: RenderJobSnapshot,
+  nowIso: string,
+): number {
+  if (!snapshot.startedAt) return 0;
+  return Math.max(0, Date.parse(nowIso) - Date.parse(snapshot.startedAt));
+}
+
+function isTerminal(status: RenderJobSnapshot['status']): boolean {
+  return (
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'cancelled'
+  );
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof DOMException
+      ? error.name === 'AbortError'
+      : error instanceof Error && error.name === 'AbortError'
+  );
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, Math.round(value)));
+}
+
+function createId(prefix: string): string {
+  const suffix =
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${suffix}`;
+}

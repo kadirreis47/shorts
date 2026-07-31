@@ -7,3 +7,5 @@ export * from '@/store/channelStore';
 export * from '@/store/projectStore';
 export * from '@/store/aiPipelineStore';
 export * from '@/store/mediaStore';
+
+export * from '@/store/renderStore';

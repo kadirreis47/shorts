@@ -2,12 +2,15 @@ import { createAIPipelineRunner } from '@/core/ai-pipeline';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
+import { createAssetProviderEngine } from '@/core/media';
+import { createRenderEngine, createRenderPlanAdapter } from '@/core/render';
 import { persistenceManager } from '@/persistence';
 import {
   createAIApplicationService,
   createAIPipelineMonitor,
   createChannelService,
   createMediaEngine,
+  createRenderJobMonitor,
   createServiceExecutor,
 } from '@/services';
 
@@ -67,25 +70,62 @@ export function registerApplicationDependencies() {
   );
 
   applicationContainer.registerSingleton(
-    dependencyTokens.mediaEngine,
-    (container) => createMediaEngine(
+    dependencyTokens.assetProviderEngine,
+    (container) => createAssetProviderEngine(
       container.resolve(dependencyTokens.eventBus),
     ),
   );
 
+  applicationContainer.registerSingleton(
+    dependencyTokens.renderEngine,
+    (container) => createRenderEngine(
+      container.resolve(dependencyTokens.eventBus),
+      [createRenderPlanAdapter()],
+      { concurrency: 1 },
+    ),
+  );
+
+  applicationContainer.registerSingleton(
+    dependencyTokens.renderJobMonitor,
+    (container) => createRenderJobMonitor(
+      container.resolve(dependencyTokens.eventBus),
+    ),
+  );
+
+  applicationContainer.registerSingleton(
+    dependencyTokens.mediaEngine,
+    (container) => createMediaEngine(
+      container.resolve(dependencyTokens.eventBus),
+      container.resolve(dependencyTokens.assetProviderEngine),
+    ),
+  );
+
   applicationContainer.resolve(dependencyTokens.aiPipelineMonitor).start();
+  applicationContainer.resolve(dependencyTokens.renderJobMonitor).start();
 
   dependenciesRegistered = true;
   return applicationContainer;
 }
 
 export function resetApplicationDependencies() {
+  if (applicationContainer.has(dependencyTokens.renderJobMonitor)) {
+    applicationContainer.resolve(dependencyTokens.renderJobMonitor).stop();
+  }
+
+  if (applicationContainer.has(dependencyTokens.renderEngine)) {
+    applicationContainer.resolve(dependencyTokens.renderEngine).dispose();
+  }
+
   if (applicationContainer.has(dependencyTokens.aiPipelineMonitor)) {
     applicationContainer.resolve(dependencyTokens.aiPipelineMonitor).stop();
   }
 
   if (applicationContainer.has(dependencyTokens.aiPipelineRunner)) {
     applicationContainer.resolve(dependencyTokens.aiPipelineRunner).cancelAll();
+  }
+
+  if (applicationContainer.has(dependencyTokens.assetProviderEngine)) {
+    applicationContainer.resolve(dependencyTokens.assetProviderEngine).clearCache();
   }
 
   if (applicationContainer.has(dependencyTokens.queryClient)) {

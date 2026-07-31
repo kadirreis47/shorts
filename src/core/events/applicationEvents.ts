@@ -136,6 +136,47 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     renderReady: boolean;
     builtAt: string;
   };
+  'render:job-queued': {
+    jobId: string;
+    projectId: string;
+    adapterId: string;
+    queuedAt: string;
+  };
+  'render:job-started': {
+    jobId: string;
+    projectId: string;
+    adapterId: string;
+    startedAt: string;
+  };
+  'render:job-progress': {
+    jobId: string;
+    projectId: string;
+    stage: import('@/core/render').RenderStage;
+    progress: number;
+    message: string;
+    frame?: number;
+    totalFrames?: number;
+    updatedAt: string;
+  };
+  'render:job-completed': {
+    jobId: string;
+    projectId: string;
+    outputKind: import('@/core/render').RenderOutputKind;
+    outputUri: string;
+    durationMs: number;
+    completedAt: string;
+  };
+  'render:job-failed': {
+    jobId: string;
+    projectId: string;
+    message: string;
+    failedAt: string;
+  };
+  'render:job-cancelled': {
+    jobId: string;
+    projectId: string;
+    cancelledAt: string;
+  };
   'channel:list-loaded': { channels: Channel[]; loadedAt: string };
   'channel:created': { channel: Channel; createdAt: string };
   'channel:updated': { channel: Channel; updatedAt: string };
