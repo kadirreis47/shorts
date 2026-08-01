@@ -11,7 +11,9 @@ import {
   RotateCcw,
   ServerCog,
   ShieldAlert,
+  Sparkles,
   TimerReset,
+  TrendingUp,
   XCircle,
   Zap,
 } from 'lucide-react';
@@ -44,6 +46,27 @@ export function RenderOperationsDashboard() {
   );
   const resetThresholds = useRenderAnalyticsStore(
     (state) => state.resetThresholds,
+  );
+  const tuningReport = useRenderAnalyticsStore(
+    (state) => state.tuningReport,
+  );
+  const applyTuningRecommendation = useRenderAnalyticsStore(
+    (state) => state.applyTuningRecommendation,
+  );
+  const refreshTuningReport = useRenderAnalyticsStore(
+    (state) => state.refreshTuningReport,
+  );
+  const capacityPlan = useRenderAnalyticsStore(
+    (state) => state.capacityPlan,
+  );
+  const capacityInputs = useRenderAnalyticsStore(
+    (state) => state.capacityInputs,
+  );
+  const updateCapacityInputs = useRenderAnalyticsStore(
+    (state) => state.updateCapacityInputs,
+  );
+  const refreshCapacityPlan = useRenderAnalyticsStore(
+    (state) => state.refreshCapacityPlan,
   );
   const exportSnapshot = useRenderAnalyticsStore(
     (state) => state.exportSnapshot,
@@ -211,6 +234,192 @@ export function RenderOperationsDashboard() {
           )}
         </Card>
       </div>
+
+      <Card className="p-5">
+        <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-emerald-50 p-2.5 text-emerald-600">
+              <TrendingUp size={18} />
+            </div>
+            <div>
+              <h2 className="font-semibold text-slate-900">
+                Render Capacity Planner
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Günlük üretim hedefi ve cihaz kapasitesi simülasyonu · Güven %{capacityPlan.confidence}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={refreshCapacityPlan}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <RefreshCw size={14} />
+            Hesapla
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+          <div className="grid grid-cols-2 gap-3">
+            <ThresholdField
+              label="Concurrency"
+              value={capacityInputs.concurrency}
+              onChange={(value) =>
+                updateCapacityInputs({
+                  concurrency: Math.max(1, Math.min(8, value)),
+                })
+              }
+            />
+            <ThresholdField
+              label="Günlük iş"
+              value={capacityInputs.jobsPerDay}
+              onChange={(value) =>
+                updateCapacityInputs({
+                  jobsPerDay: Math.max(1, value),
+                })
+              }
+            />
+            <ThresholdField
+              label="Video süresi (sn)"
+              value={capacityInputs.averageVideoDurationSeconds}
+              onChange={(value) =>
+                updateCapacityInputs({
+                  averageVideoDurationSeconds: Math.max(5, value),
+                })
+              }
+            />
+            <ThresholdField
+              label="Hedef süre (saat)"
+              value={capacityInputs.targetCompletionHours}
+              onChange={(value) =>
+                updateCapacityInputs({
+                  targetCompletionHours: Math.max(1, value),
+                })
+              }
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <SummaryTile
+              label="İş / saat"
+              value={Math.round(
+                capacityPlan.current.estimatedJobsPerHour,
+              )}
+              icon={Zap}
+            />
+            <SummaryTile
+              label="Günlük kapasite"
+              value={capacityPlan.current.estimatedDailyCapacity}
+              icon={Database}
+            />
+            <SummaryTile
+              label="Tamamlama saati"
+              value={Math.round(
+                capacityPlan.current.estimatedCompletionHours,
+              )}
+              icon={Clock3}
+            />
+            <SummaryTile
+              label="Kullanım %"
+              value={capacityPlan.current.utilizationPercent}
+              icon={Gauge}
+            />
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              Önerilen kapasite
+            </p>
+            <p className="mt-2 text-2xl font-bold text-slate-900">
+              {capacityPlan.recommendedConcurrency} worker
+            </p>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              {capacityPlan.recommendation}
+            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <span
+                className={classNames(
+                  'rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase',
+                  capacityPlan.current.queueRisk === 'low'
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : capacityPlan.current.queueRisk === 'medium'
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-rose-100 text-rose-700',
+                )}
+              >
+                {capacityPlan.current.queueRisk} queue risk
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Taban {formatDuration(capacityPlan.baselineRenderMs)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-violet-50 p-2.5 text-violet-600">
+              <Sparkles size={18} />
+            </div>
+            <div>
+              <h2 className="font-semibold text-slate-900">
+                Render Auto-Tuner
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Metriklere göre ayar ve kapasite önerileri · Güven %{tuningReport.confidence}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={refreshTuningReport}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <RefreshCw size={14} />
+            Yeniden analiz et
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {tuningReport.recommendations.map((recommendation) => (
+            <div
+              key={recommendation.id}
+              className="rounded-xl border border-slate-200 bg-slate-50 p-4"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    {recommendation.title}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    {recommendation.description}
+                  </p>
+                </div>
+                <span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                  {recommendation.impact}
+                </span>
+              </div>
+
+              {(recommendation.suggestedThresholds ||
+                recommendation.suggestedConcurrency !== undefined) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    applyTuningRecommendation(recommendation.id)
+                  }
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                >
+                  <Zap size={13} />
+                  Öneriyi uygula
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
         <Card className="p-5 xl:col-span-2">

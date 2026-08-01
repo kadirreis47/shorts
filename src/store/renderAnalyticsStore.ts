@@ -6,6 +6,10 @@ import type {
 } from '@/core/render';
 import { buildRenderTuningReport, type RenderTuningReport } from '@/core/render/renderAutoTuner';
 import {
+  buildRenderCapacityPlan,
+  type RenderCapacityPlan,
+} from '@/core/render/renderCapacityPlanner';
+import {
   buildAdaptiveAlerts,
   calculateAdaptiveBaseline,
   DEFAULT_RENDER_ALERT_THRESHOLDS,
@@ -55,6 +59,17 @@ interface RenderAnalyticsState {
   baseline: RenderAdaptiveBaseline | null;
   thresholds: RenderAlertThresholds;
   tuningReport: RenderTuningReport;
+  capacityPlan: RenderCapacityPlan;
+  capacityInputs: {
+    concurrency: number;
+    jobsPerDay: number;
+    averageVideoDurationSeconds: number;
+    targetCompletionHours: number;
+  };
+  updateCapacityInputs: (
+    input: Partial<RenderAnalyticsState['capacityInputs']>,
+  ) => void;
+  refreshCapacityPlan: () => void;
   applyTuningRecommendation: (recommendationId: string) => void;
   refreshTuningReport: () => void;
   updateThresholds: (thresholds: Partial<RenderAlertThresholds>) => void;
@@ -81,6 +96,13 @@ export interface RenderAnalyticsExport {
   baseline: RenderAdaptiveBaseline | null;
   thresholds: RenderAlertThresholds;
   tuningReport: RenderTuningReport;
+  capacityPlan: RenderCapacityPlan;
+  capacityInputs: {
+    concurrency: number;
+    jobsPerDay: number;
+    averageVideoDurationSeconds: number;
+    targetCompletionHours: number;
+  };
 }
 
 const HISTORY_LIMIT = 120;
@@ -103,6 +125,42 @@ export const useRenderAnalyticsStore =
       baseline: null,
       thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
     }),
+    capacityInputs: {
+      concurrency: 1,
+      jobsPerDay: 20,
+      averageVideoDurationSeconds: 45,
+      targetCompletionHours: 8,
+    },
+    capacityPlan: buildRenderCapacityPlan({
+      snapshot: null,
+      concurrency: 1,
+      jobsPerDay: 20,
+      averageVideoDurationSeconds: 45,
+      targetCompletionHours: 8,
+    }),
+
+    updateCapacityInputs: (input) =>
+      set((state) => {
+        const capacityInputs = {
+          ...state.capacityInputs,
+          ...input,
+        };
+        return {
+          capacityInputs,
+          capacityPlan: buildRenderCapacityPlan({
+            snapshot: state.snapshot,
+            ...capacityInputs,
+          }),
+        };
+      }),
+
+    refreshCapacityPlan: () =>
+      set((state) => ({
+        capacityPlan: buildRenderCapacityPlan({
+          snapshot: state.snapshot,
+          ...state.capacityInputs,
+        }),
+      })),
 
     applyTuningRecommendation: (recommendationId) =>
       set((state) => {
@@ -151,6 +209,19 @@ export const useRenderAnalyticsStore =
           baseline: null,
           thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
         }),
+        capacityInputs: {
+          concurrency: 1,
+          jobsPerDay: 20,
+          averageVideoDurationSeconds: 45,
+          targetCompletionHours: 8,
+        },
+        capacityPlan: buildRenderCapacityPlan({
+          snapshot: null,
+          concurrency: 1,
+          jobsPerDay: 20,
+          averageVideoDurationSeconds: 45,
+          targetCompletionHours: 8,
+        }),
       }),
 
     updateMetrics: (snapshot) =>
@@ -191,6 +262,10 @@ export const useRenderAnalyticsStore =
             snapshot,
             baseline,
             thresholds: state.thresholds,
+          }),
+          capacityPlan: buildRenderCapacityPlan({
+            snapshot,
+            ...state.capacityInputs,
           }),
         };
       }),
@@ -234,6 +309,8 @@ export const useRenderAnalyticsStore =
         baseline: state.baseline,
         thresholds: state.thresholds,
         tuningReport: state.tuningReport,
+        capacityPlan: state.capacityPlan,
+        capacityInputs: state.capacityInputs,
       };
     },
 
@@ -252,6 +329,19 @@ export const useRenderAnalyticsStore =
           baseline: null,
           thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
         }),
+        capacityInputs: {
+          concurrency: 1,
+          jobsPerDay: 20,
+          averageVideoDurationSeconds: 45,
+          targetCompletionHours: 8,
+        },
+        capacityPlan: buildRenderCapacityPlan({
+          snapshot: null,
+          concurrency: 1,
+          jobsPerDay: 20,
+          averageVideoDurationSeconds: 45,
+          targetCompletionHours: 8,
+        }),
       }),
       }),
       {
@@ -267,6 +357,8 @@ export const useRenderAnalyticsStore =
           baseline: state.baseline,
           thresholds: state.thresholds,
           tuningReport: state.tuningReport,
+          capacityPlan: state.capacityPlan,
+          capacityInputs: state.capacityInputs,
         }),
       },
     ),
