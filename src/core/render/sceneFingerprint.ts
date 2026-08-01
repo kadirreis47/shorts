@@ -28,7 +28,7 @@ export async function createSceneFingerprint(
       startMs: Math.max(0, cue.startMs - scene.startMs),
       endMs: Math.max(0, cue.endMs - scene.startMs),
       text: cue.text,
-      words: cue.words,
+      wordIds: cue.wordIds,
     }));
 
   const payload = stableStringify({
