@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCapabilities: (forceRefresh = false) => ipcRenderer.invoke('ffmpeg:capabilities', forceRefresh),
     run: (request) => ipcRenderer.invoke('ffmpeg:run', request),
     cancel: (jobId) => ipcRenderer.invoke('ffmpeg:cancel', jobId),
+    fileExists: (targetPath) => ipcRenderer.invoke('ffmpeg:file-exists', targetPath),
     onProgress: (listener) => {
       const handler = (_event, payload) => listener(payload);
       ipcRenderer.on('ffmpeg:progress', handler);

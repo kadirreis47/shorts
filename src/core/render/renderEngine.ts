@@ -14,6 +14,7 @@ interface InternalRenderJob {
   request: RenderJobRequest;
   snapshot: RenderJobSnapshot;
   controller: AbortController;
+  fingerprint: string | null;
 }
 
 export function createRenderEngine(
@@ -26,6 +27,8 @@ export function createRenderEngine(
   const queue: string[] = [];
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? 1));
   const defaultPreset = normalizePreset(options.defaultPreset);
+  const renderCache = options.cache;
+  const outputExists = options.outputExists;
   let activeCount = 0;
   let disposed = false;
 
@@ -48,6 +51,77 @@ export function createRenderEngine(
       const adapter = selectAdapter(adapters, request.manifest, preset);
       const now = new Date().toISOString();
       const jobId = createId('render-job');
+      const fingerprint = renderCache
+        ? await import('./renderFingerprint').then(({ createRenderFingerprint }) =>
+            createRenderFingerprint({
+              manifest: request.manifest,
+              preset,
+              adapterId: adapter.id,
+            }),
+          )
+        : null;
+
+      if (renderCache && fingerprint && !request.forceRender) {
+        const cached = await renderCache.get(fingerprint, outputExists);
+        if (cached) {
+          const completedAt = new Date().toISOString();
+          const snapshot: RenderJobSnapshot = {
+            id: jobId,
+            projectId: request.manifest.projectId,
+            adapterId: adapter.id,
+            status: 'completed',
+            stage: 'completed',
+            progress: 100,
+            message: 'Render cache kullanıldı',
+            preset,
+            outputPath: request.outputPath,
+            output: {
+              ...cached.output,
+              metadata: {
+                ...cached.output.metadata,
+                cacheHit: true,
+                renderFingerprint: fingerprint,
+              },
+            },
+            error: null,
+            queuedAt: now,
+            startedAt: now,
+            completedAt,
+            elapsedMs: 0,
+          };
+          jobs.set(jobId, {
+            request,
+            snapshot,
+            controller: new AbortController(),
+            fingerprint,
+          });
+
+          await eventBus.emit('render:cache-hit', {
+            jobId,
+            projectId: snapshot.projectId,
+            fingerprint,
+            outputUri: cached.output.uri,
+            savedRenderMs: cached.savedRenderMs,
+            hitAt: completedAt,
+          });
+          await eventBus.emit('render:job-completed', {
+            jobId,
+            projectId: snapshot.projectId,
+            outputKind: cached.output.kind,
+            outputUri: cached.output.uri,
+            durationMs: 0,
+            completedAt,
+          });
+          return cloneSnapshot(snapshot);
+        }
+
+        await eventBus.emit('render:cache-miss', {
+          jobId,
+          projectId: request.manifest.projectId,
+          fingerprint,
+          missedAt: now,
+        });
+      }
       const snapshot: RenderJobSnapshot = {
         id: jobId,
         projectId: request.manifest.projectId,
@@ -70,6 +144,7 @@ export function createRenderEngine(
         request,
         snapshot,
         controller: new AbortController(),
+        fingerprint,
       });
       queue.push(jobId);
 
@@ -213,6 +288,30 @@ export function createRenderEngine(
         completedAt,
         elapsedMs: calculateElapsed(job.snapshot, completedAt),
       });
+
+      if (renderCache && job.fingerprint) {
+        renderCache.put({
+          fingerprint: job.fingerprint,
+          projectId: job.snapshot.projectId,
+          adapterId: adapter.id,
+          output: {
+            ...output,
+            metadata: {
+              ...output.metadata,
+              renderFingerprint: job.fingerprint,
+            },
+          },
+          savedRenderMs: job.snapshot.elapsedMs,
+        });
+        await eventBus.emit('render:cache-stored', {
+          jobId: job.snapshot.id,
+          projectId: job.snapshot.projectId,
+          fingerprint: job.fingerprint,
+          outputUri: output.uri,
+          renderMs: job.snapshot.elapsedMs,
+          storedAt: completedAt,
+        });
+      }
 
       await eventBus.emit('render:job-completed', {
         jobId: job.snapshot.id,

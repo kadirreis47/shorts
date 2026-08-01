@@ -37,6 +37,7 @@ export interface RenderJobRequest {
   preset?: Partial<RenderPreset>;
   outputPath?: string;
   metadata?: Readonly<Record<string, unknown>>;
+  forceRender?: boolean;
 }
 
 export interface RenderProgress {
@@ -97,6 +98,8 @@ export interface RenderAdapter {
 export interface RenderEngineOptions {
   concurrency?: number;
   defaultPreset?: Partial<RenderPreset>;
+  cache?: import('./renderCache').RenderCache;
+  outputExists?: (uri: string) => Promise<boolean>;
 }
 
 export interface RenderEngine {

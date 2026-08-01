@@ -15,6 +15,15 @@ function registerFFmpegHandlers() {
   });
 
   ipcMain.handle('ffmpeg:run', async (event, request) => runFFmpeg(event.sender, request));
+  ipcMain.handle('ffmpeg:file-exists', async (_event, targetPath) => {
+    if (!targetPath || typeof targetPath !== 'string') return false;
+    try {
+      const stat = await fs.promises.stat(targetPath);
+      return stat.isFile();
+    } catch {
+      return false;
+    }
+  });
   ipcMain.handle('ffmpeg:cancel', async (_event, jobId) => {
     const child = active.get(jobId);
     if (!child) return false;

@@ -6,6 +6,7 @@ import { createAssetProviderEngine } from '@/core/media';
 import {
   createFFmpegRenderAdapter,
   createHardwareScheduler,
+  createRenderCache,
   createRenderEngine,
   createRenderPlanAdapter,
 } from '@/core/render';
@@ -86,10 +87,19 @@ export function registerApplicationDependencies() {
     (container) => {
       const eventBus = container.resolve(dependencyTokens.eventBus);
       const hardwareScheduler = createHardwareScheduler(eventBus);
+      const renderCache = createRenderCache();
       return createRenderEngine(
         eventBus,
         [createFFmpegRenderAdapter(hardwareScheduler), createRenderPlanAdapter()],
-        { concurrency: 2 },
+        {
+          concurrency: 2,
+          cache: renderCache,
+          outputExists: async (uri) => {
+            const bridge = window.electronAPI?.ffmpeg;
+            if (!bridge || uri.startsWith('render-plan://')) return true;
+            return bridge.fileExists(uri);
+          },
+        },
       );
     },
   );

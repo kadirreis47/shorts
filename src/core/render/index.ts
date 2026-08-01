@@ -8,3 +8,6 @@ export * from './ffmpegCommandBuilder';
 export * from './ffmpegRenderAdapter';
 
 export * from './hardwareScheduler';
+
+export * from './renderCache';
+export * from './renderFingerprint';

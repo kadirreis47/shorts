@@ -45,5 +45,6 @@ export interface FFmpegBridge {
   getCapabilities(forceRefresh?: boolean): Promise<FFmpegCapabilities>;
   run(request: FFmpegRunRequest): Promise<FFmpegRunResult>;
   cancel(jobId: string): Promise<boolean>;
+  fileExists(path: string): Promise<boolean>;
   onProgress(listener: (payload: FFmpegProgressPayload) => void): () => void;
 }

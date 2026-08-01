@@ -136,6 +136,28 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     renderReady: boolean;
     builtAt: string;
   };
+  'render:cache-hit': {
+    jobId: string;
+    projectId: string;
+    fingerprint: string;
+    outputUri: string;
+    savedRenderMs: number;
+    hitAt: string;
+  };
+  'render:cache-miss': {
+    jobId: string;
+    projectId: string;
+    fingerprint: string;
+    missedAt: string;
+  };
+  'render:cache-stored': {
+    jobId: string;
+    projectId: string;
+    fingerprint: string;
+    outputUri: string;
+    renderMs: number;
+    storedAt: string;
+  };
   'render:hardware-selected': {
     jobId: string;
     backend: 'cpu' | 'nvenc';
