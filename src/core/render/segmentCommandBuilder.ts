@@ -4,6 +4,7 @@ import type {
   SubtitleCue,
 } from '@/core/media';
 import type { RenderPreset } from './types';
+import { buildAudioMixCommand } from './audioMixCommandBuilder';
 
 export interface SceneSegmentCommandPlan {
   args: string[];
@@ -120,6 +121,7 @@ export function buildSegmentConcatCommand(input: {
 }): SegmentConcatCommandPlan {
   const { manifest, preset, segmentPaths } = input;
   const durationSeconds = Math.max(0.1, manifest.durationMs / 1000);
+  const audio = buildAudioMixCommand(manifest, 1);
 
   const args: string[] = [
     '-hide_banner',
@@ -130,22 +132,40 @@ export function buildSegmentConcatCommand(input: {
     '0',
     '-i',
     '{{CONCAT_FILE}}',
-    '-f',
-    'lavfi',
-    '-t',
-    durationSeconds.toFixed(3),
-    '-i',
-    'anullsrc=channel_layout=stereo:sample_rate=48000',
-    '-map',
-    '0:v:0',
-    '-map',
-    '1:a:0',
+  ];
+
+  if (audio.realInputCount > 0) {
+    args.push(...audio.inputArgs);
+    if (audio.filterComplex) {
+      args.push('-filter_complex', audio.filterComplex);
+    }
+    args.push('-map', '0:v:0', '-map', audio.outputLabel ?? '[audioout]');
+  } else {
+    args.push(
+      '-f',
+      'lavfi',
+      '-t',
+      durationSeconds.toFixed(3),
+      '-i',
+      'anullsrc=channel_layout=stereo:sample_rate=48000',
+      '-map',
+      '0:v:0',
+      '-map',
+      '1:a:0',
+    );
+  }
+
+  args.push(
     '-c:v',
     'copy',
     '-c:a',
     preset.audioCodec === 'opus' ? 'libopus' : 'aac',
     '-b:a',
     '192k',
+    '-ar',
+    '48000',
+    '-ac',
+    '2',
     '-movflags',
     '+faststart',
     '-shortest',
@@ -153,7 +173,7 @@ export function buildSegmentConcatCommand(input: {
     'pipe:1',
     '-nostats',
     '{{OUTPUT_FILE}}',
-  ];
+  );
 
   return {
     args,

@@ -178,6 +178,12 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           hardwareAcceleration: preset.hardwareAcceleration,
           incrementalExecutionMode: 'zero-copy-segment-assembly',
           finalVideoReencoded: false,
+          realAudioMixed: context.manifest.audio.voice.some((segment) => Boolean(segment.assetId))
+            || context.manifest.audio.music.some((segment) => Boolean(segment.assetId))
+            || context.manifest.audio.sfx.some((segment) => Boolean(segment.assetId)),
+          audioDuckingApplied:
+            context.manifest.audio.voice.some((segment) => Boolean(segment.assetId))
+            && context.manifest.audio.music.some((segment) => Boolean(segment.assetId)),
           renderedSegments,
           reusedSegments,
           segmentCount: segmentPaths.length,
