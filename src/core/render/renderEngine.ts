@@ -15,6 +15,7 @@ interface InternalRenderJob {
   snapshot: RenderJobSnapshot;
   controller: AbortController;
   fingerprint: string | null;
+  incrementalPlan: import('./incrementalTypes').IncrementalRenderPlan | null;
 }
 
 export function createRenderEngine(
@@ -29,6 +30,7 @@ export function createRenderEngine(
   const defaultPreset = normalizePreset(options.defaultPreset);
   const renderCache = options.cache;
   const outputExists = options.outputExists;
+  const incrementalPlanner = options.incrementalPlanner;
   let activeCount = 0;
   let disposed = false;
 
@@ -51,6 +53,30 @@ export function createRenderEngine(
       const adapter = selectAdapter(adapters, request.manifest, preset);
       const now = new Date().toISOString();
       const jobId = createId('render-job');
+      const incrementalPlan =
+        incrementalPlanner && request.incremental !== false
+          ? await incrementalPlanner.createPlan({
+              manifest: request.manifest,
+              preset,
+              adapterId: adapter.id,
+              forceRender: request.forceRender,
+            })
+          : null;
+
+      if (incrementalPlan) {
+        await eventBus.emit('render:incremental-plan-created', {
+          jobId,
+          projectId: request.manifest.projectId,
+          planId: incrementalPlan.planId,
+          totalScenes: incrementalPlan.totalScenes,
+          renderedScenes: incrementalPlan.renderedScenes,
+          reusableScenes: incrementalPlan.reusableScenes,
+          estimatedSavedPercent: incrementalPlan.estimatedSavedPercent,
+          fullRenderRequired: incrementalPlan.fullRenderRequired,
+          createdAt: incrementalPlan.createdAt,
+        });
+      }
+
       const fingerprint = renderCache
         ? await import('./renderFingerprint').then(({ createRenderFingerprint }) =>
             createRenderFingerprint({
@@ -94,6 +120,7 @@ export function createRenderEngine(
             snapshot,
             controller: new AbortController(),
             fingerprint,
+            incrementalPlan,
           });
 
           await eventBus.emit('render:cache-hit', {
@@ -145,6 +172,7 @@ export function createRenderEngine(
         snapshot,
         controller: new AbortController(),
         fingerprint,
+        incrementalPlan,
       });
       queue.push(jobId);
 
@@ -262,6 +290,7 @@ export function createRenderEngine(
         preset: job.snapshot.preset,
         outputPath: job.request.outputPath,
         signal: job.controller.signal,
+        incrementalPlan: job.incrementalPlan ?? undefined,
         reportProgress: async (progress) => {
           if (job.controller.signal.aborted) {
             throw new DOMException('Render işlemi iptal edildi', 'AbortError');
@@ -288,6 +317,23 @@ export function createRenderEngine(
         completedAt,
         elapsedMs: calculateElapsed(job.snapshot, completedAt),
       });
+
+      if (incrementalPlanner && job.incrementalPlan) {
+        incrementalPlanner.commit({
+          plan: job.incrementalPlan,
+          adapterId: adapter.id,
+          presetId: job.snapshot.preset.id,
+          outputUri: output.uri,
+        });
+        await eventBus.emit('render:incremental-snapshot-stored', {
+          jobId: job.snapshot.id,
+          projectId: job.snapshot.projectId,
+          planId: job.incrementalPlan.planId,
+          outputUri: output.uri,
+          sceneCount: job.incrementalPlan.totalScenes,
+          storedAt: completedAt,
+        });
+      }
 
       if (renderCache && job.fingerprint) {
         renderCache.put({

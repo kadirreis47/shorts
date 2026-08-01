@@ -6,6 +6,7 @@ import { createAssetProviderEngine } from '@/core/media';
 import {
   createFFmpegRenderAdapter,
   createHardwareScheduler,
+  createIncrementalRenderPlanner,
   createRenderCache,
   createRenderEngine,
   createRenderPlanAdapter,
@@ -88,12 +89,14 @@ export function registerApplicationDependencies() {
       const eventBus = container.resolve(dependencyTokens.eventBus);
       const hardwareScheduler = createHardwareScheduler(eventBus);
       const renderCache = createRenderCache();
+      const incrementalPlanner = createIncrementalRenderPlanner();
       return createRenderEngine(
         eventBus,
         [createFFmpegRenderAdapter(hardwareScheduler), createRenderPlanAdapter()],
         {
           concurrency: 2,
           cache: renderCache,
+          incrementalPlanner,
           outputExists: async (uri) => {
             const bridge = window.electronAPI?.ffmpeg;
             if (!bridge || uri.startsWith('render-plan://')) return true;

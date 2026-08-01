@@ -38,6 +38,7 @@ export interface RenderJobRequest {
   outputPath?: string;
   metadata?: Readonly<Record<string, unknown>>;
   forceRender?: boolean;
+  incremental?: boolean;
 }
 
 export interface RenderProgress {
@@ -83,6 +84,7 @@ export interface RenderExecutionContext {
   preset: RenderPreset;
   outputPath?: string;
   signal: AbortSignal;
+  incrementalPlan?: import('./incrementalTypes').IncrementalRenderPlan;
   reportProgress: (
     progress: Omit<RenderProgress, 'jobId' | 'updatedAt'>,
   ) => Promise<void>;
@@ -100,6 +102,7 @@ export interface RenderEngineOptions {
   defaultPreset?: Partial<RenderPreset>;
   cache?: import('./renderCache').RenderCache;
   outputExists?: (uri: string) => Promise<boolean>;
+  incrementalPlanner?: import('./incrementalRenderPlanner').IncrementalRenderPlanner;
 }
 
 export interface RenderEngine {

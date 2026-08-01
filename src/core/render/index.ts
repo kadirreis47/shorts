@@ -11,3 +11,7 @@ export * from './hardwareScheduler';
 
 export * from './renderCache';
 export * from './renderFingerprint';
+
+export * from './incrementalTypes';
+export * from './sceneFingerprint';
+export * from './incrementalRenderPlanner';

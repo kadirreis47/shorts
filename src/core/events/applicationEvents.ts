@@ -136,6 +136,25 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     renderReady: boolean;
     builtAt: string;
   };
+  'render:incremental-plan-created': {
+    jobId: string;
+    projectId: string;
+    planId: string;
+    totalScenes: number;
+    renderedScenes: number;
+    reusableScenes: number;
+    estimatedSavedPercent: number;
+    fullRenderRequired: boolean;
+    createdAt: string;
+  };
+  'render:incremental-snapshot-stored': {
+    jobId: string;
+    projectId: string;
+    planId: string;
+    outputUri: string;
+    sceneCount: number;
+    storedAt: string;
+  };
   'render:cache-hit': {
     jobId: string;
     projectId: string;
