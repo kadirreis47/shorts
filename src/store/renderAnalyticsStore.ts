@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type {
   RenderPerformanceSnapshot,
   RenderStageMetric,
@@ -48,14 +49,27 @@ interface RenderAnalyticsState {
     consecutiveFailures: number;
   }) => void;
   clearAlerts: () => void;
+  exportSnapshot: () => RenderAnalyticsExport;
   reset: () => void;
+}
+
+export interface RenderAnalyticsExport {
+  exportedAt: string;
+  health: RenderHealthStatus;
+  snapshot: RenderPerformanceSnapshot | null;
+  history: RenderMetricsPoint[];
+  alerts: RenderOperationsAlert[];
+  bottleneckStage: RenderStageMetric | null;
+  circuitOpenCount: number;
 }
 
 const HISTORY_LIMIT = 120;
 const ALERT_LIMIT = 30;
 
 export const useRenderAnalyticsStore =
-  create<RenderAnalyticsState>()((set) => ({
+  create<RenderAnalyticsState>()(
+    persist(
+      (set, get) => ({
     snapshot: null,
     history: [],
     alerts: [],
@@ -111,6 +125,19 @@ export const useRenderAnalyticsStore =
 
     clearAlerts: () => set({ alerts: [] }),
 
+    exportSnapshot: () => {
+      const state = get();
+      return {
+        exportedAt: new Date().toISOString(),
+        health: state.health,
+        snapshot: state.snapshot,
+        history: [...state.history],
+        alerts: [...state.alerts],
+        bottleneckStage: state.bottleneckStage,
+        circuitOpenCount: state.circuitOpenCount,
+      };
+    },
+
     reset: () =>
       set({
         snapshot: null,
@@ -120,7 +147,21 @@ export const useRenderAnalyticsStore =
         bottleneckStage: null,
         circuitOpenCount: 0,
       }),
-  }));
+      }),
+      {
+        name: 'shortsflow.render-analytics.v1',
+        version: 1,
+        partialize: (state) => ({
+          snapshot: state.snapshot,
+          history: state.history,
+          alerts: state.alerts,
+          health: state.health,
+          bottleneckStage: state.bottleneckStage,
+          circuitOpenCount: state.circuitOpenCount,
+        }),
+      },
+    ),
+  );
 
 function calculateHealth(
   snapshot: RenderPerformanceSnapshot,

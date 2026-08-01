@@ -4,6 +4,8 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  Download,
+  FileJson,
   Gauge,
   RefreshCw,
   RotateCcw,
@@ -18,6 +20,7 @@ import { classNames } from '@/lib/utils';
 import {
   useRenderAnalyticsStore,
   type RenderHealthStatus,
+  type RenderAnalyticsExport,
   type RenderMetricsPoint,
   type RenderOperationsAlert,
 } from '@/store/renderAnalyticsStore';
@@ -34,6 +37,9 @@ export function RenderOperationsDashboard() {
     (state) => state.clearAlerts,
   );
   const reset = useRenderAnalyticsStore((state) => state.reset);
+  const exportSnapshot = useRenderAnalyticsStore(
+    (state) => state.exportSnapshot,
+  );
 
   const latestHistory = history.slice(-24);
   const maxRenderMs = Math.max(
@@ -62,6 +68,22 @@ export function RenderOperationsDashboard() {
 
         <div className="flex items-center gap-2">
           <HealthBadge health={health} />
+          <button
+            type="button"
+            onClick={() => exportAnalyticsJson(exportSnapshot())}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+          >
+            <FileJson size={15} />
+            JSON
+          </button>
+          <button
+            type="button"
+            onClick={() => exportAnalyticsCsv(exportSnapshot())}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+          >
+            <Download size={15} />
+            CSV
+          </button>
           <button
             type="button"
             onClick={clearAlerts}
@@ -456,4 +478,74 @@ function formatBytes(bytes: number): string {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat('tr-TR').format(value);
+}
+
+
+function exportAnalyticsJson(data: RenderAnalyticsExport): void {
+  downloadTextFile(
+    `shortsflow-render-analytics-${fileTimestamp()}.json`,
+    JSON.stringify(data, null, 2),
+    'application/json',
+  );
+}
+
+function exportAnalyticsCsv(data: RenderAnalyticsExport): void {
+  const rows = [
+    [
+      'capturedAt',
+      'totalJobs',
+      'successRate',
+      'averageRenderMs',
+      'averageQueueWaitMs',
+      'cacheHits',
+      'retryCount',
+    ],
+    ...data.history.map((point) => [
+      point.capturedAt,
+      point.totalJobs,
+      point.successRate,
+      point.averageRenderMs,
+      point.averageQueueWaitMs,
+      point.cacheHits,
+      point.retryCount,
+    ]),
+  ];
+
+  const csv = rows
+    .map((row) =>
+      row
+        .map((value) => `"${String(value).replace(/"/g, '""')}"`)
+        .join(','),
+    )
+    .join('\r\n');
+
+  downloadTextFile(
+    `shortsflow-render-analytics-${fileTimestamp()}.csv`,
+    `\uFEFF${csv}`,
+    'text/csv;charset=utf-8',
+  );
+}
+
+function downloadTextFile(
+  fileName: string,
+  content: string,
+  mimeType: string,
+): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function fileTimestamp(): string {
+  return new Date()
+    .toISOString()
+    .replace(/[:.]/g, '-')
+    .replace('T', '_')
+    .slice(0, 19);
 }
