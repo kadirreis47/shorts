@@ -3,7 +3,12 @@ import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
 import { createAssetProviderEngine } from '@/core/media';
-import { createFFmpegRenderAdapter, createRenderEngine, createRenderPlanAdapter } from '@/core/render';
+import {
+  createFFmpegRenderAdapter,
+  createHardwareScheduler,
+  createRenderEngine,
+  createRenderPlanAdapter,
+} from '@/core/render';
 import { persistenceManager } from '@/persistence';
 import {
   createAIApplicationService,
@@ -78,11 +83,15 @@ export function registerApplicationDependencies() {
 
   applicationContainer.registerSingleton(
     dependencyTokens.renderEngine,
-    (container) => createRenderEngine(
-      container.resolve(dependencyTokens.eventBus),
-      [createFFmpegRenderAdapter(), createRenderPlanAdapter()],
-      { concurrency: 1 },
-    ),
+    (container) => {
+      const eventBus = container.resolve(dependencyTokens.eventBus);
+      const hardwareScheduler = createHardwareScheduler(eventBus);
+      return createRenderEngine(
+        eventBus,
+        [createFFmpegRenderAdapter(hardwareScheduler), createRenderPlanAdapter()],
+        { concurrency: 2 },
+      );
+    },
   );
 
   applicationContainer.registerSingleton(

@@ -6,3 +6,5 @@ export * from './ffmpegTypes';
 export * from './ffmpegBridge';
 export * from './ffmpegCommandBuilder';
 export * from './ffmpegRenderAdapter';
+
+export * from './hardwareScheduler';

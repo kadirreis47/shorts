@@ -8,8 +8,8 @@ const active = new Map();
 let cachedCapabilities = null;
 
 function registerFFmpegHandlers() {
-  ipcMain.handle('ffmpeg:capabilities', async () => {
-    if (cachedCapabilities) return cachedCapabilities;
+  ipcMain.handle('ffmpeg:capabilities', async (_event, forceRefresh = false) => {
+    if (cachedCapabilities && !forceRefresh) return cachedCapabilities;
     cachedCapabilities = await detectCapabilities();
     return cachedCapabilities;
   });
@@ -31,11 +31,31 @@ async function detectCapabilities() {
     const encodersOutput = await capture(executable, ['-hide_banner', '-encoders']);
     const encoders = encodersOutput.split(/\r?\n/).filter((line) => /^\s*[VAS\.]{6}\s+\S+/.test(line)).map((line) => line.trim().split(/\s+/)[1]).filter(Boolean);
     const hardwareEncoders = encoders.filter((name) => /nvenc|qsv|vaapi|videotoolbox|amf/i.test(name));
-    return { available: true, executable, version: versionOutput.split(/\r?\n/)[0] || null, encoders, hardwareEncoders };
+    const gpuDevices = await detectNvidiaGpus();
+    return { available: true, executable, version: versionOutput.split(/\r?\n/)[0] || null, encoders, hardwareEncoders, gpuDevices };
   } catch {
-    return { available: false, executable: null, version: null, encoders: [], hardwareEncoders: [] };
+    return { available: false, executable: null, version: null, encoders: [], hardwareEncoders: [], gpuDevices: [] };
   }
 }
+
+
+async function detectNvidiaGpus() {
+  try {
+    const output = await capture('nvidia-smi', [
+      '--query-gpu=index,name,driver_version,memory.total,memory.free,utilization.gpu,temperature.gpu',
+      '--format=csv,noheader,nounits',
+    ]);
+    return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [index, name, driverVersion, memoryTotal, memoryFree, utilization, temperature] = line.split(',').map((value) => value.trim());
+      return {
+        index: Number(index) || 0, name, driverVersion: driverVersion || null,
+        memoryTotalMiB: numericOrNull(memoryTotal), memoryFreeMiB: numericOrNull(memoryFree),
+        utilizationPercent: numericOrNull(utilization), temperatureCelsius: numericOrNull(temperature),
+      };
+    });
+  } catch { return []; }
+}
+function numericOrNull(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
 
 async function runFFmpeg(webContents, request) {
   const capabilities = await detectCapabilities();

@@ -136,6 +136,21 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     renderReady: boolean;
     builtAt: string;
   };
+  'render:hardware-selected': {
+    jobId: string;
+    backend: 'cpu' | 'nvenc';
+    encoder: string;
+    gpuName: string | null;
+    memoryFreeMiB: number | null;
+    reason: string;
+    automatic: boolean;
+  };
+  'render:hardware-waiting': {
+    jobId: string;
+    backend: 'cpu' | 'nvenc';
+    waitingJobs: number;
+    reason: string;
+  };
   'render:job-queued': {
     jobId: string;
     projectId: string;

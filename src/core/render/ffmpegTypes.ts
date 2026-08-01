@@ -1,9 +1,20 @@
+export interface GPUDeviceInfo {
+  index: number;
+  name: string;
+  driverVersion: string | null;
+  memoryTotalMiB: number | null;
+  memoryFreeMiB: number | null;
+  utilizationPercent: number | null;
+  temperatureCelsius: number | null;
+}
+
 export interface FFmpegCapabilities {
   available: boolean;
   executable: string | null;
   version: string | null;
   encoders: string[];
   hardwareEncoders: string[];
+  gpuDevices: GPUDeviceInfo[];
 }
 
 export interface FFmpegRunRequest {
@@ -31,7 +42,7 @@ export interface FFmpegRunResult {
 }
 
 export interface FFmpegBridge {
-  getCapabilities(): Promise<FFmpegCapabilities>;
+  getCapabilities(forceRefresh?: boolean): Promise<FFmpegCapabilities>;
   run(request: FFmpegRunRequest): Promise<FFmpegRunResult>;
   cancel(jobId: string): Promise<boolean>;
   onProgress(listener: (payload: FFmpegProgressPayload) => void): () => void;
