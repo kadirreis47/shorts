@@ -22,6 +22,7 @@ export interface FFmpegRunRequest {
   args: string[];
   outputPath?: string;
   subtitleContent?: string;
+  concatContent?: string;
 }
 
 export interface FFmpegProgressPayload {
@@ -46,5 +47,10 @@ export interface FFmpegBridge {
   run(request: FFmpegRunRequest): Promise<FFmpegRunResult>;
   cancel(jobId: string): Promise<boolean>;
   fileExists(path: string): Promise<boolean>;
+  getSegmentPath(fingerprint: string): Promise<string>;
+  segmentExists(fingerprint: string): Promise<boolean>;
+  getSegmentCacheStats(): Promise<import('./segmentCache').SegmentCacheStats>;
+  clearSegmentCache(): Promise<void>;
+  analyzeOutput(path: string): Promise<import('./renderDiagnosticsTypes').RenderDiagnostics>;
   onProgress(listener: (payload: FFmpegProgressPayload) => void): () => void;
 }

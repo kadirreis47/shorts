@@ -9,6 +9,11 @@ import type {
   RenderProgress,
 } from './types';
 import { DEFAULT_RENDER_PRESET } from './types';
+import {
+  createRenderCircuitBreaker,
+  decideRenderRetry,
+  waitForRenderRetry,
+} from './renderResilience';
 
 interface InternalRenderJob {
   request: RenderJobRequest;
@@ -32,6 +37,9 @@ export function createRenderEngine(
   const outputExists = options.outputExists;
   const incrementalPlanner = options.incrementalPlanner;
   const recoveryStore = options.recoveryStore;
+  const retryPolicy = options.retryPolicy;
+  const circuitBreaker =
+    options.circuitBreaker ?? createRenderCircuitBreaker();
   let activeCount = 0;
   let disposed = false;
 
@@ -274,6 +282,23 @@ export function createRenderEngine(
       return;
     }
 
+    if (!circuitBreaker.canExecute(adapter.id)) {
+      const breaker = circuitBreaker.snapshot(adapter.id);
+      await eventBus.emit('render:circuit-open', {
+        jobId: job.snapshot.id,
+        projectId: job.snapshot.projectId,
+        adapterId: adapter.id,
+        retryAfterMs: breaker.retryAfterMs,
+        consecutiveFailures: breaker.consecutiveFailures,
+        openedAt: breaker.openedAt,
+      });
+      await markFailed(
+        job,
+        `Render adapter geçici olarak devre dışı. ${breaker.retryAfterMs} ms sonra tekrar deneyin.`,
+      );
+      return;
+    }
+
     const startedAt = new Date().toISOString();
     patchSnapshot(job, {
       status: 'preparing',
@@ -293,20 +318,67 @@ export function createRenderEngine(
     });
 
     try {
-      const output = await adapter.render({
-        jobId: job.snapshot.id,
-        manifest: job.request.manifest,
-        preset: job.snapshot.preset,
-        outputPath: job.request.outputPath,
-        signal: job.controller.signal,
-        incrementalPlan: job.incrementalPlan ?? undefined,
-        reportProgress: async (progress) => {
-          if (job.controller.signal.aborted) {
-            throw new DOMException('Render işlemi iptal edildi', 'AbortError');
+      let output: Awaited<ReturnType<RenderAdapter['render']>> | null = null;
+      let attempt = 1;
+
+      while (output === null) {
+        try {
+          output = await adapter.render({
+            jobId: job.snapshot.id,
+            manifest: job.request.manifest,
+            preset: job.snapshot.preset,
+            outputPath: job.request.outputPath,
+            signal: job.controller.signal,
+            incrementalPlan: job.incrementalPlan ?? undefined,
+            reportProgress: async (progress) => {
+              if (job.controller.signal.aborted) {
+                throw new DOMException(
+                  'Render işlemi iptal edildi',
+                  'AbortError',
+                );
+              }
+              await applyProgress(job, progress);
+            },
+          });
+          circuitBreaker.recordSuccess(adapter.id);
+        } catch (error) {
+          const decision = decideRenderRetry({
+            error,
+            attempt,
+            policy: retryPolicy,
+          });
+
+          if (!decision.retry) {
+            circuitBreaker.recordFailure(adapter.id);
+            throw error;
           }
-          await applyProgress(job, progress);
-        },
-      });
+
+          await eventBus.emit('render:job-retrying', {
+            jobId: job.snapshot.id,
+            projectId: job.snapshot.projectId,
+            adapterId: adapter.id,
+            attempt,
+            nextAttempt: attempt + 1,
+            delayMs: decision.delayMs,
+            failureKind: decision.kind,
+            reason: decision.reason,
+            retryingAt: new Date().toISOString(),
+          });
+
+          patchSnapshot(job, {
+            status: 'preparing',
+            stage: 'planning',
+            message: `Render tekrar denenecek (${attempt + 1}. deneme)`,
+          });
+          recoveryStore?.checkpoint(job.snapshot, job.request);
+
+          await waitForRenderRetry(
+            decision.delayMs,
+            job.controller.signal,
+          );
+          attempt += 1;
+        }
+      }
 
       if (job.controller.signal.aborted) {
         await markCancelled(job);
@@ -314,6 +386,14 @@ export function createRenderEngine(
       }
 
       const completedAt = new Date().toISOString();
+      output = {
+        ...output,
+        metadata: {
+          ...output.metadata,
+          renderAttempts: attempt,
+          circuitBreakerState: circuitBreaker.snapshot(adapter.id).state,
+        },
+      };
       patchSnapshot(job, {
         status: 'completed',
         stage: 'completed',

@@ -136,6 +136,15 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     renderReady: boolean;
     builtAt: string;
   };
+  'render:diagnostics-completed': {
+    jobId: string;
+    projectId: string;
+    qualityScore: number;
+    passed: boolean;
+    warningCount: number;
+    outputPath: string;
+    analyzedAt: string;
+  };
   'render:subtitle-render-completed': {
     jobId: string;
     projectId: string;
@@ -231,6 +240,36 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     backend: 'cpu' | 'nvenc';
     waitingJobs: number;
     reason: string;
+  };
+  'render:job-retrying': {
+    jobId: string;
+    projectId: string;
+    adapterId: string;
+    attempt: number;
+    nextAttempt: number;
+    delayMs: number;
+    failureKind: import('@/core/render').RenderFailureKind;
+    reason: string;
+    retryingAt: string;
+  };
+  'render:circuit-open': {
+    jobId: string;
+    projectId: string;
+    adapterId: string;
+    retryAfterMs: number;
+    consecutiveFailures: number;
+    openedAt: string | null;
+  };
+  'render:recovery-detected': {
+    interruptedJobs: number;
+    detectedAt: string;
+  };
+  'render:checkpoint-written': {
+    jobId: string;
+    projectId: string;
+    stage: import('@/core/render').RenderStage;
+    progress: number;
+    writtenAt: string;
   };
   'render:job-queued': {
     jobId: string;

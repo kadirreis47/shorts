@@ -103,6 +103,9 @@ export interface RenderEngineOptions {
   cache?: import('./renderCache').RenderCache;
   outputExists?: (uri: string) => Promise<boolean>;
   incrementalPlanner?: import('./incrementalRenderPlanner').IncrementalRenderPlanner;
+  recoveryStore?: import('./renderRecovery').RenderRecoveryStore;
+  retryPolicy?: Partial<import('./renderResilience').RenderRetryPolicy>;
+  circuitBreaker?: import('./renderResilience').RenderCircuitBreaker;
 }
 
 export interface RenderEngine {

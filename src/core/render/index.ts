@@ -15,3 +15,13 @@ export * from './renderFingerprint';
 export * from './incrementalTypes';
 export * from './sceneFingerprint';
 export * from './incrementalRenderPlanner';
+
+export * from './segmentCache';
+export * from './segmentCommandBuilder';
+
+export * from './renderDiagnosticsTypes';
+export * from './renderDiagnostics';
+
+export * from './renderRecovery';
+
+export * from './renderResilience';
