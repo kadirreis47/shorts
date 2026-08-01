@@ -1,5 +1,10 @@
 import type { RenderManifest } from '@/core/media';
 import { buildFFmpegCommand } from './ffmpegCommandBuilder';
+import {
+  buildSceneSegmentCommand,
+  buildSegmentConcatCommand,
+} from './segmentCommandBuilder';
+import { createSegmentCache } from './segmentCache';
 import { getFFmpegBridge } from './ffmpegBridge';
 import type { FFmpegCapabilities } from './ffmpegTypes';
 import type { HardwareScheduler } from './hardwareScheduler';
@@ -26,6 +31,16 @@ export class FFmpegRenderAdapter implements RenderAdapter {
     try {
       const effectivePreset = withHardwareSelection(context.preset, lease.selection);
       try {
+        if (
+          context.incrementalPlan &&
+          !context.incrementalPlan.fullRenderRequired
+        ) {
+          return await this.runIncrementalFFmpeg(
+            context,
+            effectivePreset,
+            capabilities,
+          );
+        }
         return await this.runFFmpeg(context, effectivePreset, capabilities);
       } catch (error) {
         const shouldFallback = context.preset.hardwareAcceleration === 'auto' && lease.selection.backend === 'nvenc' && !context.signal.aborted;
@@ -40,6 +55,139 @@ export class FFmpegRenderAdapter implements RenderAdapter {
       }
     } finally {
       lease.release();
+    }
+  }
+
+
+  private async runIncrementalFFmpeg(
+    context: RenderExecutionContext,
+    preset: RenderPreset,
+    capabilities: FFmpegCapabilities,
+  ): Promise<RenderOutput> {
+    const bridge = getFFmpegBridge();
+    const incrementalPlan = context.incrementalPlan;
+    if (!bridge || !incrementalPlan) {
+      return this.runFFmpeg(context, preset, capabilities);
+    }
+
+    const segmentCache = createSegmentCache();
+    const resolutions = await segmentCache.resolve(incrementalPlan);
+    const segmentPaths: string[] = [];
+    const childJobIds = new Set<string>();
+    let renderedSegments = 0;
+    let reusedSegments = 0;
+
+    const abort = () => {
+      for (const childJobId of childJobIds) {
+        void bridge.cancel(childJobId);
+      }
+    };
+    context.signal.addEventListener('abort', abort, { once: true });
+
+    try {
+      for (const item of incrementalPlan.items) {
+        if (context.signal.aborted) {
+          throw new DOMException('Render işlemi iptal edildi', 'AbortError');
+        }
+
+        const resolution = resolutions.find(
+          (candidate) => candidate.sceneId === item.sceneId,
+        );
+        const scene = context.manifest.timeline.scenes[item.sceneIndex];
+
+        if (!resolution || !scene) {
+          throw new Error(`Sahne segment planı eksik: ${item.sceneId}`);
+        }
+
+        if (resolution.reusable) {
+          segmentPaths.push(resolution.path);
+          reusedSegments += 1;
+          continue;
+        }
+
+        const childJobId = `${context.jobId}-segment-${item.sceneIndex}`;
+        childJobIds.add(childJobId);
+        const command = buildSceneSegmentCommand({
+          manifest: context.manifest,
+          scene,
+          preset,
+          outputPath: resolution.path,
+        });
+
+        await context.reportProgress({
+          stage: 'video',
+          progress: Math.max(
+            5,
+            Math.round(
+              ((renderedSegments + reusedSegments) /
+                Math.max(1, incrementalPlan.totalScenes)) *
+                70,
+            ),
+          ),
+          message: `Sahne ${item.sceneIndex + 1}/${incrementalPlan.totalScenes} segmenti hazırlanıyor`,
+          totalFrames: incrementalPlan.estimatedFrames,
+        });
+
+        await bridge.run({
+          jobId: childJobId,
+          args: command.args,
+          outputPath: resolution.path,
+          subtitleContent: command.subtitleContent,
+        });
+
+        childJobIds.delete(childJobId);
+        segmentPaths.push(resolution.path);
+        renderedSegments += 1;
+      }
+
+      const concatJobId = `${context.jobId}-concat`;
+      childJobIds.add(concatJobId);
+      const concatPlan = buildSegmentConcatCommand({
+        manifest: context.manifest,
+        preset,
+        segmentPaths,
+      });
+
+      await context.reportProgress({
+        stage: 'finalizing',
+        progress: 82,
+        message: `${renderedSegments} yeni ve ${reusedSegments} önbellek segmenti birleştiriliyor`,
+        frame: 0,
+        totalFrames: concatPlan.totalFrames,
+      });
+
+      const result = await bridge.run({
+        jobId: concatJobId,
+        args: concatPlan.args,
+        outputPath: context.outputPath,
+        concatContent: concatPlan.concatContent,
+      });
+      childJobIds.delete(concatJobId);
+
+      return {
+        kind: 'video',
+        uri: result.outputPath,
+        mimeType: 'video/mp4',
+        sizeBytes: result.sizeBytes,
+        durationMs: context.manifest.durationMs,
+        metadata: {
+          adapter: this.id,
+          ffmpegVersion: capabilities.version,
+          elapsedMs: result.elapsedMs,
+          exitCode: result.exitCode,
+          hardwareAcceleration: preset.hardwareAcceleration,
+          incrementalExecutionMode: 'zero-copy-segment-assembly',
+          finalVideoReencoded: false,
+          renderedSegments,
+          reusedSegments,
+          segmentCount: segmentPaths.length,
+          incrementalPlanId: incrementalPlan.planId,
+          incrementalEstimatedSavedPercent:
+            incrementalPlan.estimatedSavedPercent,
+        },
+      };
+    } finally {
+      context.signal.removeEventListener('abort', abort);
     }
   }
 

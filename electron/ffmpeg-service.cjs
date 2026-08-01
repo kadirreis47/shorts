@@ -15,6 +15,36 @@ function registerFFmpegHandlers() {
   });
 
   ipcMain.handle('ffmpeg:run', async (event, request) => runFFmpeg(event.sender, request));
+  ipcMain.handle('ffmpeg:segment-path', async (_event, fingerprint) =>
+    getSegmentPath(fingerprint),
+  );
+  ipcMain.handle('ffmpeg:segment-exists', async (_event, fingerprint) => {
+    try {
+      const stat = await fs.promises.stat(getSegmentPath(fingerprint));
+      return stat.isFile();
+    } catch {
+      return false;
+    }
+  });
+  ipcMain.handle('ffmpeg:segment-cache-stats', async () => {
+    const directory = getSegmentDirectory();
+    await fs.promises.mkdir(directory, { recursive: true });
+    const files = await fs.promises.readdir(directory, { withFileTypes: true });
+    let entries = 0;
+    let totalBytes = 0;
+    for (const file of files) {
+      if (!file.isFile() || !file.name.endsWith('.mp4')) continue;
+      const stat = await fs.promises.stat(path.join(directory, file.name));
+      entries += 1;
+      totalBytes += stat.size;
+    }
+    return { entries, totalBytes, cacheDirectory: directory };
+  });
+  ipcMain.handle('ffmpeg:segment-cache-clear', async () => {
+    const directory = getSegmentDirectory();
+    await fs.promises.rm(directory, { recursive: true, force: true });
+  });
+
   ipcMain.handle('ffmpeg:file-exists', async (_event, targetPath) => {
     if (!targetPath || typeof targetPath !== 'string') return false;
     try {
@@ -73,10 +103,21 @@ async function runFFmpeg(webContents, request) {
 
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'shortsflow-ffmpeg-'));
   const subtitlePath = path.join(tempDir, 'subtitles.srt');
-  if (request.subtitleContent) await fs.promises.writeFile(subtitlePath, request.subtitleContent, 'utf8');
+  const concatPath = path.join(tempDir, 'segments.txt');
+  if (request.subtitleContent) {
+    await fs.promises.writeFile(subtitlePath, request.subtitleContent, 'utf8');
+  }
+  if (request.concatContent) {
+    await fs.promises.writeFile(concatPath, request.concatContent, 'utf8');
+  }
   const outputPath = resolveOutputPath(request.outputPath, request.jobId);
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
-  const args = request.args.map((arg) => arg.replaceAll('{{SUBTITLE_FILE}}', escapeFilterPath(subtitlePath)).replaceAll('{{OUTPUT_FILE}}', outputPath));
+  const args = request.args.map((arg) =>
+    arg
+      .replaceAll('{{SUBTITLE_FILE}}', escapeFilterPath(subtitlePath))
+      .replaceAll('{{CONCAT_FILE}}', concatPath)
+      .replaceAll('{{OUTPUT_FILE}}', outputPath),
+  );
   const started = Date.now();
   const stderrTail = [];
 
@@ -125,6 +166,14 @@ async function runFFmpeg(webContents, request) {
     });
     function finishError(error) { active.delete(request.jobId); reject(error); }
   });
+}
+
+function getSegmentDirectory() {
+  return path.join(app.getPath('userData'), 'render-cache', 'segments');
+}
+function getSegmentPath(fingerprint) {
+  const safe = sanitize(fingerprint);
+  return path.join(getSegmentDirectory(), `v2-${safe}.mp4`);
 }
 
 function resolveOutputPath(requested, jobId) {
