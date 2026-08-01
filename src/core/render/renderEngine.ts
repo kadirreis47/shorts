@@ -31,6 +31,7 @@ export function createRenderEngine(
   const renderCache = options.cache;
   const outputExists = options.outputExists;
   const incrementalPlanner = options.incrementalPlanner;
+  const recoveryStore = options.recoveryStore;
   let activeCount = 0;
   let disposed = false;
 
@@ -131,7 +132,7 @@ export function createRenderEngine(
             savedRenderMs: cached.savedRenderMs,
             hitAt: completedAt,
           });
-          await eventBus.emit('render:job-completed', {
+      await eventBus.emit('render:job-completed', {
             jobId,
             projectId: snapshot.projectId,
             outputKind: cached.output.kind,
@@ -175,6 +176,7 @@ export function createRenderEngine(
         incrementalPlan,
       });
       queue.push(jobId);
+      recoveryStore?.checkpoint(snapshot, request);
 
       await eventBus.emit('render:job-queued', {
         jobId,
@@ -228,6 +230,11 @@ export function createRenderEngine(
     dispose() {
       if (disposed) return;
       disposed = true;
+      for (const job of jobs.values()) {
+        if (!isTerminal(job.snapshot.status)) {
+          recoveryStore?.markInterrupted(job.snapshot.id);
+        }
+      }
       engine.cancelAll();
       adapters.clear();
     },
@@ -275,6 +282,8 @@ export function createRenderEngine(
       message: 'Render işi hazırlanıyor',
       startedAt,
     });
+
+    recoveryStore?.checkpoint(job.snapshot, job.request);
 
     await eventBus.emit('render:job-started', {
       jobId: job.snapshot.id,
@@ -359,6 +368,8 @@ export function createRenderEngine(
         });
       }
 
+      recoveryStore?.checkpoint(job.snapshot, job.request);
+
       await eventBus.emit('render:job-completed', {
         jobId: job.snapshot.id,
         projectId: job.snapshot.projectId,
@@ -399,6 +410,8 @@ export function createRenderEngine(
       elapsedMs: calculateElapsed(job.snapshot, updatedAt),
     });
 
+    recoveryStore?.checkpoint(job.snapshot, job.request);
+
     await eventBus.emit('render:job-progress', {
       jobId: job.snapshot.id,
       projectId: job.snapshot.projectId,
@@ -420,6 +433,8 @@ export function createRenderEngine(
       completedAt: cancelledAt,
       elapsedMs: calculateElapsed(job.snapshot, cancelledAt),
     });
+    recoveryStore?.checkpoint(job.snapshot, job.request);
+
     await eventBus.emit('render:job-cancelled', {
       jobId: job.snapshot.id,
       projectId: job.snapshot.projectId,
@@ -439,6 +454,8 @@ export function createRenderEngine(
       completedAt: failedAt,
       elapsedMs: calculateElapsed(job.snapshot, failedAt),
     });
+    recoveryStore?.checkpoint(job.snapshot, job.request);
+
     await eventBus.emit('render:job-failed', {
       jobId: job.snapshot.id,
       projectId: job.snapshot.projectId,
