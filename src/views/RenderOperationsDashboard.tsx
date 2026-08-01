@@ -11,6 +11,7 @@ import {
   RotateCcw,
   ServerCog,
   ShieldAlert,
+  History,
   Pause,
   Play,
   RotateCcw as RetryIcon,
@@ -23,6 +24,7 @@ import {
 import { Card } from '@/components/ui';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { useRenderQueueInspectorStore } from '@/store/renderQueueInspectorStore';
+import { useRenderRecoveryCenterStore } from '@/store/renderRecoveryCenterStore';
 import { classNames } from '@/lib/utils';
 import {
   useRenderAnalyticsStore,
@@ -94,6 +96,22 @@ export function RenderOperationsDashboard() {
   const queuePaused = useRenderQueueInspectorStore(
     (state) => state.queuePaused,
   );
+  const recoveryRecords = useRenderRecoveryCenterStore(
+    (state) => state.records,
+  );
+  const interruptedRecords = useRenderRecoveryCenterStore(
+    (state) => state.interrupted,
+  );
+  const selectedRecoveryJobId = useRenderRecoveryCenterStore(
+    (state) => state.selectedJobId,
+  );
+  const selectRecoveryJob = useRenderRecoveryCenterStore(
+    (state) => state.select,
+  );
+  const removeRecoveryRecord = useRenderRecoveryCenterStore(
+    (state) => state.remove,
+  );
+
 
   const exportSnapshot = useRenderAnalyticsStore(
     (state) => state.exportSnapshot,
@@ -124,6 +142,16 @@ export function RenderOperationsDashboard() {
     if (!selectedJobId) return;
     await renderEngine.retry(selectedJobId);
   };
+
+  const dismissSelectedRecovery = () => {
+    if (!selectedRecoveryJobId) return;
+    const recoveryStore = applicationContainer.resolve(
+      dependencyTokens.renderRecoveryStore,
+    );
+    recoveryStore.remove(selectedRecoveryJobId);
+    removeRecoveryRecord(selectedRecoveryJobId);
+  };
+
 
   const applyRecommendedConcurrency = () => {
     const renderEngine = applicationContainer.resolve(
@@ -288,6 +316,164 @@ export function RenderOperationsDashboard() {
           )}
         </Card>
       </div>
+
+      <Card className="p-5">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-amber-50 p-2.5 text-amber-600">
+              <History size={18} />
+            </div>
+            <div>
+              <h2 className="font-semibold text-slate-900">
+                Render Recovery Center
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Yarıda kalan, başarısız ve geçmiş render checkpoint kayıtları.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold uppercase text-amber-700">
+              {interruptedRecords.length} interrupted
+            </span>
+            <button
+              type="button"
+              onClick={dismissSelectedRecovery}
+              disabled={!selectedRecoveryJobId}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Kaydı kaldır
+            </button>
+          </div>
+        </div>
+
+        {recoveryRecords.length === 0 ? (
+          <EmptyState
+            title="Recovery kaydı yok"
+            description="Render checkpoint kayıtları oluştuğunda burada görüntülenecek."
+          />
+        ) : (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <div className="space-y-2 xl:col-span-2">
+              {recoveryRecords.slice(0, 20).map((record) => (
+                <button
+                  key={record.jobId}
+                  type="button"
+                  onClick={() => selectRecoveryJob(record.jobId)}
+                  className={classNames(
+                    'w-full rounded-xl border p-3 text-left transition',
+                    selectedRecoveryJobId === record.jobId
+                      ? 'border-amber-300 bg-amber-50/50'
+                      : 'border-slate-200 hover:bg-slate-50',
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-800">
+                        {record.projectId}
+                      </p>
+                      <p className="truncate text-xs text-slate-500">
+                        {record.message}
+                      </p>
+                    </div>
+                    <span
+                      className={classNames(
+                        'rounded-full px-2 py-1 text-[10px] font-semibold uppercase',
+                        record.status === 'interrupted'
+                          ? 'bg-amber-100 text-amber-700'
+                          : record.status === 'failed'
+                            ? 'bg-rose-100 text-rose-700'
+                            : record.status === 'completed'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-slate-100 text-slate-600',
+                      )}
+                    >
+                      {record.status}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-amber-500"
+                      style={{
+                        width: `${Math.max(
+                          0,
+                          Math.min(100, record.progress),
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
+                    <span>{record.stage}</span>
+                    <span>%{Math.round(record.progress)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              {(() => {
+                const selected = recoveryRecords.find(
+                  (record) =>
+                    record.jobId === selectedRecoveryJobId,
+                );
+
+                if (!selected) {
+                  return (
+                    <EmptyState
+                      title="Checkpoint seçilmedi"
+                      description="Ayrıntıları görmek için bir recovery kaydı seç."
+                    />
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    <QueueDetail
+                      label="İş"
+                      value={selected.jobId}
+                    />
+                    <QueueDetail
+                      label="Proje"
+                      value={selected.projectId}
+                    />
+                    <QueueDetail
+                      label="Durum"
+                      value={selected.status}
+                    />
+                    <QueueDetail
+                      label="Aşama"
+                      value={selected.stage}
+                    />
+                    <QueueDetail
+                      label="Adapter"
+                      value={selected.adapterId ?? '-'}
+                    />
+                    <QueueDetail
+                      label="Güncelleme"
+                      value={new Date(
+                        selected.updatedAt,
+                      ).toLocaleString('tr-TR')}
+                    />
+                    {selected.outputPath && (
+                      <QueueDetail
+                        label="Çıktı"
+                        value={selected.outputPath}
+                      />
+                    )}
+                    {selected.error && (
+                      <div className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-xs text-rose-700">
+                        {selected.error}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+      </Card>
 
       <Card className="p-5">
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

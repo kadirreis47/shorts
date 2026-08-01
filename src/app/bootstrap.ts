@@ -3,9 +3,11 @@ import { isSupabaseConfigured } from '@/lib/supabase';
 import { useAppStore, useChannelStore, useUIStore } from '@/store';
 import { registerApplicationDependencies } from './registerDependencies';
 import { attachRenderQueueInspector } from '@/services/renderQueueInspectorMonitor';
+import { attachRenderRecoveryCenter } from '@/services/renderRecoveryCenterMonitor';
 
 let bootstrapPromise: Promise<void> | null = null;
 let detachRenderQueueInspector: (() => void) | null = null;
+let detachRenderRecoveryCenter: (() => void) | null = null;
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error
@@ -31,6 +33,15 @@ async function runBootstrap() {
     (jobId) => renderEngine.getJob(jobId),
     () => renderEngine.listJobs(),
     () => renderEngine.isQueuePaused(),
+  );
+
+  const recoveryStore = applicationContainer.resolve(
+    dependencyTokens.renderRecoveryStore,
+  );
+  detachRenderRecoveryCenter?.();
+  detachRenderRecoveryCenter = attachRenderRecoveryCenter(
+    eventBus,
+    recoveryStore,
   );
 
   const startedAt = new Date().toISOString();

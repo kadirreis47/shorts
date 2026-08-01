@@ -9,6 +9,7 @@ import {
   createIncrementalRenderPlanner,
   createRenderCache,
   createRenderEngine,
+  createRenderRecoveryStore,
   createRenderPlanAdapter,
 } from '@/core/render';
 import { persistenceManager } from '@/persistence';
@@ -84,6 +85,11 @@ export function registerApplicationDependencies() {
   );
 
   applicationContainer.registerSingleton(
+    dependencyTokens.renderRecoveryStore,
+    () => createRenderRecoveryStore(),
+  );
+
+  applicationContainer.registerSingleton(
     dependencyTokens.renderEngine,
     (container) => {
       const eventBus = container.resolve(dependencyTokens.eventBus);
@@ -97,6 +103,9 @@ export function registerApplicationDependencies() {
           concurrency: 1,
           cache: renderCache,
           incrementalPlanner,
+          recoveryStore: container.resolve(
+            dependencyTokens.renderRecoveryStore,
+          ),
           outputExists: async (uri) => {
             const bridge = window.electronAPI?.ffmpeg;
             if (!bridge || uri.startsWith('render-plan://')) return true;
