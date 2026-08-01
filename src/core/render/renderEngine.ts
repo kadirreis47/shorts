@@ -44,6 +44,7 @@ export function createRenderEngine(
   const metricsCollector =
     options.metricsCollector ?? createRenderMetricsCollector();
   let activeCount = 0;
+  let queuePaused = false;
   let disposed = false;
 
   initialAdapters.forEach((adapter) => adapters.set(adapter.id, adapter));
@@ -265,6 +266,53 @@ export function createRenderEngine(
       }
 
       return concurrency;
+    },
+
+    pauseQueue() {
+      ensureNotDisposed();
+      if (queuePaused) return;
+      queuePaused = true;
+      void eventBus.emit('render:queue-paused', {
+        activeJobs: activeCount,
+        queuedJobs: queue.length,
+        pausedAt: new Date().toISOString(),
+      });
+    },
+
+    resumeQueue() {
+      ensureNotDisposed();
+      if (!queuePaused) return;
+      queuePaused = false;
+      void eventBus.emit('render:queue-resumed', {
+        activeJobs: activeCount,
+        queuedJobs: queue.length,
+        resumedAt: new Date().toISOString(),
+      });
+      scheduleDrain();
+    },
+
+    isQueuePaused() {
+      return queuePaused;
+    },
+
+    async retry(jobId) {
+      ensureNotDisposed();
+      const existing = jobs.get(jobId);
+      if (!existing) {
+        throw new Error(`Render işi bulunamadı: ${jobId}`);
+      }
+      if (
+        existing.snapshot.status !== 'failed' &&
+        existing.snapshot.status !== 'cancelled'
+      ) {
+        throw new Error(
+          'Yalnızca başarısız veya iptal edilmiş işler tekrar denenebilir.',
+        );
+      }
+      return engine.submit({
+        ...existing.request,
+        forceRender: true,
+      });
     },
 
     metrics() {
