@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('path');
+const { registerFFmpegHandlers } = require('./ffmpeg-service.cjs');
 
 let mainWindow;
 
@@ -76,6 +77,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  registerFFmpegHandlers();
   createWindow();
 
   app.on('activate', () => {

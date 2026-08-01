@@ -3,7 +3,7 @@ import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
 import { createAssetProviderEngine } from '@/core/media';
-import { createRenderEngine, createRenderPlanAdapter } from '@/core/render';
+import { createFFmpegRenderAdapter, createRenderEngine, createRenderPlanAdapter } from '@/core/render';
 import { persistenceManager } from '@/persistence';
 import {
   createAIApplicationService,
@@ -80,7 +80,7 @@ export function registerApplicationDependencies() {
     dependencyTokens.renderEngine,
     (container) => createRenderEngine(
       container.resolve(dependencyTokens.eventBus),
-      [createRenderPlanAdapter()],
+      [createFFmpegRenderAdapter(), createRenderPlanAdapter()],
       { concurrency: 1 },
     ),
   );
