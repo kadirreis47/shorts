@@ -184,6 +184,14 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           audioDuckingApplied:
             context.manifest.audio.voice.some((segment) => Boolean(segment.assetId))
             && context.manifest.audio.music.some((segment) => Boolean(segment.assetId)),
+          cameraMotionSceneCount: context.manifest.timeline.scenes.filter(
+            (scene) => scene.cameraMotion !== 'none',
+          ).length,
+          transitionEffectSceneCount: context.manifest.timeline.scenes.filter(
+            (scene) =>
+              scene.transition.type !== 'cut' &&
+              scene.transition.durationMs > 0,
+          ).length,
           renderedSegments,
           reusedSegments,
           segmentCount: segmentPaths.length,

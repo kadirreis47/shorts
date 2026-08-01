@@ -5,6 +5,7 @@ import type {
 } from '@/core/media';
 import type { RenderPreset } from './types';
 import { buildAudioMixCommand } from './audioMixCommandBuilder';
+import { buildSceneVisualEffectPlan } from './visualEffectBuilder';
 
 export interface SceneSegmentCommandPlan {
   args: string[];
@@ -75,11 +76,15 @@ export function buildSceneSegmentCommand(input: {
     );
   }
 
+  const visualPlan = buildSceneVisualEffectPlan({
+    scene,
+    width,
+    height,
+    fps,
+    durationSeconds,
+  });
   const filters = [
-    `scale=${width}:${height}:force_original_aspect_ratio=increase`,
-    `crop=${width}:${height}`,
-    `fps=${fps}`,
-    'format=yuv420p',
+    ...visualPlan.filters,
     `trim=duration=${durationSeconds.toFixed(3)}`,
     'setpts=PTS-STARTPTS',
   ];
