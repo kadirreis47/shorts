@@ -4,6 +4,7 @@ import type {
   Unsubscribe,
 } from '@/core/events';
 import { useRenderStore } from '@/store/renderStore';
+import { useRenderAnalyticsStore } from '@/store/renderAnalyticsStore';
 
 export interface RenderJobMonitor {
   start(): void;
@@ -41,6 +42,16 @@ export function createRenderJobMonitor(
         }),
         eventBus.on('render:job-cancelled', (payload) => {
           useRenderStore.getState().cancelled(payload);
+        }),
+        eventBus.on('render:metrics-updated', ({ snapshot }) => {
+          useRenderAnalyticsStore.getState().updateMetrics(snapshot);
+        }),
+        eventBus.on('render:circuit-open', (payload) => {
+          useRenderAnalyticsStore.getState().recordCircuitOpen({
+            adapterId: payload.adapterId,
+            retryAfterMs: payload.retryAfterMs,
+            consecutiveFailures: payload.consecutiveFailures,
+          });
         }),
       );
 
