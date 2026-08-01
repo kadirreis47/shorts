@@ -2,8 +2,10 @@ import { applicationContainer, dependencyTokens } from '@/core/di';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useAppStore, useChannelStore, useUIStore } from '@/store';
 import { registerApplicationDependencies } from './registerDependencies';
+import { attachRenderQueueInspector } from '@/services/renderQueueInspectorMonitor';
 
 let bootstrapPromise: Promise<void> | null = null;
+let detachRenderQueueInspector: (() => void) | null = null;
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error
@@ -19,6 +21,17 @@ async function runBootstrap() {
     dependencyTokens.persistenceManager,
   );
   const eventBus = applicationContainer.resolve(dependencyTokens.eventBus);
+  const renderEngine = applicationContainer.resolve(
+    dependencyTokens.renderEngine,
+  );
+
+  detachRenderQueueInspector?.();
+  detachRenderQueueInspector = attachRenderQueueInspector(
+    eventBus,
+    (jobId) => renderEngine.getJob(jobId),
+    () => renderEngine.listJobs(),
+    () => renderEngine.isQueuePaused(),
+  );
 
   const startedAt = new Date().toISOString();
   appStore.beginBootstrap();

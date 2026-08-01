@@ -11,6 +11,9 @@ import {
   RotateCcw,
   ServerCog,
   ShieldAlert,
+  Pause,
+  Play,
+  RotateCcw as RetryIcon,
   Sparkles,
   TimerReset,
   TrendingUp,
@@ -19,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Card } from '@/components/ui';
 import { applicationContainer, dependencyTokens } from '@/core/di';
+import { useRenderQueueInspectorStore } from '@/store/renderQueueInspectorStore';
 import { classNames } from '@/lib/utils';
 import {
   useRenderAnalyticsStore,
@@ -75,6 +79,22 @@ export function RenderOperationsDashboard() {
   const updateRuntimeConcurrency = useRenderAnalyticsStore(
     (state) => state.updateRuntimeConcurrency,
   );
+  const queueJobs = useRenderQueueInspectorStore(
+    (state) => state.jobs,
+  );
+  const selectedJobId = useRenderQueueInspectorStore(
+    (state) => state.selectedJobId,
+  );
+  const selectQueueJob = useRenderQueueInspectorStore(
+    (state) => state.select,
+  );
+  const clearTerminalJobs = useRenderQueueInspectorStore(
+    (state) => state.clearTerminal,
+  );
+  const queuePaused = useRenderQueueInspectorStore(
+    (state) => state.queuePaused,
+  );
+
   const exportSnapshot = useRenderAnalyticsStore(
     (state) => state.exportSnapshot,
   );
@@ -88,6 +108,22 @@ export function RenderOperationsDashboard() {
     1,
     ...latestHistory.map((point) => point.averageQueueWaitMs),
   );
+
+  const renderEngine = applicationContainer.resolve(
+    dependencyTokens.renderEngine,
+  );
+  const pauseQueue = () => {
+    renderEngine.pauseQueue();
+  };
+
+  const resumeQueue = () => {
+    renderEngine.resumeQueue();
+  };
+
+  const retrySelectedJob = async () => {
+    if (!selectedJobId) return;
+    await renderEngine.retry(selectedJobId);
+  };
 
   const applyRecommendedConcurrency = () => {
     const renderEngine = applicationContainer.resolve(
@@ -252,6 +288,141 @@ export function RenderOperationsDashboard() {
           )}
         </Card>
       </div>
+
+      <Card className="p-5">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="font-semibold text-slate-900">
+              Render Queue Inspector
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Aktif, bekleyen ve tamamlanan render işlerini incele.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={queuePaused ? resumeQueue : pauseQueue}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              {queuePaused ? <Play size={14} /> : <Pause size={14} />}
+              {queuePaused ? 'Kuyruğu sürdür' : 'Kuyruğu duraklat'}
+            </button>
+            <button
+              type="button"
+              onClick={retrySelectedJob}
+              disabled={!selectedJobId}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RetryIcon size={14} />
+              Seçileni tekrar dene
+            </button>
+            <button
+              type="button"
+              onClick={clearTerminalJobs}
+              className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+            >
+              Geçmişi temizle
+            </button>
+          </div>
+        </div>
+
+        {queueJobs.length === 0 ? (
+          <EmptyState
+            title="Render kuyruğu boş"
+            description="Yeni işler oluşturulduğunda kuyruk durumu burada görünecek."
+          />
+        ) : (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            <div className="space-y-2 xl:col-span-2">
+              {queueJobs.slice(0, 20).map((job) => (
+                <button
+                  type="button"
+                  key={job.id}
+                  onClick={() => selectQueueJob(job.id)}
+                  className={classNames(
+                    'w-full rounded-xl border p-3 text-left transition',
+                    selectedJobId === job.id
+                      ? 'border-slate-400 bg-slate-50'
+                      : 'border-slate-200 hover:bg-slate-50',
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-800">
+                        {job.projectId}
+                      </p>
+                      <p className="truncate text-xs text-slate-500">
+                        {job.message}
+                      </p>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase text-slate-600">
+                      {job.status}
+                    </span>
+                  </div>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-slate-800"
+                      style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }}
+                    />
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
+                    <span>{job.stage}</span>
+                    <span>%{Math.round(job.progress)}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              {(() => {
+                const selected = queueJobs.find(
+                  (job) => job.id === selectedJobId,
+                );
+                if (!selected) {
+                  return (
+                    <EmptyState
+                      title="İş seçilmedi"
+                      description="Ayrıntıları görmek için soldan bir render işi seç."
+                    />
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        İş kimliği
+                      </p>
+                      <p className="mt-1 break-all text-sm font-medium text-slate-800">
+                        {selected.id}
+                      </p>
+                    </div>
+                    <QueueDetail label="Proje" value={selected.projectId} />
+                    <QueueDetail label="Adapter" value={selected.adapterId ?? '-'} />
+                    <QueueDetail label="Durum" value={selected.status} />
+                    <QueueDetail label="Aşama" value={selected.stage} />
+                    <QueueDetail
+                      label="Geçen süre"
+                      value={formatDuration(selected.elapsedMs)}
+                    />
+                    <QueueDetail
+                      label="Sıraya giriş"
+                      value={new Date(selected.queuedAt).toLocaleString('tr-TR')}
+                    />
+                    {selected.error && (
+                      <div className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-xs text-rose-700">
+                        {selected.error}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+      </Card>
 
       <Card className="p-5">
         <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -811,6 +982,23 @@ function EmptyState({
       <p className="mt-1 max-w-sm text-xs leading-5 text-slate-400">
         {description}
       </p>
+    </div>
+  );
+}
+
+function QueueDetail({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-2 text-xs">
+      <span className="text-slate-400">{label}</span>
+      <span className="max-w-[65%] truncate font-medium text-slate-700">
+        {value}
+      </span>
     </div>
   );
 }
