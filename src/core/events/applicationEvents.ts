@@ -241,6 +241,9 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     waitingJobs: number;
     reason: string;
   };
+  'render:metrics-updated': {
+    snapshot: import('@/core/render').RenderPerformanceSnapshot;
+  };
   'render:job-retrying': {
     jobId: string;
     projectId: string;

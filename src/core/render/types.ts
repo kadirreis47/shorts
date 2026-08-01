@@ -106,6 +106,7 @@ export interface RenderEngineOptions {
   recoveryStore?: import('./renderRecovery').RenderRecoveryStore;
   retryPolicy?: Partial<import('./renderResilience').RenderRetryPolicy>;
   circuitBreaker?: import('./renderResilience').RenderCircuitBreaker;
+  metricsCollector?: import('./renderMetrics').RenderMetricsCollector;
 }
 
 export interface RenderEngine {
@@ -115,6 +116,8 @@ export interface RenderEngine {
   getJob(jobId: string): RenderJobSnapshot | null;
   listJobs(): RenderJobSnapshot[];
   registerAdapter(adapter: RenderAdapter): void;
+  metrics(): import('./renderMetrics').RenderPerformanceSnapshot;
+  resetMetrics(): void;
   dispose(): void;
 }
 

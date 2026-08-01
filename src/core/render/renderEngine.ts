@@ -9,6 +9,7 @@ import type {
   RenderProgress,
 } from './types';
 import { DEFAULT_RENDER_PRESET } from './types';
+import { createRenderMetricsCollector } from './renderMetrics';
 import {
   createRenderCircuitBreaker,
   decideRenderRetry,
@@ -40,6 +41,8 @@ export function createRenderEngine(
   const retryPolicy = options.retryPolicy;
   const circuitBreaker =
     options.circuitBreaker ?? createRenderCircuitBreaker();
+  const metricsCollector =
+    options.metricsCollector ?? createRenderMetricsCollector();
   let activeCount = 0;
   let disposed = false;
 
@@ -132,6 +135,11 @@ export function createRenderEngine(
             incrementalPlan,
           });
 
+          metricsCollector.cacheHit();
+          metricsCollector.jobQueued(snapshot);
+          metricsCollector.jobStarted(snapshot);
+          metricsCollector.jobCompleted(snapshot);
+
           await eventBus.emit('render:cache-hit', {
             jobId,
             projectId: snapshot.projectId,
@@ -184,6 +192,7 @@ export function createRenderEngine(
         incrementalPlan,
       });
       queue.push(jobId);
+      metricsCollector.jobQueued(snapshot);
       recoveryStore?.checkpoint(snapshot, request);
 
       await eventBus.emit('render:job-queued', {
@@ -233,6 +242,14 @@ export function createRenderEngine(
     registerAdapter(adapter) {
       ensureNotDisposed();
       adapters.set(adapter.id, adapter);
+    },
+
+    metrics() {
+      return metricsCollector.snapshot();
+    },
+
+    resetMetrics() {
+      metricsCollector.reset();
     },
 
     dispose() {
@@ -308,6 +325,7 @@ export function createRenderEngine(
       startedAt,
     });
 
+    metricsCollector.jobStarted(job.snapshot);
     recoveryStore?.checkpoint(job.snapshot, job.request);
 
     await eventBus.emit('render:job-started', {
@@ -352,6 +370,8 @@ export function createRenderEngine(
             circuitBreaker.recordFailure(adapter.id);
             throw error;
           }
+
+          metricsCollector.retryScheduled();
 
           await eventBus.emit('render:job-retrying', {
             jobId: job.snapshot.id,
@@ -448,7 +468,12 @@ export function createRenderEngine(
         });
       }
 
+      metricsCollector.jobCompleted(job.snapshot);
       recoveryStore?.checkpoint(job.snapshot, job.request);
+
+      await eventBus.emit('render:metrics-updated', {
+        snapshot: metricsCollector.snapshot(),
+      });
 
       await eventBus.emit('render:job-completed', {
         jobId: job.snapshot.id,
@@ -490,6 +515,11 @@ export function createRenderEngine(
       elapsedMs: calculateElapsed(job.snapshot, updatedAt),
     });
 
+    metricsCollector.stageChanged(
+      job.snapshot.id,
+      progress.stage,
+      Date.parse(updatedAt),
+    );
     recoveryStore?.checkpoint(job.snapshot, job.request);
 
     await eventBus.emit('render:job-progress', {
@@ -513,7 +543,12 @@ export function createRenderEngine(
       completedAt: cancelledAt,
       elapsedMs: calculateElapsed(job.snapshot, cancelledAt),
     });
+    metricsCollector.jobCancelled(job.snapshot);
     recoveryStore?.checkpoint(job.snapshot, job.request);
+
+    await eventBus.emit('render:metrics-updated', {
+      snapshot: metricsCollector.snapshot(),
+    });
 
     await eventBus.emit('render:job-cancelled', {
       jobId: job.snapshot.id,
@@ -534,7 +569,12 @@ export function createRenderEngine(
       completedAt: failedAt,
       elapsedMs: calculateElapsed(job.snapshot, failedAt),
     });
+    metricsCollector.jobFailed(job.snapshot);
     recoveryStore?.checkpoint(job.snapshot, job.request);
+
+    await eventBus.emit('render:metrics-updated', {
+      snapshot: metricsCollector.snapshot(),
+    });
 
     await eventBus.emit('render:job-failed', {
       jobId: job.snapshot.id,

@@ -25,3 +25,5 @@ export * from './renderDiagnostics';
 export * from './renderRecovery';
 
 export * from './renderResilience';
+
+export * from './renderMetrics';
