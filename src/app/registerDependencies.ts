@@ -94,7 +94,7 @@ export function registerApplicationDependencies() {
         eventBus,
         [createFFmpegRenderAdapter(hardwareScheduler), createRenderPlanAdapter()],
         {
-          concurrency: 2,
+          concurrency: 1,
           cache: renderCache,
           incrementalPlanner,
           outputExists: async (uri) => {

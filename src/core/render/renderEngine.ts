@@ -32,7 +32,7 @@ export function createRenderEngine(
   const adapters = new Map<string, RenderAdapter>();
   const jobs = new Map<string, InternalRenderJob>();
   const queue: string[] = [];
-  const concurrency = Math.max(1, Math.floor(options.concurrency ?? 1));
+  let concurrency = normalizeConcurrency(options.concurrency ?? 1);
   const defaultPreset = normalizePreset(options.defaultPreset);
   const renderCache = options.cache;
   const outputExists = options.outputExists;
@@ -242,6 +242,29 @@ export function createRenderEngine(
     registerAdapter(adapter) {
       ensureNotDisposed();
       adapters.set(adapter.id, adapter);
+    },
+
+    getConcurrency() {
+      return concurrency;
+    },
+
+    setConcurrency(nextConcurrency) {
+      ensureNotDisposed();
+      const previousConcurrency = concurrency;
+      concurrency = normalizeConcurrency(nextConcurrency);
+
+      if (previousConcurrency !== concurrency) {
+        void eventBus.emit('render:concurrency-changed', {
+          previousConcurrency,
+          concurrency,
+          activeJobs: activeCount,
+          queuedJobs: queue.length,
+          changedAt: new Date().toISOString(),
+        });
+        scheduleDrain();
+      }
+
+      return concurrency;
     },
 
     metrics() {
@@ -664,6 +687,11 @@ function isAbortError(error: unknown): boolean {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, Math.round(value)));
+}
+
+function normalizeConcurrency(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(8, Math.floor(value)));
 }
 
 function createId(prefix: string): string {

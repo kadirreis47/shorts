@@ -60,12 +60,14 @@ interface RenderAnalyticsState {
   thresholds: RenderAlertThresholds;
   tuningReport: RenderTuningReport;
   capacityPlan: RenderCapacityPlan;
+  runtimeConcurrency: number;
   capacityInputs: {
     concurrency: number;
     jobsPerDay: number;
     averageVideoDurationSeconds: number;
     targetCompletionHours: number;
   };
+  updateRuntimeConcurrency: (concurrency: number) => void;
   updateCapacityInputs: (
     input: Partial<RenderAnalyticsState['capacityInputs']>,
   ) => void;
@@ -97,6 +99,7 @@ export interface RenderAnalyticsExport {
   thresholds: RenderAlertThresholds;
   tuningReport: RenderTuningReport;
   capacityPlan: RenderCapacityPlan;
+  runtimeConcurrency: number;
   capacityInputs: {
     concurrency: number;
     jobsPerDay: number;
@@ -125,6 +128,7 @@ export const useRenderAnalyticsStore =
       baseline: null,
       thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
     }),
+    runtimeConcurrency: 1,
     capacityInputs: {
       concurrency: 1,
       jobsPerDay: 20,
@@ -138,6 +142,14 @@ export const useRenderAnalyticsStore =
       averageVideoDurationSeconds: 45,
       targetCompletionHours: 8,
     }),
+
+    updateRuntimeConcurrency: (concurrency) =>
+      set({
+        runtimeConcurrency: Math.max(
+          1,
+          Math.min(8, Math.floor(concurrency)),
+        ),
+      }),
 
     updateCapacityInputs: (input) =>
       set((state) => {
@@ -209,6 +221,7 @@ export const useRenderAnalyticsStore =
           baseline: null,
           thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
         }),
+        runtimeConcurrency: 1,
         capacityInputs: {
           concurrency: 1,
           jobsPerDay: 20,
@@ -310,6 +323,7 @@ export const useRenderAnalyticsStore =
         thresholds: state.thresholds,
         tuningReport: state.tuningReport,
         capacityPlan: state.capacityPlan,
+        runtimeConcurrency: state.runtimeConcurrency,
         capacityInputs: state.capacityInputs,
       };
     },
@@ -329,6 +343,7 @@ export const useRenderAnalyticsStore =
           baseline: null,
           thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
         }),
+        runtimeConcurrency: 1,
         capacityInputs: {
           concurrency: 1,
           jobsPerDay: 20,
@@ -358,6 +373,7 @@ export const useRenderAnalyticsStore =
           thresholds: state.thresholds,
           tuningReport: state.tuningReport,
           capacityPlan: state.capacityPlan,
+          runtimeConcurrency: state.runtimeConcurrency,
           capacityInputs: state.capacityInputs,
         }),
       },

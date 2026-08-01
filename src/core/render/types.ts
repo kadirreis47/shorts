@@ -116,6 +116,8 @@ export interface RenderEngine {
   getJob(jobId: string): RenderJobSnapshot | null;
   listJobs(): RenderJobSnapshot[];
   registerAdapter(adapter: RenderAdapter): void;
+  getConcurrency(): number;
+  setConcurrency(concurrency: number): number;
   metrics(): import('./renderMetrics').RenderPerformanceSnapshot;
   resetMetrics(): void;
   dispose(): void;

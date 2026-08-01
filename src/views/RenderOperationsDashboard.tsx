@@ -18,6 +18,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { Card } from '@/components/ui';
+import { applicationContainer, dependencyTokens } from '@/core/di';
 import { classNames } from '@/lib/utils';
 import {
   useRenderAnalyticsStore,
@@ -68,6 +69,12 @@ export function RenderOperationsDashboard() {
   const refreshCapacityPlan = useRenderAnalyticsStore(
     (state) => state.refreshCapacityPlan,
   );
+  const runtimeConcurrency = useRenderAnalyticsStore(
+    (state) => state.runtimeConcurrency,
+  );
+  const updateRuntimeConcurrency = useRenderAnalyticsStore(
+    (state) => state.updateRuntimeConcurrency,
+  );
   const exportSnapshot = useRenderAnalyticsStore(
     (state) => state.exportSnapshot,
   );
@@ -81,6 +88,17 @@ export function RenderOperationsDashboard() {
     1,
     ...latestHistory.map((point) => point.averageQueueWaitMs),
   );
+
+  const applyRecommendedConcurrency = () => {
+    const renderEngine = applicationContainer.resolve(
+      dependencyTokens.renderEngine,
+    );
+    const applied = renderEngine.setConcurrency(
+      capacityPlan.recommendedConcurrency,
+    );
+    updateRuntimeConcurrency(applied);
+    updateCapacityInputs({ concurrency: applied });
+  };
 
   return (
     <div className="space-y-5">
@@ -334,9 +352,27 @@ export function RenderOperationsDashboard() {
             <p className="mt-2 text-2xl font-bold text-slate-900">
               {capacityPlan.recommendedConcurrency} worker
             </p>
+            <p className="mt-1 text-xs font-medium text-slate-500">
+              Aktif çalışma: {runtimeConcurrency} worker
+            </p>
             <p className="mt-2 text-xs leading-5 text-slate-500">
               {capacityPlan.recommendation}
             </p>
+            <button
+              type="button"
+              onClick={applyRecommendedConcurrency}
+              disabled={
+                runtimeConcurrency ===
+                capacityPlan.recommendedConcurrency
+              }
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              <Zap size={13} />
+              {runtimeConcurrency ===
+              capacityPlan.recommendedConcurrency
+                ? 'Öneri aktif'
+                : 'Concurrency önerisini uygula'}
+            </button>
             <div className="mt-3 flex items-center gap-2">
               <span
                 className={classNames(

@@ -241,6 +241,13 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     waitingJobs: number;
     reason: string;
   };
+  'render:concurrency-changed': {
+    previousConcurrency: number;
+    concurrency: number;
+    activeJobs: number;
+    queuedJobs: number;
+    changedAt: string;
+  };
   'render:metrics-updated': {
     snapshot: import('@/core/render').RenderPerformanceSnapshot;
   };
