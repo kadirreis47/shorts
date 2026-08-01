@@ -4,6 +4,7 @@ import type {
   RenderPerformanceSnapshot,
   RenderStageMetric,
 } from '@/core/render';
+import { buildRenderTuningReport, type RenderTuningReport } from '@/core/render/renderAutoTuner';
 import {
   buildAdaptiveAlerts,
   calculateAdaptiveBaseline,
@@ -53,6 +54,9 @@ interface RenderAnalyticsState {
   circuitOpenCount: number;
   baseline: RenderAdaptiveBaseline | null;
   thresholds: RenderAlertThresholds;
+  tuningReport: RenderTuningReport;
+  applyTuningRecommendation: (recommendationId: string) => void;
+  refreshTuningReport: () => void;
   updateThresholds: (thresholds: Partial<RenderAlertThresholds>) => void;
   resetThresholds: () => void;
   updateMetrics: (snapshot: RenderPerformanceSnapshot) => void;
@@ -76,6 +80,7 @@ export interface RenderAnalyticsExport {
   circuitOpenCount: number;
   baseline: RenderAdaptiveBaseline | null;
   thresholds: RenderAlertThresholds;
+  tuningReport: RenderTuningReport;
 }
 
 const HISTORY_LIMIT = 120;
@@ -93,6 +98,42 @@ export const useRenderAnalyticsStore =
     circuitOpenCount: 0,
     baseline: null,
     thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
+    tuningReport: buildRenderTuningReport({
+      snapshot: null,
+      baseline: null,
+      thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
+    }),
+
+    applyTuningRecommendation: (recommendationId) =>
+      set((state) => {
+        const recommendation = state.tuningReport.recommendations.find(
+          (item) => item.id === recommendationId,
+        );
+        if (!recommendation) return state;
+
+        const thresholds = {
+          ...state.thresholds,
+          ...(recommendation.suggestedThresholds ?? {}),
+        };
+
+        return {
+          thresholds,
+          tuningReport: buildRenderTuningReport({
+            snapshot: state.snapshot,
+            baseline: state.baseline,
+            thresholds,
+          }),
+        };
+      }),
+
+    refreshTuningReport: () =>
+      set((state) => ({
+        tuningReport: buildRenderTuningReport({
+          snapshot: state.snapshot,
+          baseline: state.baseline,
+          thresholds: state.thresholds,
+        }),
+      })),
 
     updateThresholds: (thresholds) =>
       set((state) => ({
@@ -105,6 +146,11 @@ export const useRenderAnalyticsStore =
     resetThresholds: () =>
       set({
         thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
+        tuningReport: buildRenderTuningReport({
+          snapshot: null,
+          baseline: null,
+          thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
+        }),
       }),
 
     updateMetrics: (snapshot) =>
@@ -141,6 +187,11 @@ export const useRenderAnalyticsStore =
           ),
           bottleneckStage: findBottleneck(snapshot.stageMetrics),
           baseline,
+          tuningReport: buildRenderTuningReport({
+            snapshot,
+            baseline,
+            thresholds: state.thresholds,
+          }),
         };
       }),
 
@@ -182,6 +233,7 @@ export const useRenderAnalyticsStore =
         circuitOpenCount: state.circuitOpenCount,
         baseline: state.baseline,
         thresholds: state.thresholds,
+        tuningReport: state.tuningReport,
       };
     },
 
@@ -195,6 +247,11 @@ export const useRenderAnalyticsStore =
         circuitOpenCount: 0,
         baseline: null,
         thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
+        tuningReport: buildRenderTuningReport({
+          snapshot: null,
+          baseline: null,
+          thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
+        }),
       }),
       }),
       {
@@ -209,6 +266,7 @@ export const useRenderAnalyticsStore =
           circuitOpenCount: state.circuitOpenCount,
           baseline: state.baseline,
           thresholds: state.thresholds,
+          tuningReport: state.tuningReport,
         }),
       },
     ),
