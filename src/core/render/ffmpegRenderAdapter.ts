@@ -1,3 +1,4 @@
+import { evaluateRenderDiagnostics } from './renderDiagnostics';
 import type { RenderManifest } from '@/core/media';
 import { buildFFmpegCommand } from './ffmpegCommandBuilder';
 import {
@@ -164,6 +165,22 @@ export class FFmpegRenderAdapter implements RenderAdapter {
       });
       childJobIds.delete(concatJobId);
 
+      const rawDiagnostics = await bridge.analyzeOutput(result.outputPath);
+      const diagnostics = evaluateRenderDiagnostics(
+        rawDiagnostics,
+        context.manifest,
+      );
+
+      await context.reportProgress({
+        stage: 'finalizing',
+        progress: 99,
+        message: diagnostics.passed
+          ? `Çıktı kalite kontrolünden geçti (${diagnostics.qualityScore}/100)`
+          : `Çıktı kalite kontrolünde uyarı var (${diagnostics.qualityScore}/100)`,
+        frame: concatPlan.totalFrames,
+        totalFrames: concatPlan.totalFrames,
+      });
+
       return {
         kind: 'video',
         uri: result.outputPath,
@@ -203,6 +220,10 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           incrementalPlanId: incrementalPlan.planId,
           incrementalEstimatedSavedPercent:
             incrementalPlan.estimatedSavedPercent,
+          renderDiagnostics: diagnostics,
+          renderQualityScore: diagnostics.qualityScore,
+          renderQualityPassed: diagnostics.passed,
+          renderWarnings: diagnostics.warnings,
         },
       };
     } finally {
