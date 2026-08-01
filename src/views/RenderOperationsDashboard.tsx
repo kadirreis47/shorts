@@ -37,6 +37,14 @@ export function RenderOperationsDashboard() {
     (state) => state.clearAlerts,
   );
   const reset = useRenderAnalyticsStore((state) => state.reset);
+  const baseline = useRenderAnalyticsStore((state) => state.baseline);
+  const thresholds = useRenderAnalyticsStore((state) => state.thresholds);
+  const updateThresholds = useRenderAnalyticsStore(
+    (state) => state.updateThresholds,
+  );
+  const resetThresholds = useRenderAnalyticsStore(
+    (state) => state.resetThresholds,
+  );
   const exportSnapshot = useRenderAnalyticsStore(
     (state) => state.exportSnapshot,
   );
@@ -201,6 +209,108 @@ export function RenderOperationsDashboard() {
               ))}
             </div>
           )}
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <Card className="p-5 xl:col-span-2">
+          <div className="mb-4">
+            <h2 className="font-semibold text-slate-900">
+              Adaptif performans tabanı
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Sistem son render geçmişinden normal çalışma seviyesini öğrenir.
+            </p>
+          </div>
+
+          {baseline ? (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <SummaryTile
+                label="Örnek sayısı"
+                value={baseline.sampleCount}
+                icon={Database}
+              />
+              <SummaryTile
+                label="Taban render"
+                value={Math.round(baseline.averageRenderMs / 1000)}
+                icon={Clock3}
+              />
+              <SummaryTile
+                label="Taban kuyruk"
+                value={Math.round(baseline.averageQueueWaitMs / 1000)}
+                icon={TimerReset}
+              />
+              <SummaryTile
+                label="Taban başarı %"
+                value={Math.round(baseline.averageSuccessRate)}
+                icon={Gauge}
+              />
+            </div>
+          ) : (
+            <EmptyState
+              title="Adaptif taban henüz oluşmadı"
+              description="En az üç anlamlı metrik örneği sonrasında sistem normal performans aralığını hesaplayacak."
+            />
+          )}
+        </Card>
+
+        <Card className="p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold text-slate-900">
+                Alarm eşikleri
+              </h2>
+              <p className="text-xs text-slate-500">
+                Operasyon sağlık sınırları
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={resetThresholds}
+              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+            >
+              Varsayılan
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            <ThresholdField
+              label="Düşük başarı %"
+              value={thresholds.degradedSuccessRate}
+              onChange={(value) =>
+                updateThresholds({ degradedSuccessRate: value })
+              }
+            />
+            <ThresholdField
+              label="Kritik başarı %"
+              value={thresholds.criticalSuccessRate}
+              onChange={(value) =>
+                updateThresholds({ criticalSuccessRate: value })
+              }
+            />
+            <ThresholdField
+              label="Kuyruk uyarı (sn)"
+              value={Math.round(
+                thresholds.degradedQueueWaitMs / 1000,
+              )}
+              onChange={(value) =>
+                updateThresholds({
+                  degradedQueueWaitMs: value * 1000,
+                })
+              }
+            />
+            <ThresholdField
+              label="Kritik kuyruk (sn)"
+              value={Math.round(
+                thresholds.criticalQueueWaitMs / 1000,
+              )}
+              onChange={(value) =>
+                updateThresholds({
+                  criticalQueueWaitMs: value * 1000,
+                })
+              }
+            />
+          </div>
         </Card>
       </div>
 
@@ -457,6 +567,33 @@ function EmptyState({
         {description}
       </p>
     </div>
+  );
+}
+
+function ThresholdField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3">
+      <span className="text-xs font-medium text-slate-600">
+        {label}
+      </span>
+      <input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(event) =>
+          onChange(Math.max(0, Number(event.target.value) || 0))
+        }
+        className="w-24 rounded-lg border border-slate-200 px-2.5 py-1.5 text-right text-sm text-slate-700 outline-none focus:border-slate-400"
+      />
+    </label>
   );
 }
 

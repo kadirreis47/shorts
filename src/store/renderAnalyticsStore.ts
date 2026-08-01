@@ -4,6 +4,13 @@ import type {
   RenderPerformanceSnapshot,
   RenderStageMetric,
 } from '@/core/render';
+import {
+  buildAdaptiveAlerts,
+  calculateAdaptiveBaseline,
+  DEFAULT_RENDER_ALERT_THRESHOLDS,
+  type RenderAdaptiveBaseline,
+  type RenderAlertThresholds,
+} from '@/core/render/renderAlertBaselines';
 
 export type RenderHealthStatus =
   | 'healthy'
@@ -20,7 +27,9 @@ export interface RenderOperationsAlert {
     | 'HIGH_RENDER_TIME'
     | 'RETRY_PRESSURE'
     | 'CACHE_INACTIVE'
-    | 'CIRCUIT_OPEN';
+    | 'CIRCUIT_OPEN'
+    | 'RENDER_ANOMALY'
+    | 'QUEUE_ANOMALY';
   message: string;
   createdAt: string;
 }
@@ -42,6 +51,10 @@ interface RenderAnalyticsState {
   health: RenderHealthStatus;
   bottleneckStage: RenderStageMetric | null;
   circuitOpenCount: number;
+  baseline: RenderAdaptiveBaseline | null;
+  thresholds: RenderAlertThresholds;
+  updateThresholds: (thresholds: Partial<RenderAlertThresholds>) => void;
+  resetThresholds: () => void;
   updateMetrics: (snapshot: RenderPerformanceSnapshot) => void;
   recordCircuitOpen: (payload: {
     adapterId: string;
@@ -61,6 +74,8 @@ export interface RenderAnalyticsExport {
   alerts: RenderOperationsAlert[];
   bottleneckStage: RenderStageMetric | null;
   circuitOpenCount: number;
+  baseline: RenderAdaptiveBaseline | null;
+  thresholds: RenderAlertThresholds;
 }
 
 const HISTORY_LIMIT = 120;
@@ -76,10 +91,24 @@ export const useRenderAnalyticsStore =
     health: 'idle',
     bottleneckStage: null,
     circuitOpenCount: 0,
+    baseline: null,
+    thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
+
+    updateThresholds: (thresholds) =>
+      set((state) => ({
+        thresholds: {
+          ...state.thresholds,
+          ...thresholds,
+        },
+      })),
+
+    resetThresholds: () =>
+      set({
+        thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
+      }),
 
     updateMetrics: (snapshot) =>
       set((state) => {
-        const alerts = buildAlerts(snapshot);
         const point: RenderMetricsPoint = {
           capturedAt: snapshot.updatedAt,
           totalJobs: snapshot.totalJobs,
@@ -90,12 +119,28 @@ export const useRenderAnalyticsStore =
           retryCount: snapshot.retryCount,
         };
 
+        const nextHistory = appendUniquePoint(
+          state.history,
+          point,
+        );
+        const baseline = calculateAdaptiveBaseline(nextHistory);
+        const alerts = buildAdaptiveAlerts({
+          latest: point,
+          baseline,
+          thresholds: state.thresholds,
+        });
+
         return {
           snapshot,
-          history: appendUniquePoint(state.history, point),
+          history: nextHistory,
           alerts: mergeAlerts(state.alerts, alerts),
-          health: calculateHealth(snapshot, state.circuitOpenCount),
+          health: calculateHealth(
+            snapshot,
+            state.circuitOpenCount,
+            state.thresholds,
+          ),
           bottleneckStage: findBottleneck(snapshot.stageMetrics),
+          baseline,
         };
       }),
 
@@ -135,6 +180,8 @@ export const useRenderAnalyticsStore =
         alerts: [...state.alerts],
         bottleneckStage: state.bottleneckStage,
         circuitOpenCount: state.circuitOpenCount,
+        baseline: state.baseline,
+        thresholds: state.thresholds,
       };
     },
 
@@ -146,6 +193,8 @@ export const useRenderAnalyticsStore =
         health: 'idle',
         bottleneckStage: null,
         circuitOpenCount: 0,
+        baseline: null,
+        thresholds: DEFAULT_RENDER_ALERT_THRESHOLDS,
       }),
       }),
       {
@@ -158,6 +207,8 @@ export const useRenderAnalyticsStore =
           health: state.health,
           bottleneckStage: state.bottleneckStage,
           circuitOpenCount: state.circuitOpenCount,
+          baseline: state.baseline,
+          thresholds: state.thresholds,
         }),
       },
     ),
@@ -166,87 +217,24 @@ export const useRenderAnalyticsStore =
 function calculateHealth(
   snapshot: RenderPerformanceSnapshot,
   circuitOpenCount: number,
+  thresholds: RenderAlertThresholds,
 ): RenderHealthStatus {
   if (snapshot.totalJobs === 0) return 'idle';
   if (
     circuitOpenCount > 0 ||
-    snapshot.successRate < 70 ||
-    snapshot.averageQueueWaitMs > 30_000
+    snapshot.successRate < thresholds.criticalSuccessRate ||
+    snapshot.averageQueueWaitMs > thresholds.criticalQueueWaitMs
   ) {
     return 'critical';
   }
   if (
-    snapshot.successRate < 90 ||
-    snapshot.retryCount >= 3 ||
-    snapshot.averageQueueWaitMs > 10_000
+    snapshot.successRate < thresholds.degradedSuccessRate ||
+    snapshot.retryCount >= thresholds.retryWarningCount ||
+    snapshot.averageQueueWaitMs > thresholds.degradedQueueWaitMs
   ) {
     return 'degraded';
   }
   return 'healthy';
-}
-
-function buildAlerts(
-  snapshot: RenderPerformanceSnapshot,
-): RenderOperationsAlert[] {
-  const alerts: RenderOperationsAlert[] = [];
-
-  if (snapshot.totalJobs >= 3 && snapshot.successRate < 90) {
-    alerts.push({
-      id: createAlertId('LOW_SUCCESS_RATE'),
-      severity: snapshot.successRate < 70 ? 'critical' : 'warning',
-      code: 'LOW_SUCCESS_RATE',
-      message: `Render başarı oranı %${snapshot.successRate.toFixed(1)}.`,
-      createdAt: snapshot.updatedAt,
-    });
-  }
-
-  if (snapshot.averageQueueWaitMs > 10_000) {
-    alerts.push({
-      id: createAlertId('HIGH_QUEUE_WAIT'),
-      severity:
-        snapshot.averageQueueWaitMs > 30_000 ? 'critical' : 'warning',
-      code: 'HIGH_QUEUE_WAIT',
-      message:
-        `Ortalama kuyruk bekleme süresi ` +
-        `${formatDuration(snapshot.averageQueueWaitMs)}.`,
-      createdAt: snapshot.updatedAt,
-    });
-  }
-
-  if (snapshot.averageRenderMs > 120_000) {
-    alerts.push({
-      id: createAlertId('HIGH_RENDER_TIME'),
-      severity: 'warning',
-      code: 'HIGH_RENDER_TIME',
-      message:
-        `Ortalama render süresi ` +
-        `${formatDuration(snapshot.averageRenderMs)}.`,
-      createdAt: snapshot.updatedAt,
-    });
-  }
-
-  if (snapshot.retryCount >= 3) {
-    alerts.push({
-      id: createAlertId('RETRY_PRESSURE'),
-      severity: snapshot.retryCount >= 8 ? 'critical' : 'warning',
-      code: 'RETRY_PRESSURE',
-      message: `${snapshot.retryCount} kontrollü render tekrar denemesi oluştu.`,
-      createdAt: snapshot.updatedAt,
-    });
-  }
-
-  if (snapshot.totalJobs >= 5 && snapshot.cacheHits === 0) {
-    alerts.push({
-      id: createAlertId('CACHE_INACTIVE'),
-      severity: 'info',
-      code: 'CACHE_INACTIVE',
-      message:
-        'Henüz render cache hit oluşmadı; tekrar eden işlerde fingerprint kontrol edilmeli.',
-      createdAt: snapshot.updatedAt,
-    });
-  }
-
-  return alerts;
 }
 
 function findBottleneck(
