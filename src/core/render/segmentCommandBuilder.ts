@@ -6,6 +6,7 @@ import type {
 import type { RenderPreset } from './types';
 import { buildAudioMixCommand } from './audioMixCommandBuilder';
 import { buildSceneVisualEffectPlan } from './visualEffectBuilder';
+import { buildSceneSubtitleRenderPlan } from './subtitleRenderBuilder';
 
 export interface SceneSegmentCommandPlan {
   args: string[];
@@ -35,13 +36,13 @@ export function buildSceneSegmentCommand(input: {
       manifest.assets.find((candidate) => candidate.id === assetId),
     )
     .find(Boolean);
-  const localCues = sceneSubtitleCues(
-    manifest.subtitles.cues,
-    scene.startMs,
-    scene.endMs,
-  );
-  const subtitleContent =
-    localCues.length > 0 ? buildSrt(localCues) : undefined;
+  const subtitlePlan = buildSceneSubtitleRenderPlan({
+    scene,
+    cues: manifest.subtitles.cues,
+    width,
+    height,
+  });
+  const subtitleContent = subtitlePlan.assContent;
 
   const args: string[] = ['-hide_banner', '-y'];
 
@@ -187,49 +188,6 @@ export function buildSegmentConcatCommand(input: {
       .join('\n'),
     totalFrames: Math.ceil(durationSeconds * manifest.render.fps),
   };
-}
-
-function sceneSubtitleCues(
-  cues: SubtitleCue[],
-  sceneStartMs: number,
-  sceneEndMs: number,
-): Array<{ startMs: number; endMs: number; text: string }> {
-  return cues
-    .filter((cue) => cue.startMs < sceneEndMs && cue.endMs > sceneStartMs)
-    .map((cue) => ({
-      startMs: Math.max(0, cue.startMs - sceneStartMs),
-      endMs: Math.min(sceneEndMs, cue.endMs) - sceneStartMs,
-      text: cue.text,
-    }))
-    .filter((cue) => cue.endMs > cue.startMs && cue.text.trim().length > 0);
-}
-
-function buildSrt(
-  cues: Array<{ startMs: number; endMs: number; text: string }>,
-): string {
-  return cues
-    .map(
-      (cue, index) =>
-        `${index + 1}\n${srtTime(cue.startMs)} --> ${srtTime(
-          cue.endMs,
-        )}\n${cue.text.trim()}\n`,
-    )
-    .join('\n');
-}
-
-function srtTime(ms: number): string {
-  const safe = Math.max(0, Math.round(ms));
-  const hours = Math.floor(safe / 3_600_000);
-  const minutes = Math.floor((safe % 3_600_000) / 60_000);
-  const seconds = Math.floor((safe % 60_000) / 1_000);
-  const millis = safe % 1_000;
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)},${String(
-    millis,
-  ).padStart(3, '0')}`;
-}
-
-function pad(value: number): string {
-  return String(value).padStart(2, '0');
 }
 
 function sceneColor(index: number): string {

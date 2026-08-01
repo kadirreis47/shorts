@@ -136,6 +136,13 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     renderReady: boolean;
     builtAt: string;
   };
+  'render:subtitle-render-completed': {
+    jobId: string;
+    projectId: string;
+    cueCount: number;
+    karaokeReadyCueCount: number;
+    completedAt: string;
+  };
   'render:visual-effects-completed': {
     jobId: string;
     projectId: string;

@@ -192,6 +192,11 @@ export class FFmpegRenderAdapter implements RenderAdapter {
               scene.transition.type !== 'cut' &&
               scene.transition.durationMs > 0,
           ).length,
+          advancedSubtitleRenderer: true,
+          subtitleCueCount: context.manifest.subtitles.cues.length,
+          karaokeReadyCueCount: context.manifest.subtitles.cues.filter(
+            (cue) => cue.wordIds.length > 0,
+          ).length,
           renderedSegments,
           reusedSegments,
           segmentCount: segmentPaths.length,
