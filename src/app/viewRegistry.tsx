@@ -9,6 +9,10 @@ const Videos = lazyNamed(() => import('@/views/Videos'), 'Videos');
 const CalendarView = lazyNamed(() => import('@/views/CalendarView'), 'CalendarView');
 const Automation = lazyNamed(() => import('@/views/Automation'), 'Automation');
 const Analytics = lazyNamed(() => import('@/views/Analytics'), 'Analytics');
+const RenderOperationsDashboard = lazyNamed(
+  () => import('@/views/RenderOperationsDashboard'),
+  'RenderOperationsDashboard',
+);
 const Assets = lazyNamed(() => import('@/views/Assets'), 'Assets');
 const Channels = lazyNamed(() => import('@/views/Channels'), 'Channels');
 const Templates = lazyNamed(() => import('@/views/Templates'), 'Templates');
@@ -73,6 +77,7 @@ export const VIEW_REGISTRY: Record<ViewKey, ViewRenderer> = {
   calendar: ({ channels }) => <CalendarView channels={channels} />,
   automation: ({ channels }) => <Automation channels={channels} />,
   analytics: ({ channels }) => <Analytics channels={channels} />,
+  renderops: () => <RenderOperationsDashboard />,
   assets: ({ channels }) => <Assets channels={channels} />,
   channels: () => <Channels />,
   templates: () => <Templates />,

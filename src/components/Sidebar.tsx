@@ -10,6 +10,7 @@ export type ViewKey =
   | 'calendar'
   | 'automation'
   | 'analytics'
+  | 'renderops'
   | 'assets'
   | 'channels'
   | 'templates'
