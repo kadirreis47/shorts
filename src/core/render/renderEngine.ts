@@ -343,7 +343,7 @@ export function createRenderEngine(
   }
 
   async function drainQueue(): Promise<void> {
-    if (disposed) return;
+    if (disposed || queuePaused) return;
 
     while (activeCount < concurrency && queue.length > 0) {
       const jobId = queue.shift();

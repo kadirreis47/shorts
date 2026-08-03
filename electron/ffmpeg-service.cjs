@@ -3,6 +3,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { validateFFmpegRunRequest, validateTargetPath } = require('./ffmpeg-security.cjs');
 
 const active = new Map();
 let cachedCapabilities = null;
@@ -14,9 +15,10 @@ function registerFFmpegHandlers() {
     return cachedCapabilities;
   });
 
-  ipcMain.handle('ffmpeg:run', async (event, request) => runFFmpeg(event.sender, request));
+  ipcMain.handle('ffmpeg:run', async (event, request) =>
+    runFFmpeg(event.sender, validateFFmpegRunRequest(request)));
   ipcMain.handle('ffmpeg:analyze-output', async (_event, targetPath) =>
-    analyzeOutput(targetPath),
+    analyzeOutput(validateTargetPath(targetPath)),
   );
   ipcMain.handle('ffmpeg:segment-path', async (_event, fingerprint) =>
     getSegmentPath(fingerprint),
@@ -49,7 +51,7 @@ function registerFFmpegHandlers() {
   });
 
   ipcMain.handle('ffmpeg:file-exists', async (_event, targetPath) => {
-    if (!targetPath || typeof targetPath !== 'string') return false;
+    try { targetPath = validateTargetPath(targetPath); } catch { return false; }
     try {
       const stat = await fs.promises.stat(targetPath);
       return stat.isFile();

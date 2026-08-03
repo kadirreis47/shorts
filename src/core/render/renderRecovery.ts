@@ -24,6 +24,8 @@ export interface RenderRecoveryRecord {
   outputPath?: string;
   manifestProjectId: string;
   requestMetadata: Readonly<Record<string, unknown>>;
+  requestSnapshot: RenderJobRequest | null;
+  replayedAt: string | null;
   queuedAt: string;
   startedAt: string | null;
   updatedAt: string;
@@ -45,11 +47,14 @@ export interface RenderRecoveryStore {
   markInterrupted(jobId: string): void;
   remove(jobId: string): void;
   clearTerminal(): void;
+  getReplayRequest(jobId: string): RenderJobRequest | null;
+  markReplayed(jobId: string): void;
   list(): RenderRecoveryRecord[];
 }
 
 const STORAGE_KEY = 'shortsflow.render-recovery.v1';
 const MAX_RECORDS = 40;
+export const MAX_RECOVERY_REQUEST_BYTES = 64 * 1024;
 
 export function createRenderRecoveryStore(): RenderRecoveryStore {
   let records = loadRecords();
@@ -90,6 +95,8 @@ export function createRenderRecoveryStore(): RenderRecoveryStore {
         outputPath: snapshot.outputPath,
         manifestProjectId: request.manifest.projectId,
         requestMetadata: { ...(request.metadata ?? {}) },
+        requestSnapshot: createRequestSnapshot(request),
+        replayedAt: null,
         queuedAt: snapshot.queuedAt,
         startedAt: snapshot.startedAt,
         updatedAt: new Date().toISOString(),
@@ -134,6 +141,20 @@ export function createRenderRecoveryStore(): RenderRecoveryStore {
       persist(records);
     },
 
+    getReplayRequest(jobId) {
+      const request = records.find((record) => record.jobId === jobId)
+        ?.requestSnapshot;
+      return request ? cloneRequest(request) : null;
+    },
+
+    markReplayed(jobId) {
+      const replayedAt = new Date().toISOString();
+      records = records.map((record) =>
+        record.jobId === jobId ? { ...record, replayedAt } : record,
+      );
+      persist(records);
+    },
+
     list() {
       return clone(records);
     },
@@ -159,7 +180,9 @@ function loadRecords(): RenderRecoveryRecord[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed)
+      ? parsed.map(normalizeStoredRecord).filter(isRecoveryRecord)
+      : [];
   } catch {
     return [];
   }
@@ -181,5 +204,45 @@ function clone(
     ...record,
     preset: { ...record.preset },
     requestMetadata: { ...record.requestMetadata },
+    requestSnapshot: record.requestSnapshot
+      ? cloneRequest(record.requestSnapshot)
+      : null,
   }));
+}
+
+function createRequestSnapshot(request: RenderJobRequest): RenderJobRequest | null {
+  try {
+    const serialized = JSON.stringify(request);
+    if (new TextEncoder().encode(serialized).byteLength > MAX_RECOVERY_REQUEST_BYTES) {
+      return null;
+    }
+    return JSON.parse(serialized) as RenderJobRequest;
+  } catch {
+    return null;
+  }
+}
+
+function cloneRequest(request: RenderJobRequest): RenderJobRequest {
+  return JSON.parse(JSON.stringify(request)) as RenderJobRequest;
+}
+
+function normalizeStoredRecord(record: unknown): unknown {
+  if (!record || typeof record !== 'object') return record;
+  return {
+    ...record,
+    requestSnapshot:
+      'requestSnapshot' in record ? record.requestSnapshot ?? null : null,
+    replayedAt: 'replayedAt' in record ? record.replayedAt ?? null : null,
+  };
+}
+
+function isRecoveryRecord(record: unknown): record is RenderRecoveryRecord {
+  return Boolean(
+    record &&
+      typeof record === 'object' &&
+      'jobId' in record &&
+      typeof record.jobId === 'string' &&
+      'status' in record &&
+      typeof record.status === 'string',
+  );
 }

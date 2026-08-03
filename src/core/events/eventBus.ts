@@ -52,7 +52,7 @@ export class TypedEventBus<TEvents extends EventMap>
     >;
 
     const results = await Promise.allSettled(
-      snapshot.map((handler) => Promise.resolve(handler(payload))),
+      snapshot.map((handler) => Promise.resolve().then(() => handler(payload))),
     );
 
     const failures = results.filter(

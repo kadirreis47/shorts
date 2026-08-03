@@ -59,7 +59,7 @@ export function buildRenderTuningReport(input: {
   }
 
   let recommendedConcurrency = 1;
-  let recommendedCacheEnabled = true;
+  const recommendedCacheEnabled = true;
 
   if (
     snapshot.successRate >= 95 &&
