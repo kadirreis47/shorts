@@ -41,7 +41,7 @@ export function buildAudioTimeline(
     music,
     sfx,
     automation,
-    metrics: calculateMetrics(durationMs, voice, music, sfx, automation, settings),
+    metrics: calculateAudioMetrics(durationMs, voice, music, sfx, automation, settings),
   };
 }
 
@@ -178,12 +178,12 @@ function createAutomationPoint(
   };
 }
 
-function calculateMetrics(
+export function calculateAudioMetrics(
   durationMs: number,
-  voice: AudioSegment[],
-  music: AudioSegment[],
-  sfx: AudioSegment[],
-  automation: AudioAutomationPoint[],
+  voice: readonly AudioSegment[],
+  music: readonly AudioSegment[],
+  sfx: readonly AudioSegment[],
+  automation: readonly AudioAutomationPoint[],
   settings: AudioMixSettings,
 ): AudioMixMetrics {
   const voiceDuration = voice.reduce((sum, segment) => sum + segment.durationMs, 0);

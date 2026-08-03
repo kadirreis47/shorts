@@ -50,7 +50,7 @@ export function buildSubtitleTimeline(
     words,
     cues,
     style,
-    metrics: calculateMetrics(words, cues, durationMs),
+    metrics: calculateSubtitleMetrics(words, cues, durationMs),
   };
 }
 
@@ -123,9 +123,9 @@ function buildCues(words: SubtitleWord[], style: SubtitleStyle): SubtitleCue[] {
   return cues;
 }
 
-function calculateMetrics(
-  words: SubtitleWord[],
-  cues: SubtitleCue[],
+export function calculateSubtitleMetrics(
+  words: readonly SubtitleWord[],
+  cues: readonly SubtitleCue[],
   durationMs: number,
 ): SubtitleMetrics {
   const spokenDurationMs = words.reduce((sum, word) => sum + word.durationMs, 0);

@@ -3,6 +3,15 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'editing:plan-started': { projectId: string; revisionId: string; startedAt: string };
+  'editing:plan-completed': { projectId: string; plan: import('@/core/editing').EditPlan; completedAt: string };
+  'editing:preview-created': { projectId: string; preview: import('@/core/editing').EditPreview; createdAt: string };
+  'editing:apply-started': { projectId: string; planId: string; revisionId: string; startedAt: string };
+  'editing:operation-applied': { projectId: string; operationId: string; revisionId: string; appliedAt: string };
+  'editing:apply-completed': { projectId: string; result: import('@/core/editing').EditApplyResult; completedAt: string };
+  'editing:apply-failed': { projectId: string; stage: 'plan' | 'apply'; message: string; failedAt: string };
+  'editing:undo-completed': { projectId: string; revisionId: string; completedAt: string };
+  'editing:redo-completed': { projectId: string; revisionId: string; completedAt: string };
   'director:analysis-started': {
     projectId: string;
     sceneCount: number;

@@ -5,6 +5,7 @@ import { registerApplicationDependencies } from './registerDependencies';
 import { attachRenderQueueInspector } from '@/services/renderQueueInspectorMonitor';
 import { attachRenderRecoveryCenter } from '@/services/renderRecoveryCenterMonitor';
 import { configureDirectorAnalysisController } from '@/services/directorAnalysisController';
+import { configureEditingController } from '@/services/editingController';
 
 let bootstrapPromise: Promise<void> | null = null;
 let detachRenderQueueInspector: (() => void) | null = null;
@@ -31,6 +32,7 @@ async function runBootstrap() {
     applicationContainer.resolve(dependencyTokens.directorApplicationService),
     applicationContainer.resolve(dependencyTokens.mediaEngine),
   );
+  configureEditingController(applicationContainer.resolve(dependencyTokens.editingApplicationService));
 
   detachRenderQueueInspector?.();
   detachRenderQueueInspector = attachRenderQueueInspector(

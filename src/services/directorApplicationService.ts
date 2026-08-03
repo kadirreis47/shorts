@@ -1,6 +1,7 @@
 import type { DirectorEngine, DirectorInput, DirectorReport, DirectorSceneInput } from '@/core/director';
 import type { ApplicationEventMap, EventBus } from '@/core/events';
 import type { RenderManifest } from '@/core/media';
+import { createManifestRevisionId, MANIFEST_FINGERPRINT_VERSION } from '@/core/editing';
 import { earliestSceneRelativeOffset, toSceneRelativeOffset } from './sceneRelativeTiming';
 
 export interface DirectorApplicationOptions {
@@ -66,6 +67,9 @@ export function createDirectorInput(manifest: RenderManifest): DirectorInput {
       title: manifest.metadata.title,
       source: manifest.metadata.source,
       schemaVersion: manifest.schemaVersion,
+      manifestBindingVersion: '1.0',
+      analyzedManifestFingerprint: createManifestRevisionId(manifest),
+      manifestFingerprintVersion: MANIFEST_FINGERPRINT_VERSION,
     },
   };
 }

@@ -1,5 +1,6 @@
 import { createAIPipelineRunner } from '@/core/ai-pipeline';
 import { createDirectorEngine } from '@/core/director';
+import { createEditingEngine } from '@/core/editing';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
@@ -23,6 +24,8 @@ import {
   createServiceExecutor,
   createDirectorApplicationService,
   createDirectorMonitor,
+  createEditingApplicationService,
+  createEditingMonitor,
 } from '@/services';
 
 let dependenciesRegistered = false;
@@ -62,6 +65,12 @@ export function registerApplicationDependencies() {
     dependencyTokens.directorMonitor,
     (container) => createDirectorMonitor(container.resolve(dependencyTokens.eventBus)),
   );
+
+  applicationContainer.registerSingleton(dependencyTokens.editingEngine, () => createEditingEngine());
+  applicationContainer.registerSingleton(dependencyTokens.editingApplicationService, (container) => createEditingApplicationService(
+    container.resolve(dependencyTokens.editingEngine), container.resolve(dependencyTokens.eventBus),
+  ));
+  applicationContainer.registerSingleton(dependencyTokens.editingMonitor, (container) => createEditingMonitor(container.resolve(dependencyTokens.eventBus)));
 
   applicationContainer.registerSingleton(
     dependencyTokens.aiPipelineRunner,
@@ -155,12 +164,14 @@ export function registerApplicationDependencies() {
   applicationContainer.resolve(dependencyTokens.aiPipelineMonitor).start();
   applicationContainer.resolve(dependencyTokens.renderJobMonitor).start();
   applicationContainer.resolve(dependencyTokens.directorMonitor).start();
+  applicationContainer.resolve(dependencyTokens.editingMonitor).start();
 
   dependenciesRegistered = true;
   return applicationContainer;
 }
 
 export function resetApplicationDependencies() {
+  if (applicationContainer.has(dependencyTokens.editingMonitor)) applicationContainer.resolve(dependencyTokens.editingMonitor).stop();
   if (applicationContainer.has(dependencyTokens.directorMonitor)) {
     applicationContainer.resolve(dependencyTokens.directorMonitor).stop();
   }

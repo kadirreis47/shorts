@@ -52,7 +52,8 @@ export type ViewKey =
   | 'hooktester'
   | 'crossplatform'
   | 'storyboard'
-  | 'director';
+  | 'director'
+  | 'editor';
 
 interface SidebarProps {
   current: ViewKey;

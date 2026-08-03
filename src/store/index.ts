@@ -10,3 +10,4 @@ export * from '@/store/mediaStore';
 
 export * from '@/store/renderStore';
 export * from '@/store/directorReportStore';
+export * from '@/store/editingStore';

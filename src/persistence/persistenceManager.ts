@@ -5,6 +5,7 @@ import {
   useSettingsStore,
   useUIStore,
   useDirectorReportStore,
+  useEditingStore,
 } from '@/store';
 
 export type PersistenceStoreName =
@@ -13,7 +14,8 @@ export type PersistenceStoreName =
   | 'ai'
   | 'channels'
   | 'projects'
-  | 'director';
+  | 'director'
+  | 'editing';
 
 export interface PersistenceHydrationResult {
   hydratedStores: PersistenceStoreName[];
@@ -30,6 +32,7 @@ const stores = [
   { name: 'channels' as const, persist: useChannelStore.persist },
   { name: 'projects' as const, persist: useProjectStore.persist },
   { name: 'director' as const, persist: useDirectorReportStore.persist },
+  { name: 'editing' as const, persist: useEditingStore.persist },
 ];
 
 let hydrationPromise: Promise<PersistenceHydrationResult> | null = null;

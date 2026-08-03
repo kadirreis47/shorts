@@ -4,6 +4,7 @@ import type {
   MediaScene,
   TimelineMarker,
   TimelineMetrics,
+  MediaTransition,
 } from './types';
 
 export interface TimelineBuildResult {
@@ -21,7 +22,7 @@ export function buildIntelligentTimeline(
   const scenes = plannedScenes.map((scene, index) => {
     const overlapBeforeMs = index === 0
       ? 0
-      : calculateOverlap(scene.transition.durationMs, settings.transitionOverlap, settings.fps);
+      : normalizeTransitionOverlap(scene.transition, calculateOverlap(scene.transition.durationMs, settings.transitionOverlap, settings.fps), scene.durationMs, settings.fps);
     const startMs = Math.max(0, cursorMs - overlapBeforeMs);
     const endMs = startMs + scene.durationMs;
     cursorMs = endMs;
@@ -65,7 +66,7 @@ function buildMarkers(
   return markers.sort((a, b) => a.timeMs - b.timeMs);
 }
 
-function calculateTimelineMetrics(scenes: MediaScene[], durationMs: number): TimelineMetrics {
+export function calculateTimelineMetrics(scenes: readonly MediaScene[], durationMs: number): TimelineMetrics {
   const durations = scenes.map((scene) => scene.durationMs);
   const totalTransitionMs = scenes.reduce((sum, scene) => sum + scene.overlapBeforeMs, 0);
   const averageSceneDurationMs = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
@@ -85,6 +86,12 @@ function calculateTimelineMetrics(scenes: MediaScene[], durationMs: number): Tim
 
 function calculateOverlap(transitionMs: number, ratio: number, fps: number): number {
   return snapMsToFrame(Math.round(transitionMs * ratio), fps);
+}
+
+export function normalizeTransitionOverlap(transition: MediaTransition, requestedOverlapMs: number, sceneDurationMs: number, fps: number): number {
+  if (transition.type === 'cut' || !['fade', 'crossfade', 'slide', 'zoom', 'blur'].includes(transition.type) || !Number.isFinite(transition.durationMs) || transition.durationMs <= 0 || !Number.isFinite(requestedOverlapMs) || requestedOverlapMs <= 0) return 0;
+  const safeDuration = Math.max(0, sceneDurationMs); const maximum = Math.min(transition.durationMs, safeDuration);
+  return Math.max(0, Math.min(maximum, snapMsToFrame(requestedOverlapMs, Math.max(1, fps))));
 }
 
 function marker(

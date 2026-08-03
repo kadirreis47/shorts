@@ -61,6 +61,7 @@ const CrossPlatformScheduler = lazyNamed(
 );
 const StoryboardGenerator = lazyNamed(() => import('@/views/StoryboardGenerator'), 'StoryboardGenerator');
 const AIDirector = lazyNamed(() => import('@/views/AIDirector'), 'AIDirector');
+const AIEditor = lazyNamed(() => import('@/views/AIEditor'), 'AIEditor');
 
 export interface ViewRenderContext {
   channels: Channel[];
@@ -119,6 +120,7 @@ export const VIEW_REGISTRY: Record<ViewKey, ViewRenderer> = {
   hooktester: () => <HookTester />,
   crossplatform: ({ channels }) => <CrossPlatformScheduler channels={channels} />,
   storyboard: ({ channels }) => <StoryboardGenerator channels={channels} />,
-  director: () => <AIDirector />,
+  director: ({ navigate }) => <AIDirector onNavigateEditor={() => navigate('editor')} />,
+  editor: () => <AIEditor />,
   settings: ({ channels }) => <Settings channels={channels} />,
 };

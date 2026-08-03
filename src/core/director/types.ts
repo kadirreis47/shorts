@@ -211,6 +211,9 @@ export interface DirectorAnalyzerDiagnostic {
 export interface DirectorReport {
   readonly projectId: string;
   readonly generatedAt: string;
+  readonly manifestBindingVersion: '1.0' | null;
+  readonly analyzedManifestFingerprint: string | null;
+  readonly manifestFingerprintVersion: number | null;
   readonly overallScore: number;
   readonly hookScore: number;
   readonly pacingScore: number;

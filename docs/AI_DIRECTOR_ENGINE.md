@@ -24,6 +24,12 @@ RenderManifest
 The application service owns the Media/Render adaptation and lifecycle events.
 The core engine depends only on Director domain contracts.
 
+## AI Editing handoff
+
+Director Report V2 remains immutable. Epic 7.2 consumes its `editDecisionPlan` and
+produces a separate versioned EditPlan. Unsupported copy decisions remain diagnostics;
+they are never silently applied to the Media/Render manifest.
+
 ## Scoring
 
 All scores and confidence values are normalized to 0–100. The immutable default
@@ -61,6 +67,13 @@ executive summary, dimension analyses, emotional arc, scene ranking, retention
 risk segments, moments and an edit decision plan. The executive summary is
 template-based. Edit decisions are advisory, include evidence/confidence and
 conflict metadata, and are never automatically applied to a RenderManifest.
+
+Manifest-backed reports carry `manifestBindingVersion`,
+`analyzedManifestFingerprint` and `manifestFingerprintVersion`. The binding uses the
+same canonical manifest fingerprint as AI Editing. A report remains viewable after the
+manifest changes, but it cannot create a new edit plan until Director analysis is run
+again. Restoring an exact prior manifest fingerprint through undo makes the matching
+report eligible again.
 
 ## Current limitations
 

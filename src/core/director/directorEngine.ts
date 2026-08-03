@@ -128,6 +128,9 @@ export function createDirectorEngine(options: DirectorEngineOptions = {}): Direc
       return {
         projectId: input.projectId,
         generatedAt: input.createdAt,
+        manifestBindingVersion: input.metadata.manifestBindingVersion === '1.0' ? '1.0' : null,
+        analyzedManifestFingerprint: typeof input.metadata.analyzedManifestFingerprint === 'string' ? input.metadata.analyzedManifestFingerprint : null,
+        manifestFingerprintVersion: typeof input.metadata.manifestFingerprintVersion === 'number' ? input.metadata.manifestFingerprintVersion : null,
         overallScore,
         hookScore: aggregateDimension(sceneScores, 'hook'),
         pacingScore: aggregateDimension(sceneScores, 'pacing'),

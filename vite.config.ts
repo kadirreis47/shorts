@@ -18,7 +18,9 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          return id.includes('/src/core/director/') ? 'director-engine' : undefined;
+          if (id.includes('/src/core/director/')) return 'director-engine';
+          if (id.includes('/src/core/editing/')) return 'editing-engine';
+          return undefined;
         },
       },
     },

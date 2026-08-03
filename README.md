@@ -1,4 +1,12 @@
-# ShortsFlow — Epic 7.1 AI Director Intelligence Suite
+# ShortsFlow — Epic 7.2 AI Editing Engine
+
+## AI Editing Engine
+
+Epic 7.2 compiles Director Report V2 decisions into a deterministic, versioned edit
+plan over the existing Media/Render manifest. Every change is previewed as a dry-run;
+the manifest changes only after explicit user approval. Timeline revisions support
+bounded undo/redo history, conflict checks and JSON export. B-roll entries are plans
+only and do not perform media search. Score impact is a heuristic estimate, not ML.
 
 ShortsFlow, YouTube Shorts üretim akışlarını React, TypeScript, Electron,
 Supabase ve FFmpeg üzerinde birleştiren masaüstü otomasyon stüdyosudur.
