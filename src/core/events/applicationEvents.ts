@@ -241,6 +241,16 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     waitingJobs: number;
     reason: string;
   };
+  'render:queue-paused': {
+    activeJobs: number;
+    queuedJobs: number;
+    pausedAt: string;
+  };
+  'render:queue-resumed': {
+    activeJobs: number;
+    queuedJobs: number;
+    resumedAt: string;
+  };
   'render:concurrency-changed': {
     previousConcurrency: number;
     concurrency: number;

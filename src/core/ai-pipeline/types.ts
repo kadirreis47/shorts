@@ -5,6 +5,14 @@ export type AIPipelineStatus =
   | 'failed'
   | 'cancelled';
 
+export interface AIRetryPolicy {
+  readonly maxAttempts: number;
+  readonly initialDelayMs?: number;
+  readonly backoffMultiplier?: number;
+  readonly maxDelayMs?: number;
+  readonly retryableCodes?: readonly string[];
+}
+
 export interface AIPipelineContext {
   readonly runId: string;
   readonly pipelineId: string;
@@ -18,6 +26,7 @@ export interface AIPipelineStepContext<TState extends object>
   readonly stepId: string;
   readonly stepIndex: number;
   readonly totalSteps: number;
+  readonly attempt: number;
   readonly state: Readonly<TState>;
 }
 
@@ -25,6 +34,7 @@ export interface AIPipelineStep<TState extends object> {
   readonly id: string;
   readonly title: string;
   readonly timeoutMs?: number;
+  readonly retry?: AIRetryPolicy;
   run(context: AIPipelineStepContext<TState>): Promise<Partial<TState> | void>;
 }
 
@@ -50,6 +60,17 @@ export interface AIPipelineRunResult<TState extends object> {
   readonly durationMs: number;
 }
 
+export interface AIPipelineRunSnapshot {
+  readonly runId: string;
+  readonly pipelineId: string;
+  readonly title: string;
+  readonly currentStepId: string | null;
+  readonly currentStepIndex: number;
+  readonly totalSteps: number;
+  readonly attempt: number;
+  readonly startedAt: string;
+}
+
 export interface AIPipelineRunner {
   run<TState extends object>(
     definition: AIPipelineDefinition<TState>,
@@ -58,4 +79,5 @@ export interface AIPipelineRunner {
   cancel(runId: string): boolean;
   cancelAll(): void;
   getActiveRunIds(): readonly string[];
+  getActiveRuns(): readonly AIPipelineRunSnapshot[];
 }

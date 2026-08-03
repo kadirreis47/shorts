@@ -6,9 +6,20 @@ import type {
   AIPipelineRunOptions,
   AIPipelineRunResult,
   AIPipelineRunner,
+  AIPipelineRunSnapshot,
+  AIPipelineStep,
+  AIRetryPolicy,
 } from './types';
 
 const DEFAULT_STEP_TIMEOUT_MS = 60_000;
+const DEFAULT_RETRY_DELAY_MS = 750;
+const DEFAULT_BACKOFF_MULTIPLIER = 2;
+const DEFAULT_MAX_RETRY_DELAY_MS = 8_000;
+
+interface ActiveRun {
+  controller: AbortController;
+  snapshot: AIPipelineRunSnapshot;
+}
 
 function createRunId(pipelineId: string): string {
   const randomPart = Math.random().toString(36).slice(2, 10);
@@ -20,7 +31,7 @@ function createAbortError(pipelineId: string, runId: string): AppError {
     code: 'UNKNOWN_ERROR',
     userMessage: 'AI işlemi iptal edildi.',
     operation: `ai-pipeline:${pipelineId}:${runId}`,
-    retryable: true,
+    retryable: false,
   });
 }
 
@@ -30,10 +41,119 @@ function throwIfAborted(signal: AbortSignal, pipelineId: string, runId: string) 
   }
 }
 
+function normalizeRetryPolicy(policy?: AIRetryPolicy): Required<AIRetryPolicy> {
+  return {
+    maxAttempts: Math.max(1, Math.floor(policy?.maxAttempts ?? 1)),
+    initialDelayMs: Math.max(0, policy?.initialDelayMs ?? DEFAULT_RETRY_DELAY_MS),
+    backoffMultiplier: Math.max(1, policy?.backoffMultiplier ?? DEFAULT_BACKOFF_MULTIPLIER),
+    maxDelayMs: Math.max(0, policy?.maxDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS),
+    retryableCodes: policy?.retryableCodes ?? ['NETWORK_ERROR', 'TIMEOUT', 'SERVICE_ERROR'],
+  };
+}
+
+function calculateRetryDelay(policy: Required<AIRetryPolicy>, failedAttempt: number): number {
+  const calculated = policy.initialDelayMs * Math.pow(policy.backoffMultiplier, failedAttempt - 1);
+  return Math.min(policy.maxDelayMs, Math.round(calculated));
+}
+
+function waitForDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (delayMs <= 0) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      reject(new Error('aborted'));
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function canRetry(error: AppError, policy: Required<AIRetryPolicy>, attempt: number): boolean {
+  return (
+    attempt < policy.maxAttempts &&
+    error.retryable &&
+    policy.retryableCodes.includes(error.code)
+  );
+}
+
+async function executeStep<TState extends object>(
+  step: AIPipelineStep<TState>,
+  context: {
+    runId: string;
+    pipelineId: string;
+    startedAt: string;
+    signal: AbortSignal;
+    metadata: Readonly<Record<string, unknown>>;
+    stepIndex: number;
+    totalSteps: number;
+    state: Readonly<TState>;
+  },
+  eventBus?: EventBus<ApplicationEventMap>,
+): Promise<Partial<TState> | void> {
+  const retryPolicy = normalizeRetryPolicy(step.retry);
+
+  for (let attempt = 1; attempt <= retryPolicy.maxAttempts; attempt += 1) {
+    throwIfAborted(context.signal, context.pipelineId, context.runId);
+
+    try {
+      return await withTimeout(
+        step.run({
+          ...context,
+          stepId: step.id,
+          attempt,
+        }),
+        step.timeoutMs ?? DEFAULT_STEP_TIMEOUT_MS,
+        `AI pipeline adımı zaman aşımına uğradı: ${step.title}`,
+      );
+    } catch (error) {
+      throwIfAborted(context.signal, context.pipelineId, context.runId);
+
+      const appError = normalizeAppError(error, {
+        operation: `ai-pipeline:${context.pipelineId}:${step.id}`,
+        fallbackMessage: `AI iş akışı adımı tamamlanamadı: ${step.title}`,
+      });
+
+      if (!canRetry(appError, retryPolicy, attempt)) {
+        throw appError;
+      }
+
+      const delayMs = calculateRetryDelay(retryPolicy, attempt);
+      await eventBus?.emit('ai:pipeline-step-retrying', {
+        runId: context.runId,
+        pipelineId: context.pipelineId,
+        stepId: step.id,
+        stepIndex: context.stepIndex,
+        attempt,
+        nextAttempt: attempt + 1,
+        maxAttempts: retryPolicy.maxAttempts,
+        delayMs,
+        code: appError.code,
+        message: appError.userMessage,
+        retryingAt: new Date().toISOString(),
+      });
+
+      await waitForDelay(delayMs, context.signal);
+    }
+  }
+
+  throw new AppError('AI adımı beklenmeyen şekilde sona erdi.', {
+    code: 'UNKNOWN_ERROR',
+    userMessage: 'AI işlemi tamamlanamadı.',
+    operation: `ai-pipeline:${context.pipelineId}:${step.id}`,
+    retryable: false,
+  });
+}
+
 export function createAIPipelineRunner(
   eventBus?: EventBus<ApplicationEventMap>,
 ): AIPipelineRunner {
-  const activeRuns = new Map<string, AbortController>();
+  const activeRuns = new Map<string, ActiveRun>();
 
   return {
     async run<TState extends object>(
@@ -54,10 +174,23 @@ export function createAIPipelineRunner(
       const startedTimestamp = Date.now();
       const startedAt = new Date(startedTimestamp).toISOString();
       const metadata = options.metadata ?? {};
+      const activeRun: ActiveRun = {
+        controller,
+        snapshot: {
+          runId,
+          pipelineId: definition.id,
+          title: definition.title,
+          currentStepId: null,
+          currentStepIndex: -1,
+          totalSteps: definition.steps.length,
+          attempt: 0,
+          startedAt,
+        },
+      };
 
       const abortFromExternalSignal = () => controller.abort();
       options.signal?.addEventListener('abort', abortFromExternalSignal, { once: true });
-      activeRuns.set(runId, controller);
+      activeRuns.set(runId, activeRun);
 
       let state = definition.createInitialState();
 
@@ -74,6 +207,13 @@ export function createAIPipelineRunner(
           const step = definition.steps[stepIndex];
           throwIfAborted(controller.signal, definition.id, runId);
 
+          activeRun.snapshot = {
+            ...activeRun.snapshot,
+            currentStepId: step.id,
+            currentStepIndex: stepIndex,
+            attempt: 1,
+          };
+
           const stepStartedTimestamp = Date.now();
           await eventBus?.emit('ai:pipeline-step-started', {
             runId,
@@ -85,20 +225,19 @@ export function createAIPipelineRunner(
             startedAt: new Date(stepStartedTimestamp).toISOString(),
           });
 
-          const patch = await withTimeout(
-            step.run({
+          const patch = await executeStep(
+            step,
+            {
               runId,
               pipelineId: definition.id,
               startedAt,
               signal: controller.signal,
               metadata,
-              stepId: step.id,
               stepIndex,
               totalSteps: definition.steps.length,
               state,
-            }),
-            step.timeoutMs ?? DEFAULT_STEP_TIMEOUT_MS,
-            `AI pipeline adımı zaman aşımına uğradı: ${step.title}`,
+            },
+            eventBus,
           );
 
           throwIfAborted(controller.signal, definition.id, runId);
@@ -171,18 +310,22 @@ export function createAIPipelineRunner(
     },
 
     cancel(runId: string): boolean {
-      const controller = activeRuns.get(runId);
-      if (!controller) return false;
-      controller.abort();
+      const activeRun = activeRuns.get(runId);
+      if (!activeRun) return false;
+      activeRun.controller.abort();
       return true;
     },
 
     cancelAll(): void {
-      activeRuns.forEach((controller) => controller.abort());
+      activeRuns.forEach(({ controller }) => controller.abort());
     },
 
     getActiveRunIds(): readonly string[] {
       return Array.from(activeRuns.keys());
+    },
+
+    getActiveRuns(): readonly AIPipelineRunSnapshot[] {
+      return Array.from(activeRuns.values(), ({ snapshot }) => ({ ...snapshot }));
     },
   };
 }

@@ -15,6 +15,9 @@ function registerFFmpegHandlers() {
   });
 
   ipcMain.handle('ffmpeg:run', async (event, request) => runFFmpeg(event.sender, request));
+  ipcMain.handle('ffmpeg:analyze-output', async (_event, targetPath) =>
+    analyzeOutput(targetPath),
+  );
   ipcMain.handle('ffmpeg:segment-path', async (_event, fingerprint) =>
     getSegmentPath(fingerprint),
   );
@@ -95,6 +98,83 @@ async function detectNvidiaGpus() {
   } catch { return []; }
 }
 function numericOrNull(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
+
+async function analyzeOutput(targetPath) {
+  if (!targetPath || typeof targetPath !== 'string') {
+    throw new Error('Analiz edilecek çıktı yolu geçersiz.');
+  }
+
+  const executable = resolveFFprobeExecutable();
+  const output = await capture(executable, [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,codec_long_name,profile,width,height,pix_fmt,r_frame_rate,bit_rate,duration,sample_rate,channels,channel_layout',
+    '-of',
+    'json',
+    targetPath,
+  ]);
+
+  const parsed = JSON.parse(output);
+  const streams = Array.isArray(parsed.streams) ? parsed.streams : [];
+  const video = streams.find((stream) => stream.codec_type === 'video') ?? null;
+  const audio = streams.find((stream) => stream.codec_type === 'audio') ?? null;
+  const format = parsed.format ?? {};
+  const sizeBytes = Number(format.size) || 0;
+
+  return {
+    outputPath: targetPath,
+    containerFormat: format.format_name ?? null,
+    durationSeconds: numericOrNull(format.duration),
+    sizeBytes,
+    overallBitRate: numericOrNull(format.bit_rate),
+    video: video ? normalizeStream(video) : null,
+    audio: audio ? normalizeStream(audio) : null,
+    warnings: [],
+    qualityScore: 0,
+    passed: false,
+    analyzedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeStream(stream) {
+  return {
+    codecName: stream.codec_name ?? null,
+    codecLongName: stream.codec_long_name ?? null,
+    profile: stream.profile ?? null,
+    width: numericOrNull(stream.width),
+    height: numericOrNull(stream.height),
+    pixelFormat: stream.pix_fmt ?? null,
+    frameRate: parseFrameRate(stream.r_frame_rate),
+    bitRate: numericOrNull(stream.bit_rate),
+    durationSeconds: numericOrNull(stream.duration),
+    sampleRate: numericOrNull(stream.sample_rate),
+    channels: numericOrNull(stream.channels),
+    channelLayout: stream.channel_layout ?? null,
+  };
+}
+
+function parseFrameRate(value) {
+  if (!value || typeof value !== 'string') return null;
+  const [numerator, denominator] = value.split('/').map(Number);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
+    return null;
+  }
+  return numerator / denominator;
+}
+
+function resolveFFprobeExecutable() {
+  const explicit = process.env.SHORTSFLOW_FFPROBE_PATH;
+  if (explicit) return explicit;
+
+  const ffmpeg = resolveExecutable();
+  const directory = path.dirname(ffmpeg);
+  const extension = process.platform === 'win32' ? '.exe' : '';
+  const candidate = path.join(directory, `ffprobe${extension}`);
+
+  if (fs.existsSync(candidate)) return candidate;
+  return 'ffprobe';
+}
 
 async function runFFmpeg(webContents, request) {
   const capabilities = await detectCapabilities();

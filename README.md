@@ -1,6 +1,19 @@
-ShortsFlow Sprint 4 Phase 2E Patch
+# ShortsFlow Sprint 6.7.0 — AI Pipeline Foundation
 
-Fixes Vite CLI path discovery on Windows by walking upward from the exported Vite entry until the real vite package root is found.
+Bu paket proje kök dizinine çıkarılmalıdır.
 
-Copy the scripts folder over the project and run:
-  npm run electron:dev
+## İçerik
+- Type-safe AI pipeline tanımları
+- Sıralı step orchestration
+- Step bazlı timeout
+- AbortSignal ve aktif run iptali
+- Immutable step state + kontrollü state patch birleştirme
+- Lifecycle/progress eventleri
+- DI container kaydı
+- Dependency reset sırasında çalışan pipeline'ların iptali
+
+## Test
+```powershell
+npm run typecheck
+npm run build
+```

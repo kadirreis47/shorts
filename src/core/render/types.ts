@@ -118,6 +118,10 @@ export interface RenderEngine {
   registerAdapter(adapter: RenderAdapter): void;
   getConcurrency(): number;
   setConcurrency(concurrency: number): number;
+  pauseQueue(): void;
+  resumeQueue(): void;
+  isQueuePaused(): boolean;
+  retry(jobId: string): Promise<RenderJobSnapshot>;
   metrics(): import('./renderMetrics').RenderPerformanceSnapshot;
   resetMetrics(): void;
   dispose(): void;
