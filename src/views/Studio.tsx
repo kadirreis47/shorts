@@ -23,9 +23,14 @@ import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, saveStudioDraft, type StudioDraft, type StudioStep } from '@/lib/studioDraft';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
+import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
+import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
+import { useProjectStore } from '@/store';
+import { createStudioProjectDraft, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
 
 interface StudioProps {
   channels: Channel[];
+  onNavigateDirector: () => void;
 }
 
 type Step = StudioStep;
@@ -73,13 +78,16 @@ const MUSIC_TRACKS: { id: string; name: string; url: string; mood: string }[] = 
   { id: 'corporate', name: 'Corporate', url: 'https://cdn.pixabay.com/audio/2023/06/19/audio_3f8ee2a0a7.mp3', mood: 'Professional, clean' },
 ];
 
-export function Studio({ channels }: StudioProps) {
+export function Studio({ channels, onNavigateDirector }: StudioProps) {
   const { t } = useI18n();
   const aiService = useMemo(
     () => applicationContainer.resolve(dependencyTokens.aiApplicationService),
     [],
   );
   const [step, setStep] = useState<Step>('topic');
+  const projectIdentity = useRef(createStudioProjectIdentity());
+  const [directorProjectId, setDirectorProjectId] = useState(projectIdentity.current.current());
+  const currentProject = useProjectStore((state) => state.currentProject);
   const [channelId, setChannelId] = useState(channels[0]?.id ?? '');
   const [topic, setTopic] = useState('');
   const [niche, setNiche] = useState('');
@@ -160,7 +168,16 @@ export function Studio({ channels }: StudioProps) {
   const channel = channels.find((c) => c.id === channelId);
 
   useEffect(() => {
-    const draft = loadStudioDraft();
+    const decision = resolveStudioDraftRestore({
+      currentProjectId: currentProject?.id,
+      globalDraft: loadStudioDraft(),
+      projectDrafts: useProjectStore.getState().drafts,
+      fallbackProjectId: projectIdentity.current.current(),
+    });
+    const { draft } = decision;
+    const projectId = resolveStudioProjectId(currentProject?.id, decision.projectId);
+    activateStudioProject(projectIdentity.current, projectId);
+    setDirectorProjectId(projectId);
     if (draft) {
       setStep(draft.step);
       setChannelId(draft.channelId || channels[0]?.id || '');
@@ -197,13 +214,23 @@ export function Studio({ channels }: StudioProps) {
       setDraftSavedAt(draft.savedAt);
       setDraftStatus('saved');
     } else {
+      setStep('topic');
+      setChannelId(channels[0]?.id ?? '');
+      setTopic('');
+      setTitle('');
+      setHook('');
+      setScript('');
+      setCta('');
+      setScenes([]);
+      setDraftSavedAt('');
       setDraftStatus('empty');
     }
     draftHydratedRef.current = true;
-  }, [channels]);
+  }, [channels, currentProject?.id]);
 
   const draft = useMemo<StudioDraft>(() => ({
     version: 1,
+    projectId: directorProjectId,
     savedAt: new Date().toISOString(),
     step,
     channelId,
@@ -237,7 +264,7 @@ export function Studio({ channels }: StudioProps) {
     voiceoverMode,
     selectedVoice,
     targetLanguage,
-  }), [step, channelId, topic, niche, tone, duration, title, hook, script, cta, scenes,
+  }), [directorProjectId, step, channelId, topic, niche, tone, duration, title, hook, script, cta, scenes,
     captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicVolume, visualMode,
     selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId,
     watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor,
@@ -253,7 +280,9 @@ export function Studio({ channels }: StudioProps) {
     setDraftStatus('saving');
     const timer = window.setTimeout(() => {
       const savedAt = new Date().toISOString();
-      saveStudioDraft({ ...draft, savedAt });
+      const savedDraft = { ...draft, savedAt };
+      saveStudioDraft(savedDraft);
+      useProjectStore.getState().upsertDraft(createStudioProjectDraft(savedDraft));
       setDraftSavedAt(savedAt);
       setDraftStatus('saved');
     }, 650);
@@ -262,6 +291,8 @@ export function Studio({ channels }: StudioProps) {
 
   function handleClearDraft() {
     clearStudioDraft();
+    const projectId = startNewStudioProject(projectIdentity.current);
+    setDirectorProjectId(projectId);
     setStep('topic');
     setTopic('');
     setTitle('');
@@ -1535,7 +1566,7 @@ export function Studio({ channels }: StudioProps) {
               )}
               <div className="flex justify-between gap-2">
                 <Button variant="secondary" onClick={() => setStep('voice')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
-                <Button onClick={handleRender}><Film size={16} /> {t('studio.renderVideo')}</Button>
+                <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes } }} /><Button onClick={handleRender}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
               </div>
             </div>
           )}

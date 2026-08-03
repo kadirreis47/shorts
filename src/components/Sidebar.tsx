@@ -51,7 +51,8 @@ export type ViewKey =
   | 'pillars'
   | 'hooktester'
   | 'crossplatform'
-  | 'storyboard';
+  | 'storyboard'
+  | 'director';
 
 interface SidebarProps {
   current: ViewKey;

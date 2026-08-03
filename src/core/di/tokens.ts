@@ -19,6 +19,7 @@ import type {
   RenderJobMonitor,
   ServiceExecutor,
   DirectorApplicationService,
+  DirectorMonitor,
 } from '@/services';
 import type { DependencyToken } from './types';
 
@@ -31,6 +32,8 @@ export const dependencyTokens = {
     createToken<DirectorEngine>('DirectorEngine'),
   directorApplicationService:
     createToken<DirectorApplicationService>('DirectorApplicationService'),
+  directorMonitor:
+    createToken<DirectorMonitor>('DirectorMonitor'),
   persistenceManager:
     createToken<PersistenceManager>('PersistenceManager'),
   eventBus:

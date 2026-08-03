@@ -145,6 +145,7 @@ export interface RenderManifest {
 }
 
 export interface CreateMediaProjectInput {
+  projectId?: string;
   title: string;
   scenes: Scene[];
   tags?: string[];

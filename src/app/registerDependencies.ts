@@ -22,6 +22,7 @@ import {
   createRenderJobMonitor,
   createServiceExecutor,
   createDirectorApplicationService,
+  createDirectorMonitor,
 } from '@/services';
 
 let dependenciesRegistered = false;
@@ -55,6 +56,11 @@ export function registerApplicationDependencies() {
       container.resolve(dependencyTokens.directorEngine),
       container.resolve(dependencyTokens.eventBus),
     ),
+  );
+
+  applicationContainer.registerSingleton(
+    dependencyTokens.directorMonitor,
+    (container) => createDirectorMonitor(container.resolve(dependencyTokens.eventBus)),
   );
 
   applicationContainer.registerSingleton(
@@ -148,12 +154,16 @@ export function registerApplicationDependencies() {
 
   applicationContainer.resolve(dependencyTokens.aiPipelineMonitor).start();
   applicationContainer.resolve(dependencyTokens.renderJobMonitor).start();
+  applicationContainer.resolve(dependencyTokens.directorMonitor).start();
 
   dependenciesRegistered = true;
   return applicationContainer;
 }
 
 export function resetApplicationDependencies() {
+  if (applicationContainer.has(dependencyTokens.directorMonitor)) {
+    applicationContainer.resolve(dependencyTokens.directorMonitor).stop();
+  }
   if (applicationContainer.has(dependencyTokens.renderJobMonitor)) {
     applicationContainer.resolve(dependencyTokens.renderJobMonitor).stop();
   }

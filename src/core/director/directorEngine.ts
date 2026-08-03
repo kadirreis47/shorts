@@ -8,10 +8,18 @@ import {
 } from './scoring';
 import {
   createHookAnalyzer,
+  createEmotionAnalyzer,
+  createClarityAnalyzer,
+  createContinuityAnalyzer,
   createPaceAnalyzer,
   createRetentionHeuristicAnalyzer,
   createVisualPotentialAnalyzer,
 } from './analyzers';
+import { analyzeEmotionalArc, analyzeClarity, analyzeContinuity } from './analyzers';
+import { analyzeHookIntelligence } from './hookIntelligence';
+import { rankDirectorScenes } from './sceneRanking';
+import { buildHeuristicRetentionRiskMap } from './retentionRiskMap';
+import { createEditDecisionPlan } from './editDecisionPlanner';
 import type {
   DirectorAnalyzerDiagnostic,
   DirectorDecision,
@@ -32,6 +40,9 @@ export function createDirectorEngine(options: DirectorEngineOptions = {}): Direc
     createHookAnalyzer(),
     createPaceAnalyzer(),
     createVisualPotentialAnalyzer(),
+    createEmotionAnalyzer(),
+    createClarityAnalyzer(),
+    createContinuityAnalyzer(),
     createRetentionHeuristicAnalyzer(),
   ];
   const weights = normalizeWeights(options.weights);
@@ -87,6 +98,8 @@ export function createDirectorEngine(options: DirectorEngineOptions = {}): Direc
       }
 
       throwIfDirectorAborted(signal);
+      const hookIntelligence = analyzeHookIntelligence(input);
+      recommendations.push(...hookIntelligence.recommendations);
       const uniqueRecommendations = deduplicateRecommendations(recommendations);
       const sceneScores = input.scenes.map((scene) => buildSceneScore(
         scene,
@@ -100,11 +113,22 @@ export function createDirectorEngine(options: DirectorEngineOptions = {}): Direc
         .slice(0, 3).map((scene) => scene.sceneId);
       const strongestSceneIds = [...ranked].reverse().filter((scene) => scene.overall >= strongThreshold)
         .slice(0, 3).map((scene) => scene.sceneId);
+      const emotionalArc = analyzeEmotionalArc(input);
+      const clarityAnalysis = analyzeClarity(input);
+      const continuityAnalysis = analyzeContinuity(input);
+      const sceneRanking = rankDirectorScenes(sceneScores);
+      const retentionRiskMap = buildHeuristicRetentionRiskMap(input, sceneScores, hookIntelligence, emotionalArc);
+      const editDecisionPlan = createEditDecisionPlan(input, sceneScores, sceneRanking, hookIntelligence);
+      const dimensionScores = Object.fromEntries(DIRECTOR_SCORE_DIMENSIONS.map((dimension) => [
+        dimension, aggregateDimension(sceneScores, dimension),
+      ])) as Record<DirectorScoreDimension, number>;
+      const overallScore = normalizeScore(average(sceneScores.map((scene) => scene.overall), 0));
+      const highImpactRecommendations = uniqueRecommendations.filter((item) => item.priority === 'critical' || item.priority === 'high');
 
       return {
         projectId: input.projectId,
         generatedAt: input.createdAt,
-        overallScore: normalizeScore(average(sceneScores.map((scene) => scene.overall), 0)),
+        overallScore,
         hookScore: aggregateDimension(sceneScores, 'hook'),
         pacingScore: aggregateDimension(sceneScores, 'pacing'),
         visualScore: aggregateDimension(sceneScores, 'visualPotential'),
@@ -117,9 +141,37 @@ export function createDirectorEngine(options: DirectorEngineOptions = {}): Direc
         decisions: createDecisions(sceneScores),
         analyzerDiagnostics: diagnostics,
         deterministicVersion,
+        reportVersion: '2.0',
+        executiveSummary: createExecutiveSummary(overallScore, hookIntelligence.overallHookScore, retentionRiskMap),
+        dimensionScores,
+        hookIntelligence,
+        emotionalArc,
+        clarityAnalysis,
+        pacingAnalysis: { score: dimensionScores.pacing, slowSceneIds: sceneScores.filter((scene) => scene.dimensions.pacing.score < 50).map((scene) => scene.sceneId) },
+        visualAnalysis: { score: dimensionScores.visualPotential, lowPotentialSceneIds: sceneScores.filter((scene) => scene.dimensions.visualPotential.score < 50).map((scene) => scene.sceneId) },
+        continuityAnalysis,
+        retentionRiskMap,
+        sceneRanking,
+        editDecisionPlan,
+        strongestMoments: sceneRanking.strongestSceneIds.map((sceneId) => moment(sceneScores, sceneId, 'Güçlü sahne')),
+        weakestMoments: sceneRanking.weakestSceneIds.map((sceneId) => moment(sceneScores, sceneId, 'Geliştirme adayı')),
+        criticalIssues: uniqueRecommendations.filter((item) => item.priority === 'critical').map((item) => item.title),
+        quickWins: uniqueRecommendations.filter((item) => item.priority === 'medium' && item.confidence >= 75).slice(0, 5),
+        highImpactRecommendations,
       };
     },
   };
+}
+
+function createExecutiveSummary(overall: number, hook: number, risks: readonly { riskLevel: string }[]): string {
+  const level = overall >= 75 ? 'güçlü' : overall >= 55 ? 'dengeli' : 'geliştirilmeli';
+  const critical = risks.filter((risk) => risk.riskLevel === 'critical').length;
+  return `Heuristic Director değerlendirmesi ${level}: genel skor ${overall}, hook skoru ${hook}. ${critical} kritik retention risk segmenti belirlendi.`;
+}
+
+function moment(scores: readonly DirectorSceneScore[], sceneId: string, summary: string) {
+  const scene = scores.find((item) => item.sceneId === sceneId);
+  return { sceneId, score: scene?.overall ?? 0, summary };
 }
 
 interface SceneAccumulator {

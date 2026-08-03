@@ -4,6 +4,7 @@ import { useAppStore, useChannelStore, useUIStore } from '@/store';
 import { registerApplicationDependencies } from './registerDependencies';
 import { attachRenderQueueInspector } from '@/services/renderQueueInspectorMonitor';
 import { attachRenderRecoveryCenter } from '@/services/renderRecoveryCenterMonitor';
+import { configureDirectorAnalysisController } from '@/services/directorAnalysisController';
 
 let bootstrapPromise: Promise<void> | null = null;
 let detachRenderQueueInspector: (() => void) | null = null;
@@ -25,6 +26,10 @@ async function runBootstrap() {
   const eventBus = applicationContainer.resolve(dependencyTokens.eventBus);
   const renderEngine = applicationContainer.resolve(
     dependencyTokens.renderEngine,
+  );
+  configureDirectorAnalysisController(
+    applicationContainer.resolve(dependencyTokens.directorApplicationService),
+    applicationContainer.resolve(dependencyTokens.mediaEngine),
   );
 
   detachRenderQueueInspector?.();

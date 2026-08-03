@@ -2,6 +2,23 @@
 
 Bu projedeki önemli değişiklikler bu dosyada kaydedilir.
 
+## [7.1.0] - 2026-08-03
+
+### Added
+
+- Deterministik emotion, clarity ve continuity analyzer'ları.
+- Advanced Hook Intelligence, stabil scene ranking ve heuristic retention risk map.
+- Çakışma çözümlü, öneri niteliğinde Edit Decision Plan.
+- Geriye uyumlu alanları koruyan versioned Director Report V2.
+- Boyut sınırlı Zustand report store, Event Bus monitor ve yeni lifecycle eventleri.
+- Lazy-loaded AI Director rapor ekranı, JSON export ve Studio analiz aksiyonu.
+- Epic 7.1 için analyzer, planning, report ve store/monitor test paketleri.
+
+### Notes
+
+- Risk skorları heuristic göstergelerdir; ML/LLM tahmini değildir.
+- Edit kararları RenderManifest'e otomatik uygulanmaz.
+
 ## [7.0.0] - 2026-08-03
 
 ### Added

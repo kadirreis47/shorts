@@ -23,7 +23,7 @@ export function createMediaEngine(
       const timelinePlan = buildIntelligentTimeline(plannedScenes, settings);
       const scenes = timelinePlan.scenes;
       const now = new Date().toISOString();
-      const projectId = createId('media-project');
+      const projectId = input.projectId?.trim() || createId('media-project');
 
       await eventBus.emit('media:project-created', {
         projectId, title: input.title, sceneCount: scenes.length, createdAt: now,

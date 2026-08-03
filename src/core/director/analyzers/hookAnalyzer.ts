@@ -1,9 +1,10 @@
 import { dimensionScore, recommendation } from '../scoring';
 import { throwIfDirectorAborted } from '../analyzerUtils';
 import type { DirectorAnalyzer } from '../types';
+import { includesPhrase } from '../textAnalysis';
 
-const CURIOSITY_PATTERN = /\b(sır|neden|nasıl|şaşırt|inanılmaz|kimse|asla|gerçek|secret|why|how|surprising|nobody|never)\b/i;
-const CLAIM_PATTERN = /[?!]|\b(en iyi|en kötü|kanıt|gerçek|mutlaka|best|worst|proven|must)\b/i;
+const CURIOSITY_PHRASES = ['sır', 'neden', 'nasıl', 'şaşırt', 'inanılmaz', 'kimse', 'asla', 'gerçek', 'secret', 'why', 'how', 'surprising', 'nobody', 'never'];
+const CLAIM_PHRASES = ['en iyi', 'en kötü', 'kanıt', 'gerçek', 'mutlaka', 'best', 'worst', 'proven', 'must'];
 
 export function createHookAnalyzer(): DirectorAnalyzer {
   return {
@@ -18,8 +19,8 @@ export function createHookAnalyzer(): DirectorAnalyzer {
       let score = 35;
       if (wordCount >= 4 && wordCount <= 18) { score += 16; reasons.push('Hook metni kısa ve hızlı tüketilebilir.'); }
       else if (wordCount > 28) { score -= 12; reasons.push('Hook metni ilk saniyeler için uzun.'); }
-      if (CLAIM_PATTERN.test(hook.text)) { score += 15; reasons.push('Soru veya güçlü iddia kullanılıyor.'); }
-      if (CURIOSITY_PATTERN.test(hook.text)) { score += 18; reasons.push('Merak boşluğu oluşturan ifade mevcut.'); }
+      if (/[?!]/u.test(hook.text) || includesPhrase(hook.text, CLAIM_PHRASES)) { score += 15; reasons.push('Soru veya güçlü iddia kullanılıyor.'); }
+      if (includesPhrase(hook.text, CURIOSITY_PHRASES)) { score += 18; reasons.push('Merak boşluğu oluşturan ifade mevcut.'); }
       score += hook.intensity * 12;
       if (hook.cameraMotion !== 'none') { score += 8; reasons.push('İlk sahnede kamera hareketi var.'); }
       if (hook.firstVisualChangeMs !== null && hook.firstVisualChangeMs <= 1_500) {

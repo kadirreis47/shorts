@@ -1,19 +1,20 @@
-# ShortsFlow — Sprint 6.9.25 Quality Gates
+# ShortsFlow — Epic 7.1 AI Director Intelligence Suite
 
 ShortsFlow, YouTube Shorts üretim akışlarını React, TypeScript, Electron,
 Supabase ve FFmpeg üzerinde birleştiren masaüstü otomasyon stüdyosudur.
 
 ## AI Director Engine
 
-Sprint 7.0.0, render manifest ve media timeline verilerini deterministic
-heuristic analyzer'larla değerlendiren type-safe AI Director foundation'ını
-ekler. Hook, tempo, görsel potansiyel, hareket ve retention risk skorları
-üretir; bu sürüm LLM, harici AI servisi veya gerçek ML tahmini kullanmaz.
+Epic 7.1; emotion, clarity, continuity ve gelişmiş hook analizini scene ranking,
+heuristic retention risk map ve uygulanabilir Edit Decision Plan ile birleştirir.
+Versioned Director Report V2, Zustand store ve lazy-loaded AI Director ekranı
+üzerinden görüntülenebilir ve JSON olarak dışa aktarılabilir. Sistem tamamen
+deterministiktir; LLM, harici AI servisi veya gerçek ML/retention tahmini kullanmaz.
 
 ## Mevcut durum
 
-Sprint 6.9.25 kalite kapıları korunurken Sprint 7.0.0 AI Director domain,
-analyzer engine, application service, Event Bus ve DI entegrasyonunu ekler.
+Sprint 6.9.25 kalite kapıları ve Sprint 7.0.0 sözleşmeleri korunurken Epic 7.1
+Director Report V2, report store/monitor, proje analizi aksiyonu ve rapor UI'ını ekler.
 GitHub Actions typecheck, lint, test, build ve FFmpeg smoke kontrollerini çalıştırır.
 
 ## Geliştirme

@@ -18,8 +18,9 @@ describe('DirectorApplicationService', () => {
     const report = await service.analyzeInput(directorInput());
     expect(report.projectId).toBe('project-director');
     expect(started).toHaveBeenCalledOnce();
-    expect(analyzerCompleted).toHaveBeenCalledTimes(4);
-    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ projectId: report.projectId }));
+    expect(analyzerCompleted).toHaveBeenCalledTimes(7);
+    const recommendationCount = new Set(report.sceneScores.flatMap((scene) => scene.recommendations.map((item) => item.id))).size;
+    expect(completed).toHaveBeenCalledWith(expect.objectContaining({ projectId: report.projectId, recommendationCount }));
   });
 
   it('abort hatasında failed lifecycle eventi yayınlar', async () => {

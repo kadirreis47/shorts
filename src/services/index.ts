@@ -24,6 +24,7 @@ export * from '@/services/aiPipelineMonitor';
 export * from '@/services/mediaEngineService';
 
 export * from '@/services/renderJobMonitor';
+export * from '@/services/directorMonitor';
 
 export { createDirectorApplicationService, createDirectorInput } from './directorApplicationService';
 export type {

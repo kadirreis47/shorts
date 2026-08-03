@@ -1,6 +1,7 @@
 import type { DirectorEngine, DirectorInput, DirectorReport, DirectorSceneInput } from '@/core/director';
 import type { ApplicationEventMap, EventBus } from '@/core/events';
 import type { RenderManifest } from '@/core/media';
+import { earliestSceneRelativeOffset, toSceneRelativeOffset } from './sceneRelativeTiming';
 
 export interface DirectorApplicationOptions {
   readonly signal?: AbortSignal;
@@ -32,6 +33,7 @@ export function createDirectorInput(manifest: RenderManifest): DirectorInput {
     intensity: scene.intensity,
     cameraMotion: scene.cameraMotion,
     transition: scene.transition.type,
+    assetIds: scene.assetIds,
     assetTypes: scene.assetIds.flatMap((assetId) => {
       const asset = assetsById.get(assetId);
       return asset ? [asset.type] : [];
@@ -42,6 +44,18 @@ export function createDirectorInput(manifest: RenderManifest): DirectorInput {
         : scene.transition.durationMs > 0
           ? Math.min(scene.transition.durationMs, scene.durationMs)
           : null,
+    firstCutMs: scene.transition.type === 'cut'
+      ? toSceneRelativeOffset({ startMs: scene.startMs }, scene)
+      : null,
+    firstSubtitleMs: earliestSceneRelativeOffset(
+      manifest.subtitles.cues.filter((cue) => cue.sceneId === scene.id), scene,
+    ),
+    firstAudioCueMs: earliestSceneRelativeOffset(
+      [...manifest.audio.voice, ...manifest.audio.music, ...manifest.audio.sfx],
+      scene,
+    ),
+    audioSignals: (['voice', 'music', 'sfx'] as const).filter((type) =>
+      manifest.audio[type].some((segment) => segment.sceneId === scene.id || (segment.startMs < scene.endMs && segment.endMs > scene.startMs))),
   }));
   return {
     projectId: manifest.projectId,
@@ -85,12 +99,16 @@ export function createDirectorApplicationService(
           });
         },
       });
+      await eventBus.emit('director:scene-ranked', { projectId: input.projectId, sceneCount: report.sceneRanking.scenes.length, rankedAt: new Date().toISOString() });
+      await eventBus.emit('director:retention-map-completed', { projectId: input.projectId, segmentCount: report.retentionRiskMap.length, completedAt: new Date().toISOString() });
+      await eventBus.emit('director:edit-plan-created', { projectId: input.projectId, decisionCount: report.editDecisionPlan.decisions.length, createdAt: new Date().toISOString() });
       await eventBus.emit('director:analysis-completed', {
         projectId: input.projectId,
         overallScore: report.overallScore,
-        recommendationCount: report.highPriorityRecommendations.length,
+        recommendationCount: new Set(report.sceneScores.flatMap((scene) => scene.recommendations.map((item) => item.id))).size,
         analyzerFailureCount: report.analyzerDiagnostics.filter((item) => item.status === 'failed').length,
         completedAt: new Date().toISOString(),
+        report,
       });
       return report;
     } catch (error) {

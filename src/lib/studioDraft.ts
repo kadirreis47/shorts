@@ -5,6 +5,7 @@ export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'pu
 
 export interface StudioDraft {
   version: 1;
+  projectId?: string;
   savedAt: string;
   step: StudioStep;
   channelId: string;

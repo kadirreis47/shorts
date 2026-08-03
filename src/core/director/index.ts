@@ -2,3 +2,7 @@ export * from './types';
 export * from './scoring';
 export * from './directorEngine';
 export * from './analyzers';
+export * from './hookIntelligence';
+export * from './sceneRanking';
+export * from './retentionRiskMap';
+export * from './editDecisionPlanner';

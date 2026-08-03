@@ -14,6 +14,15 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['lucide-react'],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          return id.includes('/src/core/director/') ? 'director-engine' : undefined;
+        },
+      },
+    },
+  },
   test: {
     environment: 'node',
     environmentMatchGlobs: [['tests/recovery/**', 'jsdom']],

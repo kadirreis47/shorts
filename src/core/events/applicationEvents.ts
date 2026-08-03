@@ -22,6 +22,7 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     recommendationCount: number;
     analyzerFailureCount: number;
     completedAt: string;
+    report: import('@/core/director').DirectorReport;
   };
   'director:analysis-failed': {
     projectId: string;
@@ -29,6 +30,10 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     cancelled: boolean;
     failedAt: string;
   };
+  'director:scene-ranked': { projectId: string; sceneCount: number; rankedAt: string };
+  'director:retention-map-completed': { projectId: string; segmentCount: number; completedAt: string };
+  'director:edit-plan-created': { projectId: string; decisionCount: number; createdAt: string };
+  'director:report-persisted': { projectId: string; reportVersion: string; persistedAt: string };
   'app:bootstrap-started': { startedAt: string };
   'app:hydration-completed': {
     completedAt: string;

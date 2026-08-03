@@ -37,6 +37,7 @@ import {
   Wand2,
   Zap,
   Layers,
+  BrainCircuit,
 } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import type { ViewKey } from '@/components/Sidebar';
@@ -56,6 +57,7 @@ export function useNavigationItems(): NavigationItem[] {
     () => [
       { key: 'dashboard', label: t('nav.dashboard'), icon: <LayoutDashboard size={18} />, section: t('nav.section.overview') },
       { key: 'studio', label: t('nav.studio'), icon: <Clapperboard size={18} />, section: t('nav.section.create') },
+      { key: 'director', label: 'AI Director', icon: <BrainCircuit size={18} /> },
       { key: 'faceless', label: t('nav.faceless'), icon: <Film size={18} /> },
       { key: 'videos', label: t('nav.videos'), icon: <VideoIcon size={18} /> },
       { key: 'calendar', label: t('nav.calendar'), icon: <Calendar size={18} />, section: t('nav.section.manage') },
