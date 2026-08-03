@@ -2,6 +2,22 @@
 
 Bu projedeki önemli değişiklikler bu dosyada kaydedilir.
 
+## [7.0.0] - 2026-08-03
+
+### Added
+
+- Type-safe AI Director domain sözleşmeleri ve deterministic analyzer engine.
+- Hook, pace, visual potential/motion ve retention heuristic analyzer'ları.
+- Weighted scene scoring, güçlü/zayıf sahne seçimi ve recommendation deduplication.
+- Analyzer diagnostics, AbortSignal ve kontrollü analyzer hata izolasyonu.
+- RenderManifest adaptasyonu yapan Director Application Service.
+- Director lifecycle Event Bus olayları ve DI composition root entegrasyonu.
+- Director engine ve application service için deterministik test paketi.
+
+### Notes
+
+- Bu sürüm foundation niteliğindedir; LLM/API çağrısı veya gerçek ML tahmini yapmaz.
+
 ## [6.9.25] - 2026-08-03
 
 ### Added

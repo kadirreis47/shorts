@@ -3,12 +3,18 @@
 ShortsFlow, YouTube Shorts üretim akışlarını React, TypeScript, Electron,
 Supabase ve FFmpeg üzerinde birleştiren masaüstü otomasyon stüdyosudur.
 
+## AI Director Engine
+
+Sprint 7.0.0, render manifest ve media timeline verilerini deterministic
+heuristic analyzer'larla değerlendiren type-safe AI Director foundation'ını
+ekler. Hook, tempo, görsel potansiyel, hareket ve retention risk skorları
+üretir; bu sürüm LLM, harici AI servisi veya gerçek ML tahmini kullanmaz.
+
 ## Mevcut durum
 
-Sprint 6.9.25 ile DI Container, Typed Event Bus, render resilience,
-capacity/auto-tuning, Render Engine, recovery persistence ve Electron FFmpeg
-IPC sınırı otomatik test kapsamına alınmıştır. Sprint 7 AI Director çalışmaları
-öncesindeki kalite kapıları GitHub Actions üzerinde çalışır.
+Sprint 6.9.25 kalite kapıları korunurken Sprint 7.0.0 AI Director domain,
+analyzer engine, application service, Event Bus ve DI entegrasyonunu ekler.
+GitHub Actions typecheck, lint, test, build ve FFmpeg smoke kontrollerini çalıştırır.
 
 ## Geliştirme
 

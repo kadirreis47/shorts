@@ -1,4 +1,5 @@
 import { createAIPipelineRunner } from '@/core/ai-pipeline';
+import { createDirectorEngine } from '@/core/director';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
@@ -20,6 +21,7 @@ import {
   createMediaEngine,
   createRenderJobMonitor,
   createServiceExecutor,
+  createDirectorApplicationService,
 } from '@/services';
 
 let dependenciesRegistered = false;
@@ -40,6 +42,19 @@ export function registerApplicationDependencies() {
   applicationContainer.registerSingleton(
     dependencyTokens.queryClient,
     () => createQueryClient(),
+  );
+
+  applicationContainer.registerSingleton(
+    dependencyTokens.directorEngine,
+    () => createDirectorEngine(),
+  );
+
+  applicationContainer.registerSingleton(
+    dependencyTokens.directorApplicationService,
+    (container) => createDirectorApplicationService(
+      container.resolve(dependencyTokens.directorEngine),
+      container.resolve(dependencyTokens.eventBus),
+    ),
   );
 
   applicationContainer.registerSingleton(

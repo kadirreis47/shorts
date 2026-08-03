@@ -3,6 +3,32 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'director:analysis-started': {
+    projectId: string;
+    sceneCount: number;
+    startedAt: string;
+  };
+  'director:analyzer-completed': {
+    projectId: string;
+    analyzerId: string;
+    status: 'completed' | 'failed';
+    affectedSceneCount: number;
+    message: string;
+    completedAt: string;
+  };
+  'director:analysis-completed': {
+    projectId: string;
+    overallScore: number;
+    recommendationCount: number;
+    analyzerFailureCount: number;
+    completedAt: string;
+  };
+  'director:analysis-failed': {
+    projectId: string;
+    message: string;
+    cancelled: boolean;
+    failedAt: string;
+  };
   'app:bootstrap-started': { startedAt: string };
   'app:hydration-completed': {
     completedAt: string;

@@ -24,3 +24,9 @@ export * from '@/services/aiPipelineMonitor';
 export * from '@/services/mediaEngineService';
 
 export * from '@/services/renderJobMonitor';
+
+export { createDirectorApplicationService, createDirectorInput } from './directorApplicationService';
+export type {
+  DirectorApplicationOptions,
+  DirectorApplicationService,
+} from './directorApplicationService';
