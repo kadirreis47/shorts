@@ -51,3 +51,6 @@ same operation cannot collapse into one history entry. Hydration and undo/redo v
 embedded snapshots against their fingerprints; invalid revisions are quarantined.
 Compiled dependencies are ordered deterministically and dependent operations are
 skipped unless their prerequisites were applied in the same transform.
+
+Epic 7.3 extends this same snapshot, fingerprint and validation boundary for audio
+production. Audio apply/undo/redo never introduces a second timeline or revision model.

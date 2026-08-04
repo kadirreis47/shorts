@@ -1,0 +1,34 @@
+import { describe, expect, it } from 'vitest';
+import { analyzeSilence, analyzeSpeechPacing, analyzeVoiceQuality, analyzeVoiceTiming, planDucking, planLoudness, planMusic, planSfx, tokenize } from '@/core/audio-production';
+import { editingFixture } from '../editing/fixtures';
+
+describe('voice timing and silence analysis', () => {
+  it('reports scene-relative leading and trailing silence', async () => { const { manifest } = await fixtureWithVoiceInset(400, 600); const result = analyzeVoiceTiming(manifest)[0]; expect(result.firstVoiceCueMs).toBe(400); expect(result.leadingSilenceMs).toBe(400); expect(result.trailingSilenceMs).toBe(600); });
+  it('keeps a hook voice cue scene-relative after a timeline offset', async () => { const { manifest } = await fixtureWithVoiceInset(250, 0, 1); expect(analyzeVoiceTiming(manifest)[1].firstVoiceCueMs).toBe(250); });
+  it('detects overlapping voice segments', async () => { const fixture = await editingFixture(); const voice = fixture.manifest.audio.voice[0]; fixture.manifest.audio.voice.push({ ...voice, id: 'overlap', startMs: voice.startMs + 100, endMs: voice.endMs - 100, durationMs: voice.durationMs - 200 }); expect(analyzeVoiceTiming(fixture.manifest)[0].overlapRisk).toBeGreaterThan(0); });
+  it('detects a missing voice segment', async () => { const fixture = await editingFixture(); fixture.manifest.audio.voice = fixture.manifest.audio.voice.filter((item) => item.sceneId !== fixture.manifest.timeline.scenes[0].id); expect(analyzeVoiceTiming(fixture.manifest)[0].timingIssues).toContain('Voice segment is missing.'); });
+  it('detects first-three-seconds dead air', async () => { const { manifest } = await fixtureWithVoiceInset(1800, 0); expect(analyzeSilence(manifest).some((item) => item.type === 'dead-air' && item.severity === 'critical')).toBe(true); });
+  it('labels background-music-filled silence', async () => { const { manifest } = await fixtureWithVoiceInset(900, 0); expect(analyzeSilence(manifest)[0].evidence.join(' ')).toMatch(/music fills/i); });
+  it('treats payoff silence as more intentional', async () => { const fixture = await editingFixture(); const scene = fixture.manifest.timeline.scenes[2]; scene.role = 'payoff'; const voice = fixture.manifest.audio.voice.find((item) => item.sceneId === scene.id); if (!voice) throw new Error('voice'); voice.startMs += 900; voice.durationMs -= 900; expect(analyzeSilence(fixture.manifest).find((item) => item.sceneId === scene.id)?.intentionalProbability).toBeGreaterThan(50); });
+  it('sorts silence regions deterministically', async () => { const { manifest } = await fixtureWithVoiceInset(900, 900); const left = analyzeSilence(manifest); expect(left).toEqual(analyzeSilence(structuredClone(manifest))); expect(left).toEqual([...left].sort((a, b) => a.startMs - b.startMs || (a.sceneId ?? '').localeCompare(b.sceneId ?? ''))); });
+});
+
+describe('speech, quality, music, sfx and mixing plans', () => {
+  it('tokenizes Turkish characters correctly', () => expect(tokenize('Çığ, ışık ve özgürlük!')).toEqual(['çığ', 'ışık', 've', 'özgürlük']));
+  it('tokenizes English contractions', () => expect(tokenize("Don't stop now")).toHaveLength(3));
+  it('penalizes very fast speech', async () => { const fixture = await editingFixture(); fixture.manifest.timeline.scenes[0].text = Array(100).fill('hız').join(' '); expect(analyzeSpeechPacing(fixture.manifest).overloadRisk).toBeGreaterThan(50); });
+  it('detects slow speech', async () => { const fixture = await editingFixture(); fixture.manifest.timeline.scenes.forEach((scene) => { scene.text = 'Tek kelime'; }); expect(analyzeSpeechPacing(fixture.manifest).slowSpeechRisk).toBeGreaterThan(0); });
+  it('normalizes pacing scores', async () => { const fixture = await editingFixture(); const result = analyzeSpeechPacing(fixture.manifest); expect(result.scenePacing.every((item) => item.paceScore >= 0 && item.paceScore <= 100)).toBe(true); });
+  it('flags high voice gain clipping risk', async () => { const fixture = await editingFixture(); fixture.manifest.audio.voice[0].gain = 1.4; expect(analyzeVoiceQuality(fixture.manifest).clippingRisk).toBeGreaterThan(0); });
+  it('flags low voice levels', async () => { const fixture = await editingFixture(); fixture.manifest.audio.voice[0].gain = 0.1; expect(analyzeVoiceQuality(fixture.manifest).lowLevelRisk).toBeGreaterThan(0); });
+  it('creates emotion/intensity-aware music intent', async () => { const fixture = await editingFixture(); fixture.manifest.timeline.scenes.forEach((scene) => { scene.intensity = 0.9; }); expect(planMusic(fixture.manifest)).toMatchObject({ mood: 'energetic', vocals: 'instrumental' }); });
+  it('uses full timeline entry and exit for music', async () => { const fixture = await editingFixture(); expect(planMusic(fixture.manifest)).toMatchObject({ entryMs: 0, exitMs: fixture.manifest.durationMs }); });
+  it('limits SFX to selected high-value scenes', async () => { const fixture = await editingFixture(); expect(planSfx(fixture.manifest).length).toBeLessThan(fixture.manifest.timeline.scenes.length); });
+  it('avoids SFX bombardment', async () => { const fixture = await editingFixture(); const plans = planSfx(fixture.manifest); expect(plans.slice(1).every((item, index) => item.startMs - plans[index].startMs >= 800)).toBe(true); });
+  it('merges adjacent voice into stable ducking regions', async () => { const fixture = await editingFixture(); const plans = planDucking(fixture.manifest); expect(plans.length).toBeLessThanOrEqual(fixture.manifest.audio.voice.length); expect(plans.every((item) => item.attackMs >= 40 && item.releaseMs <= 600)).toBe(true); });
+  it('supports global music during ducking', async () => { const fixture = await editingFixture(); expect(fixture.manifest.audio.music[0].sceneId).toBeUndefined(); expect(planDucking(fixture.manifest).length).toBeGreaterThan(0); });
+  it.each(['generic-short-video', 'youtube-shorts', 'tiktok', 'instagram-reels'] as const)('provides configurable %s loudness profile', async (profile) => { const fixture = await editingFixture(); expect(planLoudness(fixture.manifest, profile).profile).toBe(profile); });
+  it('reports music masking risk', async () => { const fixture = await editingFixture(); fixture.manifest.audio.settings.musicGain = 0.8; expect(planLoudness(fixture.manifest, 'generic-short-video').risks).toContain('voice-masking-risk'); });
+});
+
+async function fixtureWithVoiceInset(leading: number, trailing: number, sceneIndex = 0) { const fixture = await editingFixture(); const scene = fixture.manifest.timeline.scenes[sceneIndex]; const voice = fixture.manifest.audio.voice.find((item) => item.sceneId === scene.id); if (!voice) throw new Error('voice'); voice.startMs = scene.startMs + leading; voice.endMs = scene.endMs - trailing; voice.durationMs = voice.endMs - voice.startMs; return fixture; }

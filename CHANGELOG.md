@@ -1,5 +1,38 @@
 # Changelog
 
+## [7.3.0] - 2026-08-04
+
+### Added
+
+- Type-safe deterministic audio-production domain and application service.
+- Voice timing, silence/dead-air, bilingual pacing and technical voice-quality analysis.
+- Music, SFX, sidechain ducking and configurable loudness production planners.
+- Conflict-aware audio plan compiler, immutable preview/transform and current-revision checks.
+- Validated apply plus bounded, project-isolated undo/redo with corrupt revision quarantine.
+- Event Bus/DI lifecycle, persisted Zustand state and lazy AI Audio Studio with JSON export.
+- 61 focused audio-production tests covering analyzers, transform, lifecycle, stale state and UI selectors.
+
+### Notes
+
+- Audio decisions are heuristic estimates; no TTS, waveform ML, external API or asset search is used.
+- Preview and explicit approval are mandatory. Existing media validation runs after apply/undo/redo.
+- Audio plans bind to both the canonical manifest fingerprint and the current Director report binding.
+
+### Fixed
+
+- Preserved unrelated voice, SFX, music and manual automation while regenerating
+  operation-owned ducking points with deterministic IDs and provenance metadata.
+- Derived audio rerender/reuse metadata from centralized scene, track and global mix
+  invalidation policies; disabled, skipped and conflicted operations no longer invalidate cache entries.
+- Required explicit per-operation approval for manual audio actions. Enabled manual
+  operations remain unapproved until selected, general apply confirmation does not
+  approve them, and preview/apply signatures enforce the same approval set.
+- Replaced stale generated ducking by durable `sourceOperationId` across repeated plans,
+  making reruns idempotent without removing manual or unrelated automation points.
+- Retimed the complete manifest for trailing-silence trims through the shared Editing
+  Engine transform, keeping scenes, clips, markers, transitions, total duration and
+  timeline/audio/subtitle metrics structurally consistent.
+
 ## [7.2.0] - 2026-08-03
 
 ### Added

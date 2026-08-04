@@ -1,6 +1,7 @@
 import type { AIPipelineRunner } from '@/core/ai-pipeline';
 import type { DirectorEngine } from '@/core/director';
 import type { EditingEngine } from '@/core/editing';
+import type { AudioProductionEngine } from '@/core/audio-production';
 import type { AssetProviderEngine } from '@/core/media';
 import type {
   RenderEngine,
@@ -23,6 +24,8 @@ import type {
   DirectorMonitor,
   EditingApplicationService,
   EditingMonitor,
+  AudioProductionApplicationService,
+  AudioProductionMonitor,
 } from '@/services';
 import type { DependencyToken } from './types';
 
@@ -31,6 +34,9 @@ function createToken<T>(name: string): DependencyToken<T> {
 }
 
 export const dependencyTokens = {
+  audioProductionEngine: createToken<AudioProductionEngine>('AudioProductionEngine'),
+  audioProductionApplicationService: createToken<AudioProductionApplicationService>('AudioProductionApplicationService'),
+  audioProductionMonitor: createToken<AudioProductionMonitor>('AudioProductionMonitor'),
   editingEngine: createToken<EditingEngine>('EditingEngine'),
   editingApplicationService: createToken<EditingApplicationService>('EditingApplicationService'),
   editingMonitor: createToken<EditingMonitor>('EditingMonitor'),

@@ -1,6 +1,7 @@
 import { createAIPipelineRunner } from '@/core/ai-pipeline';
 import { createDirectorEngine } from '@/core/director';
 import { createEditingEngine } from '@/core/editing';
+import { createAudioProductionEngine } from '@/core/audio-production';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
@@ -26,6 +27,8 @@ import {
   createDirectorMonitor,
   createEditingApplicationService,
   createEditingMonitor,
+  createAudioProductionApplicationService,
+  createAudioProductionMonitor,
 } from '@/services';
 
 let dependenciesRegistered = false;
@@ -71,6 +74,9 @@ export function registerApplicationDependencies() {
     container.resolve(dependencyTokens.editingEngine), container.resolve(dependencyTokens.eventBus),
   ));
   applicationContainer.registerSingleton(dependencyTokens.editingMonitor, (container) => createEditingMonitor(container.resolve(dependencyTokens.eventBus)));
+  applicationContainer.registerSingleton(dependencyTokens.audioProductionEngine, () => createAudioProductionEngine());
+  applicationContainer.registerSingleton(dependencyTokens.audioProductionApplicationService, (container) => createAudioProductionApplicationService(container.resolve(dependencyTokens.audioProductionEngine), container.resolve(dependencyTokens.eventBus)));
+  applicationContainer.registerSingleton(dependencyTokens.audioProductionMonitor, (container) => createAudioProductionMonitor(container.resolve(dependencyTokens.eventBus)));
 
   applicationContainer.registerSingleton(
     dependencyTokens.aiPipelineRunner,
@@ -165,12 +171,14 @@ export function registerApplicationDependencies() {
   applicationContainer.resolve(dependencyTokens.renderJobMonitor).start();
   applicationContainer.resolve(dependencyTokens.directorMonitor).start();
   applicationContainer.resolve(dependencyTokens.editingMonitor).start();
+  applicationContainer.resolve(dependencyTokens.audioProductionMonitor).start();
 
   dependenciesRegistered = true;
   return applicationContainer;
 }
 
 export function resetApplicationDependencies() {
+  if (applicationContainer.has(dependencyTokens.audioProductionMonitor)) applicationContainer.resolve(dependencyTokens.audioProductionMonitor).stop();
   if (applicationContainer.has(dependencyTokens.editingMonitor)) applicationContainer.resolve(dependencyTokens.editingMonitor).stop();
   if (applicationContainer.has(dependencyTokens.directorMonitor)) {
     applicationContainer.resolve(dependencyTokens.directorMonitor).stop();

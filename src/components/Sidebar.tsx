@@ -53,7 +53,8 @@ export type ViewKey =
   | 'crossplatform'
   | 'storyboard'
   | 'director'
-  | 'editor';
+  | 'editor'
+  | 'audio-studio';
 
 interface SidebarProps {
   current: ViewKey;

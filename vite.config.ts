@@ -20,6 +20,7 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('/src/core/director/')) return 'director-engine';
           if (id.includes('/src/core/editing/')) return 'editing-engine';
+          if (id.includes('/src/core/audio-production/')) return 'audio-production-engine';
           return undefined;
         },
       },

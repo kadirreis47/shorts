@@ -1,4 +1,13 @@
-# ShortsFlow — Epic 7.2 AI Editing Engine
+# ShortsFlow — Epic 7.3 AI Voice & Audio Production Engine
+
+## AI Audio Studio
+
+Epic 7.3 adds deterministic voice timing, silence, speech pacing and technical
+quality analysis over the existing RenderManifest audio model. Music, SFX,
+ducking and configurable loudness profiles produce a preview-only production
+plan; no TTS, paid service, media search or ML inference is performed. Apply
+requires explicit approval and current fingerprints, reuses media validation,
+and supports bounded project-scoped undo/redo in the lazy-loaded AI Audio Studio.
 
 ## AI Editing Engine
 

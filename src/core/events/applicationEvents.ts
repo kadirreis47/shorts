@@ -3,6 +3,15 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'audio-production:analysis-started': { projectId: string; revisionId: string; startedAt: string };
+  'audio-production:analyzer-completed': { projectId: string; analyzer: string; completedAt: string };
+  'audio-production:plan-completed': { projectId: string; plan: import('@/core/audio-production').AudioProductionPlan; completedAt: string };
+  'audio-production:preview-created': { projectId: string; preview: import('@/core/audio-production').AudioProductionPreview; createdAt: string };
+  'audio-production:apply-started': { projectId: string; planId: string; revisionId: string; startedAt: string };
+  'audio-production:apply-completed': { projectId: string; result: import('@/core/audio-production').AudioProductionResult; completedAt: string };
+  'audio-production:apply-failed': { projectId: string; stage: 'analysis' | 'apply'; message: string; failedAt: string };
+  'audio-production:undo-completed': { projectId: string; revisionId: string; completedAt: string };
+  'audio-production:redo-completed': { projectId: string; revisionId: string; completedAt: string };
   'editing:plan-started': { projectId: string; revisionId: string; startedAt: string };
   'editing:plan-completed': { projectId: string; plan: import('@/core/editing').EditPlan; completedAt: string };
   'editing:preview-created': { projectId: string; preview: import('@/core/editing').EditPreview; createdAt: string };

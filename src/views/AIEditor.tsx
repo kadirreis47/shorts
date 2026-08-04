@@ -7,7 +7,7 @@ import { selectEditingWorkspaceView } from '@/components/editing/editorViewState
 import { applyActiveEditPlan, createActiveEditPlan, redoActiveEdit, refreshActiveEditPreview, undoActiveEdit } from '@/services/editingController';
 import { useEditingStore } from '@/store/editingStore';
 
-export function AIEditor() {
+export function AIEditor({ onNavigateAudio }: { onNavigateAudio?: () => void }) {
   const state = useEditingStore(); const plan = state.currentPlan; const preview = state.currentPreview; const view = selectEditingWorkspaceView(state);
   const busy = state.applyStatus === 'planning' || state.applyStatus === 'applying';
   const generate = async () => { try { await createActiveEditPlan(); } catch (error) { useEditingStore.getState().planFailed(error instanceof Error ? error.message : 'Plan failed.'); } };
@@ -18,7 +18,7 @@ export function AIEditor() {
 
   const critical = state.conflicts.some((item) => item.severity === 'critical' && !item.resolved);
   return <div className="space-y-5">
-    <div className="flex flex-wrap justify-between gap-3"><div><h1 className="text-2xl font-bold">AI Editor</h1><p className="text-sm text-slate-500">Deterministic editing workspace · revision {view.currentRevisionId ?? 'not applied'}</p></div><div className="flex flex-wrap gap-2">{view.showRevisionControls && <EditingRevisionControls undoAvailable={state.undoAvailable} redoAvailable={state.redoAvailable} onUndo={undoActiveEdit} onRedo={redoActiveEdit} />}<Button variant="secondary" disabled={busy} onClick={() => void generate()}><Play size={16} /> New plan</Button>{plan && preview && <Button variant="secondary" onClick={() => exportJson({ plan, preview })}><Download size={16} /> JSON</Button>}{plan && preview && <Button disabled={critical || busy} onClick={() => void apply()}>Apply approved edits</Button>}</div></div>
+    <div className="flex flex-wrap justify-between gap-3"><div><h1 className="text-2xl font-bold">AI Editor</h1><p className="text-sm text-slate-500">Deterministic editing workspace · revision {view.currentRevisionId ?? 'not applied'}</p></div><div className="flex flex-wrap gap-2">{view.showRevisionControls && <EditingRevisionControls undoAvailable={state.undoAvailable} redoAvailable={state.redoAvailable} onUndo={undoActiveEdit} onRedo={redoActiveEdit} />}<Button variant="secondary" disabled={busy} onClick={() => void generate()}><Play size={16} /> New plan</Button>{onNavigateAudio && <Button variant="secondary" onClick={onNavigateAudio}>AI Audio Plan</Button>}{plan && preview && <Button variant="secondary" onClick={() => exportJson({ plan, preview })}><Download size={16} /> JSON</Button>}{plan && preview && <Button disabled={critical || busy} onClick={() => void apply()}>Apply approved edits</Button>}</div></div>
     {busy && <Card className="p-4"><p className="flex items-center gap-2 text-sm"><Loader2 className="animate-spin" size={16} /> AI Editor is processing the deterministic timeline…</p></Card>}
     {state.lastError && <Card className="border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{state.lastError}</Card>}
     {view.showAppliedSummary && <Card className="p-4"><h2 className="font-semibold">Applied revision</h2><p className="mt-1 text-sm text-slate-500">Current revision: {view.currentRevisionId}</p><p className="text-sm text-slate-500">History: {view.history.length} revisions{view.lastAppliedAt ? ` · last applied ${view.lastAppliedAt}` : ''}</p><p className="mt-2 text-sm">Undo and redo remain available without generating another plan.</p></Card>}
