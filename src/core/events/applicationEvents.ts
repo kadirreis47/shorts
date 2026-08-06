@@ -3,6 +3,13 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'visual-production:analysis-started': { projectId: string; revisionId: string; requestId: number; startedAt: string };
+  'visual-production:plan-completed': { projectId: string; plan: import('@/core/visual-production').VisualProductionPlan; requestId: number; completedAt: string };
+  'visual-production:preview-created': { projectId: string; preview: import('@/core/visual-production').VisualProductionPreview; createdAt: string };
+  'visual-production:apply-completed': { projectId: string; result: import('@/core/visual-production').VisualProductionResult; completedAt: string };
+  'visual-production:undo-completed': { projectId: string; revisionId: string; completedAt: string };
+  'visual-production:redo-completed': { projectId: string; revisionId: string; completedAt: string };
+  'visual-production:failed': { projectId: string; stage: 'analysis' | 'apply'; requestId?: number; message: string; failedAt: string };
   'audio-production:analysis-started': { projectId: string; revisionId: string; startedAt: string };
   'audio-production:analyzer-completed': { projectId: string; analyzer: string; completedAt: string };
   'audio-production:plan-completed': { projectId: string; plan: import('@/core/audio-production').AudioProductionPlan; completedAt: string };

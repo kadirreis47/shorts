@@ -6,6 +6,7 @@ import type {
 import type { RenderPreset } from './types';
 import { buildAudioMixCommand } from './audioMixCommandBuilder';
 import { buildSceneVisualEffectPlan } from './visualEffectBuilder';
+import { getSceneVisualOperations } from '@/core/visual-production/visualState';
 import { buildSceneSubtitleRenderPlan } from './subtitleRenderBuilder';
 
 export interface SceneSegmentCommandPlan {
@@ -83,6 +84,7 @@ export function buildSceneSegmentCommand(input: {
     height,
     fps,
     durationSeconds,
+    visualProduction: getSceneVisualOperations(manifest, scene.id),
   });
   const filters = [
     ...visualPlan.filters,

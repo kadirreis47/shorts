@@ -29,6 +29,7 @@ export * from '@/services/editingApplicationService';
 export * from '@/services/editingMonitor';
 export * from '@/services/audioProductionApplicationService';
 export * from '@/services/audioProductionMonitor';
+export * from '@/services/visualProductionApplicationService';
 
 export { createDirectorApplicationService, createDirectorInput } from './directorApplicationService';
 export type {

@@ -2,6 +2,7 @@ import { createAIPipelineRunner } from '@/core/ai-pipeline';
 import { createDirectorEngine } from '@/core/director';
 import { createEditingEngine } from '@/core/editing';
 import { createAudioProductionEngine } from '@/core/audio-production';
+import { createVisualProductionEngine } from '@/core/visual-production';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
@@ -29,6 +30,7 @@ import {
   createEditingMonitor,
   createAudioProductionApplicationService,
   createAudioProductionMonitor,
+  createVisualProductionApplicationService,
 } from '@/services';
 
 let dependenciesRegistered = false;
@@ -77,6 +79,8 @@ export function registerApplicationDependencies() {
   applicationContainer.registerSingleton(dependencyTokens.audioProductionEngine, () => createAudioProductionEngine());
   applicationContainer.registerSingleton(dependencyTokens.audioProductionApplicationService, (container) => createAudioProductionApplicationService(container.resolve(dependencyTokens.audioProductionEngine), container.resolve(dependencyTokens.eventBus)));
   applicationContainer.registerSingleton(dependencyTokens.audioProductionMonitor, (container) => createAudioProductionMonitor(container.resolve(dependencyTokens.eventBus)));
+  applicationContainer.registerSingleton(dependencyTokens.visualProductionEngine, () => createVisualProductionEngine());
+  applicationContainer.registerSingleton(dependencyTokens.visualProductionApplicationService, (container) => createVisualProductionApplicationService(container.resolve(dependencyTokens.visualProductionEngine), container.resolve(dependencyTokens.eventBus)));
 
   applicationContainer.registerSingleton(
     dependencyTokens.aiPipelineRunner,

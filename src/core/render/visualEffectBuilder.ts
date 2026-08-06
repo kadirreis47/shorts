@@ -1,10 +1,13 @@
 import type { MediaScene } from '@/core/media';
+import { deduplicateSceneVisualOperations, parseVisualOperations } from '@/core/visual-production/visualState';
+import { colorGradeFilter, resolveColorGrade } from '@/core/visual-production/colorGradeProfiles';
 
 export interface SceneVisualEffectPlan {
   filters: string[];
   cameraMotionApplied: boolean;
   transitionApplied: boolean;
   effectNames: string[];
+  diagnostics: string[];
 }
 
 export function buildSceneVisualEffectPlan(input: {
@@ -13,11 +16,13 @@ export function buildSceneVisualEffectPlan(input: {
   height: number;
   fps: number;
   durationSeconds: number;
+  visualProduction?: unknown;
 }): SceneVisualEffectPlan {
   const { scene, width, height, fps, durationSeconds } = input;
   const totalFrames = Math.max(1, Math.ceil(durationSeconds * fps));
   const filters: string[] = [];
   const effectNames: string[] = [];
+  const diagnostics: string[] = [];
 
   applyCameraMotion(
     scene,
@@ -29,6 +34,8 @@ export function buildSceneVisualEffectPlan(input: {
     totalFrames,
     durationSeconds,
   );
+
+  applyProductionOperations(input.visualProduction, filters, effectNames, diagnostics);
 
   const transitionApplied = applyTransition(
     scene,
@@ -44,8 +51,23 @@ export function buildSceneVisualEffectPlan(input: {
     cameraMotionApplied: scene.cameraMotion !== 'none',
     transitionApplied,
     effectNames,
+    diagnostics,
   };
 }
+
+function applyProductionOperations(value: unknown, filters: string[], names: string[], diagnostics: string[]): void {
+  const operations = deduplicateSceneVisualOperations(parseVisualOperations(value));
+  for (const operation of operations) {
+    const params = operation.parameters ?? {};
+    if (operation.type === 'brightness') { const delta = bounded(params.delta, -.25, .25, 0); filters.push(`eq=brightness=${delta.toFixed(3)}`); }
+    else if (operation.type === 'contrast') { const factor = bounded(params.factor, .75, 1.35, 1); filters.push(`eq=contrast=${factor.toFixed(3)}`); }
+    else if (operation.type === 'color-grade') { const grade = resolveColorGrade(params.style, params.intensity); if (!grade) { diagnostics.push(`visual-production:${operation.operationId}: unknown color-grade profile`); continue; } filters.push(colorGradeFilter(grade)); }
+    else if (operation.type === 'background-blur') { diagnostics.push(`visual-production:${operation.operationId}: background blur requires foreground segmentation`); continue; }
+    else continue;
+    names.push(`visual-production:${String(operation.type)}`);
+  }
+}
+function bounded(value: unknown, minimum: number, maximum: number, fallback: number): number { return typeof value === 'number' && Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback; }
 
 function applyCameraMotion(
   scene: MediaScene,

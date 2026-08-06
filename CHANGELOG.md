@@ -1,5 +1,46 @@
 # Changelog
 
+## [7.4.0] - 2026-08-05
+
+### Added
+
+- Deterministic visual composition, motion, continuity, quality, hook and readability intelligence.
+- Central visual-operation capability registry shared by preview, apply, UI and JSON export.
+- Explicit applied, plan-only, skipped and rejected operation outcomes with diagnostics.
+
+### Fixed
+
+- Prevented plan-only reframe and B-roll overlay operations from changing manifests, fingerprints, score estimates, render invalidation or applied-operation results.
+- Corrected exposure adjustment direction: under-exposure increases brightness and over-exposure decreases it with bounded severity-aware deltas.
+- Bound preview and apply to the same capability results and signed FFmpeg brightness parameters.
+- Moved scene-specific visual effects from shared asset metadata to scene-linked video clip metadata, preventing effects and stale cache entries from leaking across reused assets.
+- Included scene-local clip render state in scene fingerprints and expanded explicit asset-global invalidation to every referencing scene.
+- Ignored legacy generated asset-level visual effects in rendering to prevent double application while preserving source asset metadata.
+- Prevented visual apply from overwriting manifest changes made while application events are awaiting by rechecking the source fingerprint immediately before install.
+- Prevented stale visual undo/redo history from overwriting newer Director, Editing or Audio changes; stale history is replaced with a fresh snapshot of the active manifest.
+- Added delayed-event race coverage for apply, undo and redo optimistic concurrency boundaries.
+- Made visual undo/redo transactional so rejected completion events and failed installs cannot advance revision state.
+- Added async-safe AI Visual Studio revision controls with visible errors and duplicate-action prevention.
+- Deduplicated scene-level visual operations across multi-clip scenes before fingerprinting and FFmpeg filter generation.
+- Rejected conflicting duplicate visual-operation payloads instead of silently selecting or compounding them.
+- Prevented out-of-order visual preview requests from overwriting newer approval selections by combining cancellation with store-enforced request generations and identity binding.
+- Disabled visual Apply while the newest approval-bound preview is loading and ignored stale preview errors after newer requests.
+- Prevented concurrent visual analyses from committing out of order with monotonic request identities, cancellation and source-binding checks in both controller and store.
+- Made AI Visual Studio revision and analysis loading guards safe across React StrictMode setup/cleanup/setup cycles and real unmounts.
+- Repaired Turkish B-roll keyword matching with real UTF-8 text, NFKC normalization and Turkish locale-aware casing.
+- Stopped static scenes from receiving stabilization recommendations and bound real stabilization eligibility to non-static shake evidence.
+- Replaced the hard-coded color-grade filter with shared profile/intensity resolution across planning, preview and FFmpeg rendering.
+- Marked background blur plan-only until segmentation exists and removed the misleading full-frame Gaussian blur behavior.
+- Serialized conflicting project-scoped visual analysis, preview, apply, undo and redo operations with explicit controller leases while retaining latest-request-wins preview supersession.
+- Made undo/redo manifest installation atomic with visual revision state through binding rechecks, commit-before-install ordering and full rollback on installation failure.
+- Prevented failed visual transactions from overwriting unrelated concurrent manifest changes or persisting partial revision state.
+
+### Notes
+
+- B-roll produces opportunities only; no external asset search or insertion is performed.
+- Reframe remains plan-only until a complete crop/position/scale render contract is available.
+- An operation is reported as applied only when it changes production manifest/render behavior.
+
 ## [7.3.0] - 2026-08-04
 
 ### Added

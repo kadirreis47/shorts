@@ -63,6 +63,7 @@ const StoryboardGenerator = lazyNamed(() => import('@/views/StoryboardGenerator'
 const AIDirector = lazyNamed(() => import('@/views/AIDirector'), 'AIDirector');
 const AIEditor = lazyNamed(() => import('@/views/AIEditor'), 'AIEditor');
 const AIAudioStudio = lazyNamed(() => import('@/views/AIAudioStudio'), 'AIAudioStudio');
+const AIVisualStudio = lazyNamed(() => import('@/views/AIVisualStudio'), 'AIVisualStudio');
 
 export interface ViewRenderContext {
   channels: Channel[];
@@ -124,5 +125,6 @@ export const VIEW_REGISTRY: Record<ViewKey, ViewRenderer> = {
   director: ({ navigate }) => <AIDirector onNavigateEditor={() => navigate('editor')} />,
   editor: ({ navigate }) => <AIEditor onNavigateAudio={() => navigate('audio-studio')} />,
   'audio-studio': () => <AIAudioStudio />,
+  'visual-studio': () => <AIVisualStudio />,
   settings: ({ channels }) => <Settings channels={channels} />,
 };

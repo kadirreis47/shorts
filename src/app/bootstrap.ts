@@ -7,6 +7,7 @@ import { attachRenderRecoveryCenter } from '@/services/renderRecoveryCenterMonit
 import { configureDirectorAnalysisController } from '@/services/directorAnalysisController';
 import { configureEditingController } from '@/services/editingController';
 import { configureAudioProductionController } from '@/services/audioProductionController';
+import { configureVisualProductionController } from '@/services/visualProductionController';
 
 let bootstrapPromise: Promise<void> | null = null;
 let detachRenderQueueInspector: (() => void) | null = null;
@@ -35,6 +36,7 @@ async function runBootstrap() {
   );
   configureEditingController(applicationContainer.resolve(dependencyTokens.editingApplicationService));
   configureAudioProductionController(applicationContainer.resolve(dependencyTokens.audioProductionApplicationService));
+  configureVisualProductionController(applicationContainer.resolve(dependencyTokens.visualProductionApplicationService));
 
   detachRenderQueueInspector?.();
   detachRenderQueueInspector = attachRenderQueueInspector(
