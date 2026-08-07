@@ -1,0 +1,3 @@
+import type { PlatformCapability, PlatformOperationType } from './types';
+const implemented = new Set<PlatformOperationType>(['change-resolution', 'change-frame-rate', 'adjust-safe-area', 'reposition-subtitles', 'resize-subtitles', 'change-caption-profile', 'normalize-audio-profile', 'adjust-final-loudness', 'change-render-preset', 'add-platform-metadata-plan', 'keep']);
+export function platformCapability(type: PlatformOperationType): PlatformCapability { return implemented.has(type) ? { type, status: 'implemented', reason: 'Manifest metadata and existing profile pipeline support this operation.' } : { type, status: 'planned-only', reason: 'This operation requires a structural timeline, segmentation, or export orchestration capability not owned by Epic 7.6.' }; }

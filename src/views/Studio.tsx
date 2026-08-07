@@ -31,6 +31,7 @@ import { createStudioProjectDraft, resolveStudioDraftRestore } from '@/services/
 interface StudioProps {
   channels: Channel[];
   onNavigateDirector: () => void;
+  onNavigatePlatform?: () => void;
 }
 
 type Step = StudioStep;
@@ -78,7 +79,7 @@ const MUSIC_TRACKS: { id: string; name: string; url: string; mood: string }[] = 
   { id: 'corporate', name: 'Corporate', url: 'https://cdn.pixabay.com/audio/2023/06/19/audio_3f8ee2a0a7.mp3', mood: 'Professional, clean' },
 ];
 
-export function Studio({ channels, onNavigateDirector }: StudioProps) {
+export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: StudioProps) {
   const { t } = useI18n();
   const aiService = useMemo(
     () => applicationContainer.resolve(dependencyTokens.aiApplicationService),
@@ -1566,7 +1567,7 @@ export function Studio({ channels, onNavigateDirector }: StudioProps) {
               )}
               <div className="flex justify-between gap-2">
                 <Button variant="secondary" onClick={() => setStep('voice')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
-                <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes } }} /><Button onClick={handleRender}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
+                <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={handleRender}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
               </div>
             </div>
           )}

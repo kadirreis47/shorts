@@ -3,6 +3,14 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'platform-optimization:analysis-started': { projectId: string; platformId: import('@/core/platform-optimization').PlatformId; startedAt: string };
+  'platform-optimization:analysis-completed': { projectId: string; platformId: import('@/core/platform-optimization').PlatformId; plan: import('@/core/platform-optimization').PlatformOptimizationPlan; completedAt: string };
+  'platform-optimization:preview-started': { projectId: string; platformId: import('@/core/platform-optimization').PlatformId; startedAt: string };
+  'platform-optimization:preview-completed': { projectId: string; preview: import('@/core/platform-optimization').PlatformOptimizationPreview; completedAt: string };
+  'platform-optimization:apply-started': { projectId: string; platformId: import('@/core/platform-optimization').PlatformId; startedAt: string };
+  'platform-optimization:apply-completed': { projectId: string; snapshot: import('@/core/platform-optimization').PlatformVariantSnapshot; completedAt: string };
+  'platform-optimization:apply-failed': { projectId: string; message: string; failedAt: string };
+  'platform-optimization:profile-changed': { projectId: string; platformId: import('@/core/platform-optimization').PlatformId; profileVersion: string; changedAt: string };
   'subtitle-intelligence:analysis-started': { projectId: string; revisionId: string; requestId: number; startedAt: string };
   'subtitle-intelligence:plan-completed': { projectId: string; plan: import('@/core/subtitle-intelligence').SubtitleIntelligencePlan; requestId: number; completedAt: string };
   'subtitle-intelligence:preview-created': { projectId: string; preview: import('@/core/subtitle-intelligence').SubtitleIntelligencePreview; createdAt: string };

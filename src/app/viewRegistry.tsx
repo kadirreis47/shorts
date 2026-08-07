@@ -65,6 +65,7 @@ const AIEditor = lazyNamed(() => import('@/views/AIEditor'), 'AIEditor');
 const AIAudioStudio = lazyNamed(() => import('@/views/AIAudioStudio'), 'AIAudioStudio');
 const AIVisualStudio = lazyNamed(() => import('@/views/AIVisualStudio'), 'AIVisualStudio');
 const AISubtitleStudio = lazyNamed(() => import('@/views/AISubtitleStudio'), 'AISubtitleStudio');
+const AIPlatformStudio = lazyNamed(() => import('@/views/AIPlatformStudio'), 'AIPlatformStudio');
 
 export interface ViewRenderContext {
   channels: Channel[];
@@ -75,7 +76,7 @@ type ViewRenderer = (context: ViewRenderContext) => ReactNode;
 
 export const VIEW_REGISTRY: Record<ViewKey, ViewRenderer> = {
   dashboard: ({ channels }) => <Dashboard channels={channels} />,
-  studio: ({ channels, navigate }) => <Studio channels={channels} onNavigateDirector={() => navigate('director')} />,
+  studio: ({ channels, navigate }) => <Studio channels={channels} onNavigateDirector={() => navigate('director')} onNavigatePlatform={() => navigate('platform-studio')} />,
   videos: ({ channels, navigate }) => (
     <Videos channels={channels} onNavigateStudio={() => navigate('studio')} />
   ),
@@ -128,5 +129,6 @@ export const VIEW_REGISTRY: Record<ViewKey, ViewRenderer> = {
   'audio-studio': () => <AIAudioStudio />,
   'visual-studio': () => <AIVisualStudio />,
   'subtitle-studio': () => <AISubtitleStudio />,
+  'platform-studio': () => <AIPlatformStudio />,
   settings: ({ channels }) => <Settings channels={channels} />,
 };

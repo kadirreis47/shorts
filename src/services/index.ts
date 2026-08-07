@@ -31,6 +31,8 @@ export * from '@/services/audioProductionApplicationService';
 export * from '@/services/audioProductionMonitor';
 export * from '@/services/visualProductionApplicationService';
 export * from '@/services/subtitleIntelligenceApplicationService';
+export * from '@/services/platformOptimizationApplicationService';
+export * from '@/services/platformOptimizationController';
 
 export { createDirectorApplicationService, createDirectorInput } from './directorApplicationService';
 export type {

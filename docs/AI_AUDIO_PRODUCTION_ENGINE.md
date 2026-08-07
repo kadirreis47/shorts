@@ -63,3 +63,6 @@ than restored.
 Loudness values are configurable production profiles, not claims about immutable
 platform requirements. Quality improvement, cache reuse and risk scores are heuristic
 estimates. The UI keeps revision controls available after apply and supports JSON export.
+# Platform adapter note
+
+Platform loudness guidance is configurable and versioned. Audio automation is not rewritten by the planning layer; actual export remains a later orchestration concern.

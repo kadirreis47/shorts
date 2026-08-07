@@ -30,6 +30,7 @@ import type {
   AudioProductionMonitor,
   VisualProductionApplicationService,
   SubtitleIntelligenceApplicationService,
+  PlatformOptimizationApplicationService,
 } from '@/services';
 import type { DependencyToken } from './types';
 
@@ -38,6 +39,7 @@ function createToken<T>(name: string): DependencyToken<T> {
 }
 
 export const dependencyTokens = {
+  platformOptimizationApplicationService: createToken<PlatformOptimizationApplicationService>('PlatformOptimizationApplicationService'),
   subtitleIntelligenceEngine: createToken<SubtitleIntelligenceEngine>('SubtitleIntelligenceEngine'),
   subtitleIntelligenceApplicationService: createToken<SubtitleIntelligenceApplicationService>('SubtitleIntelligenceApplicationService'),
   visualProductionEngine: createToken<VisualProductionEngine>('VisualProductionEngine'),

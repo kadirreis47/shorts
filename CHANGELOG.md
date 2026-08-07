@@ -173,3 +173,11 @@ Bu projedeki önemli değişiklikler bu dosyada kaydedilir.
 ### Security
 
 - FFmpeg IPC job, args ve absolute path girdileri için doğrulama eklendi.
+# Epic 7.6 Platform Optimization Engine
+
+- Added versioned platform profiles, deterministic readiness reports, safe-area and export compatibility planning.
+- Added immutable multi-platform variant planning with capability-aware planned-only operations and lazy AI Platform Studio.
+- Geometry changes now require an aspect-ratio-compatible capability before resolution is applied.
+- Bound previews to plan/profile/approval signatures and invalidated source validation after variant changes.
+- Added source-binding watcher to invalidate stale Platform Studio plans before user actions.
+- Consumed applied previews and bounded/deduplicated platform variant history.

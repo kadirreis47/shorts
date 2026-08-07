@@ -4,6 +4,7 @@ import { createEditingEngine } from '@/core/editing';
 import { createAudioProductionEngine } from '@/core/audio-production';
 import { createVisualProductionEngine } from '@/core/visual-production';
 import { createSubtitleIntelligenceEngine } from '@/core/subtitle-intelligence';
+import { createPlatformOptimizationEngine } from '@/core/platform-optimization';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
 import { createQueryClient } from '@/core/query';
@@ -33,6 +34,7 @@ import {
   createAudioProductionMonitor,
   createVisualProductionApplicationService,
   createSubtitleIntelligenceApplicationService,
+  createPlatformOptimizationApplicationService,
 } from '@/services';
 
 let dependenciesRegistered = false;
@@ -85,6 +87,7 @@ export function registerApplicationDependencies() {
   applicationContainer.registerSingleton(dependencyTokens.visualProductionApplicationService, (container) => createVisualProductionApplicationService(container.resolve(dependencyTokens.visualProductionEngine), container.resolve(dependencyTokens.eventBus)));
   applicationContainer.registerSingleton(dependencyTokens.subtitleIntelligenceEngine, () => createSubtitleIntelligenceEngine());
   applicationContainer.registerSingleton(dependencyTokens.subtitleIntelligenceApplicationService, (container) => createSubtitleIntelligenceApplicationService(container.resolve(dependencyTokens.subtitleIntelligenceEngine), container.resolve(dependencyTokens.eventBus)));
+  applicationContainer.registerSingleton(dependencyTokens.platformOptimizationApplicationService, () => createPlatformOptimizationApplicationService(createPlatformOptimizationEngine()));
 
   applicationContainer.registerSingleton(
     dependencyTokens.aiPipelineRunner,

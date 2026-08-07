@@ -55,3 +55,6 @@ Visual analysis uses the same latest-request-wins principle with its own identit
 AI Visual Studio is safe under React StrictMode's setup/cleanup/setup development lifecycle. Every effect setup restores the mounted flag, while a separate mount-cycle token prevents an async continuation from an older lifecycle from updating local loading state after a remount. Unmount cancels active analysis and preview work. Mounted state is not used as the analysis request generation; ordering remains owned by the controller and store identities.
 
 Visual keyword matching normalizes narration and prompts with Unicode NFKC and Turkish locale-aware lowercase before whole-token matching. Turkish `nasıl`, `çünkü` and `sonuç`, including supported uppercase forms, remain real UTF-8 text; English keywords retain their existing behavior.
+# Platform adapter note
+
+Platform variants reuse scene-local visual capability checks. Segmentation-dependent background blur and unsupported reframe remain planned-only; source assets are never mutated.

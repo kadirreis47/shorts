@@ -13,3 +13,6 @@ The current ASS/FFmpeg capability registry keeps vertical `lineSpacing` planned-
 Subtitle keyword analysis uses NFC normalization and Turkish `tr-TR` casing. CTA, currency and punctuation rules use real UTF-8 code points; mojibake literals are not permitted in production analyzer sources.
 
 Split recommendations and transforms share one eligibility evaluator. Oversized three-word cues may use a deterministic 1|2 or 2|1 split when timing, punctuation and line-length checks pass; unsafe cues receive no split operation.
+# Platform adapter note
+
+Epic 7.6 consumes the subtitle profile through the versioned platform registry. Explicit line breaks and Unicode text remain owned by Subtitle Intelligence; unsupported animation or spacing capabilities remain planned-only.
