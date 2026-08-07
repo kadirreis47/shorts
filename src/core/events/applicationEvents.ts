@@ -3,6 +3,13 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'subtitle-intelligence:analysis-started': { projectId: string; revisionId: string; requestId: number; startedAt: string };
+  'subtitle-intelligence:plan-completed': { projectId: string; plan: import('@/core/subtitle-intelligence').SubtitleIntelligencePlan; requestId: number; completedAt: string };
+  'subtitle-intelligence:preview-created': { projectId: string; preview: import('@/core/subtitle-intelligence').SubtitleIntelligencePreview; createdAt: string };
+  'subtitle-intelligence:apply-completed': { projectId: string; result: import('@/core/subtitle-intelligence').SubtitleIntelligenceResult; completedAt: string };
+  'subtitle-intelligence:undo-completed': { projectId: string; revisionId: string; completedAt: string };
+  'subtitle-intelligence:redo-completed': { projectId: string; revisionId: string; completedAt: string };
+  'subtitle-intelligence:failed': { projectId: string; stage: 'analysis' | 'apply'; requestId?: number; message: string; failedAt: string };
   'visual-production:analysis-started': { projectId: string; revisionId: string; requestId: number; startedAt: string };
   'visual-production:plan-completed': { projectId: string; plan: import('@/core/visual-production').VisualProductionPlan; requestId: number; completedAt: string };
   'visual-production:preview-created': { projectId: string; preview: import('@/core/visual-production').VisualProductionPreview; createdAt: string };

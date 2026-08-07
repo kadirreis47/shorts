@@ -6,6 +6,7 @@ import { Globe } from 'lucide-react';
 export type ViewKey =
   | 'dashboard'
   | 'studio'
+  | 'subtitle-studio'
   | 'videos'
   | 'calendar'
   | 'automation'

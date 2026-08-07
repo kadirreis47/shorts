@@ -3,6 +3,7 @@ import type { DirectorEngine } from '@/core/director';
 import type { EditingEngine } from '@/core/editing';
 import type { AudioProductionEngine } from '@/core/audio-production';
 import type { VisualProductionEngine } from '@/core/visual-production';
+import type { SubtitleIntelligenceEngine } from '@/core/subtitle-intelligence';
 import type { AssetProviderEngine } from '@/core/media';
 import type {
   RenderEngine,
@@ -28,6 +29,7 @@ import type {
   AudioProductionApplicationService,
   AudioProductionMonitor,
   VisualProductionApplicationService,
+  SubtitleIntelligenceApplicationService,
 } from '@/services';
 import type { DependencyToken } from './types';
 
@@ -36,6 +38,8 @@ function createToken<T>(name: string): DependencyToken<T> {
 }
 
 export const dependencyTokens = {
+  subtitleIntelligenceEngine: createToken<SubtitleIntelligenceEngine>('SubtitleIntelligenceEngine'),
+  subtitleIntelligenceApplicationService: createToken<SubtitleIntelligenceApplicationService>('SubtitleIntelligenceApplicationService'),
   visualProductionEngine: createToken<VisualProductionEngine>('VisualProductionEngine'),
   visualProductionApplicationService: createToken<VisualProductionApplicationService>('VisualProductionApplicationService'),
   audioProductionEngine: createToken<AudioProductionEngine>('AudioProductionEngine'),

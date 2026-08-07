@@ -7,6 +7,8 @@ import {
   useDirectorReportStore,
   useEditingStore,
   useAudioProductionStore,
+  useVisualProductionStore,
+  useSubtitleIntelligenceStore,
 } from '@/store';
 
 export type PersistenceStoreName =
@@ -17,7 +19,9 @@ export type PersistenceStoreName =
   | 'projects'
   | 'director'
   | 'editing'
-  | 'audio-production';
+  | 'audio-production'
+  | 'visual-production'
+  | 'subtitle-intelligence';
 
 export interface PersistenceHydrationResult {
   hydratedStores: PersistenceStoreName[];
@@ -36,6 +40,8 @@ const stores = [
   { name: 'director' as const, persist: useDirectorReportStore.persist },
   { name: 'editing' as const, persist: useEditingStore.persist },
   { name: 'audio-production' as const, persist: useAudioProductionStore.persist },
+  { name: 'visual-production' as const, persist: useVisualProductionStore.persist },
+  { name: 'subtitle-intelligence' as const, persist: useSubtitleIntelligenceStore.persist },
 ];
 
 let hydrationPromise: Promise<PersistenceHydrationResult> | null = null;

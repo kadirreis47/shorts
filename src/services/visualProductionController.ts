@@ -49,14 +49,15 @@ export async function createActiveVisualPlan(): Promise<boolean> {
 export async function refreshVisualPreview(): Promise<boolean> {
   const state = useVisualProductionStore.getState();
   if (!state.plan || !state.snapshot) throw new Error('Create a visual plan first.');
-  const lease = acquireVisualOperation(state.snapshot.projectId, 'previewing');
-  try { return await refreshVisualPreviewUnderLease(lease); } finally { releaseVisualOperation(lease); }
+  const abort = new AbortController();
+  const lease = acquireVisualOperation(state.snapshot.projectId, 'previewing', () => abort.abort());
+  try { return await refreshVisualPreviewUnderLease(lease, abort); } finally { releaseVisualOperation(lease); }
 }
-async function refreshVisualPreviewUnderLease(lease: VisualOperationLease): Promise<boolean> {
+async function refreshVisualPreviewUnderLease(lease: VisualOperationLease, suppliedAbort?: AbortController): Promise<boolean> {
   const state = useVisualProductionStore.getState();
   if (!state.plan || !state.snapshot || state.snapshot.projectId !== lease.projectId) throw new Error('Create a visual plan first.');
-  previewAbort?.abort();
-  const abort = new AbortController();
+  if (!suppliedAbort) previewAbort?.abort();
+  const abort = suppliedAbort ?? new AbortController();
   previewAbort = abort;
   const approvedIds = [...new Set(state.approvedIds)].sort();
   const request = createVisualPreviewRequestIdentity(state.plan, state.snapshot, approvedIds, ++previewGeneration);

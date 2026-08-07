@@ -1,4 +1,4 @@
-import type { MediaScene, SubtitleCue } from '@/core/media';
+import type { MediaScene, SubtitleCue, SubtitleStyle } from '@/core/media';
 
 export type SubtitleRenderPreset =
   | 'clean'
@@ -18,8 +18,9 @@ export function buildSceneSubtitleRenderPlan(input: {
   cues: SubtitleCue[];
   width: number;
   height: number;
+  style: SubtitleStyle;
 }): SubtitleRenderPlan {
-  const { scene, cues, width, height } = input;
+  const { scene, cues, width, height, style } = input;
   const localCues = cues
     .filter((cue) => cue.startMs < scene.endMs && cue.endMs > scene.startMs)
     .map((cue) => ({
@@ -39,10 +40,10 @@ export function buildSceneSubtitleRenderPlan(input: {
     };
   }
 
-  const preset = choosePreset(scene);
-  const styles = styleBlock(preset, width, height);
+  const preset = choosePreset(style);
+  const styles = styleBlock(style, width, height);
   const events = localCues.flatMap(({ cue, startMs, endMs }) =>
-    buildCueEvents(cue, startMs, endMs, preset),
+    buildCueEvents(cue, startMs, endMs, preset, style),
   );
 
   return {
@@ -78,11 +79,13 @@ function buildCueEvents(
   startMs: number,
   endMs: number,
   preset: SubtitleRenderPreset,
+  style: SubtitleStyle,
 ): string[] {
   const escaped = escapeAss(cue.text);
   const base = `Dialogue: 0,${assTime(startMs)},${assTime(endMs)},`;
 
   if (preset === 'karaoke' || preset === 'viral') {
+    const tokens = tokenizeSubtitleText(cue.text);
     const words = splitWords(cue.text);
     if (words.length > 0) {
       const durationCentiseconds = Math.max(
@@ -90,12 +93,18 @@ function buildCueEvents(
         Math.round((endMs - startMs) / 10),
       );
       const perWord = Math.max(1, Math.floor(durationCentiseconds / words.length));
-      const karaokeText = words
-        .map((word, index) => {
+      let wordIndex = 0;
+      const karaokeText = tokens
+        .map((token) => {
+          if (token.kind !== 'word') return escapeAss(token.value);
+          const index = wordIndex++;
           const pop = preset === 'viral'
             ? `{\\k${perWord}\\t(0,110,\\fscx118\\fscy118)\\t(110,220,\\fscx100\\fscy100)}`
             : `{\\k${perWord}}`;
-          return `${pop}${escapeAss(word)}${index < words.length - 1 ? ' ' : ''}`;
+          const emphasized = cue.emphasisWordIds.includes(cue.wordIds[index]);
+          const highlight = emphasized ? `{\\c${assColor(style.highlightColor)}}` : '';
+          const restore = emphasized ? `{\\c${assColor(style.textColor)}}` : '';
+          return `${pop}${highlight}${escapeAss(token.value)}${restore}`;
         })
         .join('');
 
@@ -111,38 +120,69 @@ function buildCueEvents(
     ];
   }
 
-  return [
-    `${base}Clean,,0,0,0,,{\\fad(90,90)}${escaped}`,
-  ];
+  const fade = style.animation === 'fade' ? '{\\fad(90,90)}' : '';
+  return [`${base}Clean,,0,0,0,,${fade}${highlightText(cue, style) || escaped}`];
 }
 
 function styleBlock(
-  preset: SubtitleRenderPreset,
+  style: SubtitleStyle,
   width: number,
   height: number,
 ): string[] {
   const scale = Math.max(0.7, Math.min(1.5, width / 1080));
-  const cleanSize = Math.round(62 * scale);
-  const boldSize = Math.round(70 * scale);
-  const karaokeSize = Math.round(68 * scale);
-  const marginV = Math.round(height * 0.095);
+  const fontSize = Number.isFinite(style.fontSize) ? style.fontSize : 64;
+  const cleanSize = Math.round(Math.max(36, Math.min(96, fontSize)) * scale);
+  const boldSize = Math.round(cleanSize * 1.08);
+  const karaokeSize = Math.round(cleanSize * 1.04);
+  const marginV = subtitleVerticalMargin(style.position, width, height);
+  const alignment = style.position === 'top' ? 8 : style.position === 'center' ? 5 : 2;
+  const outline = Math.max(0, Math.min(8, Number.isFinite(style.strokeWidth) ? style.strokeWidth : 4));
+  const shadow = Math.max(0, Math.min(6, Number.isFinite(style.shadowDepth) ? style.shadowDepth : 1));
+  const primary = assColor(style.textColor); const secondary = assColor(style.highlightColor); const outlineColor = assColor('#101010'); const back = assColor(style.backgroundColor, Number.isFinite(style.backgroundOpacity) ? style.backgroundOpacity : .34);
 
   return [
-    `Style: Clean,Arial,${cleanSize},&H00FFFFFF,&H00FFFFFF,&H00101010,&H50000000,1,0,0,0,100,100,0,0,1,4,1,2,90,90,${marginV},1`,
-    `Style: Bold,Arial,${boldSize},&H00FFFFFF,&H00FFFFFF,&H00101010,&H64000000,1,0,0,0,100,100,0,0,1,6,1,2,70,70,${marginV},1`,
-    `Style: Karaoke,Arial,${karaokeSize},&H0000E5FF,&H00FFFFFF,&H00101010,&H60000000,1,0,0,0,100,100,0,0,1,5,1,2,70,70,${marginV},1`,
+    `Style: Clean,${style.fontFamily || 'Arial'},${cleanSize},${primary},${secondary},${outlineColor},${back},${(Number.isFinite(style.fontWeight) ? style.fontWeight : 800) >= 700 ? 1 : 0},0,0,0,100,100,0,0,1,${outline},${shadow},${alignment},90,90,${marginV},1`,
+    `Style: Bold,${style.fontFamily || 'Arial'},${boldSize},${primary},${secondary},${outlineColor},${back},1,0,0,0,100,100,0,0,1,${outline},${shadow},${alignment},70,70,${marginV},1`,
+    `Style: Karaoke,${style.fontFamily || 'Arial'},${karaokeSize},${secondary},${primary},${outlineColor},${back},1,0,0,0,100,100,0,0,1,${outline},${shadow},${alignment},70,70,${marginV},1`,
   ];
 }
 
-function choosePreset(scene: MediaScene): SubtitleRenderPreset {
-  if (scene.role === 'hook' || scene.intensity >= 0.82) return 'viral';
-  if (scene.role === 'cta' || scene.intensity >= 0.66) return 'bold';
-  if (scene.intensity >= 0.5) return 'karaoke';
+function choosePreset(style: SubtitleStyle): SubtitleRenderPreset {
+  if (style.animation === 'pop') return 'bold';
+  if (style.animation === 'karaoke' || style.animation === 'word-highlight') return 'karaoke';
   return 'clean';
 }
 
+function highlightText(cue: SubtitleCue, style: SubtitleStyle): string {
+  if (!cue.emphasisWordIds.length) return '';
+  let wordIndex = 0;
+  return tokenizeSubtitleText(cue.text).map((token) => {
+    if (token.kind !== 'word') return escapeAss(token.value);
+    const emphasized = cue.emphasisWordIds.includes(cue.wordIds[wordIndex++]);
+    return emphasized ? `{\\c${assColor(style.highlightColor)}}${escapeAss(token.value)}{\\c${assColor(style.textColor)}}` : escapeAss(token.value);
+  }).join('');
+}
+function assColor(hex: string, opacity = 1): string { const match = /^#([0-9a-f]{6})$/i.exec(hex); const rgb = match?.[1] ?? 'FFFFFF'; const safeOpacity = Number.isFinite(opacity) ? opacity : 1; const alpha = Math.round((1 - Math.max(0, Math.min(1, safeOpacity))) * 255).toString(16).padStart(2, '0').toUpperCase(); return `&H${alpha}${rgb.slice(4, 6)}${rgb.slice(2, 4)}${rgb.slice(0, 2).toUpperCase()}&`; }
+
+interface SubtitleTextToken { kind: 'word' | 'spacing' | 'line-break'; value: string; }
+
+function tokenizeSubtitleText(text: string): SubtitleTextToken[] {
+  const normalized = text.replace(/\r\n?/g, '\n');
+  return (normalized.match(/\n|[^\S\n]+|[^\s]+/gu) ?? []).map((value) => ({
+    kind: value === '\n' ? 'line-break' : /^\s+$/u.test(value) ? 'spacing' : 'word',
+    value,
+  }));
+}
+
 function splitWords(text: string): string[] {
-  return text.trim().split(/\s+/).filter(Boolean);
+  return tokenizeSubtitleText(text).filter((token) => token.kind === 'word').map((token) => token.value);
+}
+
+export function subtitleVerticalMargin(position: SubtitleStyle['position'], width: number, height: number): number {
+  const portrait = height > width;
+  const safeRatio = portrait ? 0.095 : 0.065;
+  if (position === 'center') return Math.round(height * 0.46);
+  return Math.round(height * safeRatio);
 }
 
 function escapeAss(value: string): string {

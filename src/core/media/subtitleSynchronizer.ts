@@ -12,6 +12,9 @@ const DEFAULT_STYLE: SubtitleStyle = {
   fontFamily: 'Inter',
   fontSize: 64,
   fontWeight: 800,
+  lineSpacing: 1.08,
+  strokeWidth: 4,
+  shadowDepth: 1,
   textColor: '#FFFFFF',
   highlightColor: '#FACC15',
   backgroundColor: '#000000',
@@ -81,7 +84,7 @@ function alignSceneWords(scene: MediaScene, settings: MediaProjectSettings): Sub
       durationMs: Math.max(frameMs, Math.min(scene.endMs, endMs) - startMs),
       confidence: 0.72,
       emphasis: scene.sourceScene.emphasis === true || isEmphasisToken(token),
-      punctuation: /[,.!?:;…]$/.test(token),
+      punctuation: /[,.!?:;…]$/u.test(token),
     };
   });
 }
@@ -116,7 +119,7 @@ function buildCues(words: SubtitleWord[], style: SubtitleStyle): SubtitleCue[] {
     if (sceneChanged || exceedsWords || exceedsCharacters) flush();
     current.push(word);
 
-    if (/[.!?…]$/.test(word.text)) flush();
+    if (/[.!?…]$/u.test(word.text)) flush();
   }
 
   flush();
@@ -152,7 +155,7 @@ function tokenize(text: string): string[] {
 function tokenWeight(token: string): number {
   const normalized = normalizeToken(token);
   const characterWeight = Math.max(0.7, Math.min(2.4, normalized.length / 5));
-  const punctuation = token.match(/[,.!?:;…]$/)?.[0];
+  const punctuation = token.match(/[,.!?:;…]$/u)?.[0];
   return characterWeight + (punctuation ? PUNCTUATION_PAUSE_WEIGHT[punctuation] ?? 0 : 0);
 }
 

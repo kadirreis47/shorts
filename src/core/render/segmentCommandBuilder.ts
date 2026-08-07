@@ -42,6 +42,7 @@ export function buildSceneSegmentCommand(input: {
     cues: manifest.subtitles.cues,
     width,
     height,
+    style: manifest.subtitles.style,
   });
   const subtitleContent = subtitlePlan.assContent;
 
@@ -94,7 +95,7 @@ export function buildSceneSegmentCommand(input: {
 
   if (subtitleContent) {
     filters.push(
-      "subtitles={{SUBTITLE_FILE}}:force_style='Alignment=2,FontName=Arial,FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=0,MarginV=90'",
+      'subtitles={{SUBTITLE_FILE}}',
     );
   }
 

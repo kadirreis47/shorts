@@ -64,6 +64,7 @@ export function useNavigationItems(): NavigationItem[] {
       { key: 'editor', label: 'AI Editor', icon: <Scissors size={18} /> },
       { key: 'audio-studio', label: 'AI Audio Studio', icon: <AudioLines size={18} /> },
       { key: 'visual-studio', label: 'AI Visual Studio', icon: <Eye size={18} /> },
+      { key: 'subtitle-studio', label: 'AI Subtitle Studio', icon: <Type size={18} /> },
       { key: 'faceless', label: t('nav.faceless'), icon: <Film size={18} /> },
       { key: 'videos', label: t('nav.videos'), icon: <VideoIcon size={18} /> },
       { key: 'calendar', label: t('nav.calendar'), icon: <Calendar size={18} />, section: t('nav.section.manage') },

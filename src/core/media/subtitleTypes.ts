@@ -1,5 +1,5 @@
 export type SubtitleAlignmentSource = 'estimated' | 'word-timestamps' | 'imported';
-export type SubtitleAnimation = 'none' | 'pop' | 'karaoke' | 'word-highlight' | 'bounce';
+export type SubtitleAnimation = 'none' | 'fade' | 'pop' | 'karaoke' | 'word-highlight' | 'bounce';
 
 export interface SubtitleWord {
   id: string;
@@ -30,6 +30,9 @@ export interface SubtitleStyle {
   fontFamily: string;
   fontSize: number;
   fontWeight: number;
+  lineSpacing: number;
+  strokeWidth: number;
+  shadowDepth: number;
   textColor: string;
   highlightColor: string;
   backgroundColor: string;

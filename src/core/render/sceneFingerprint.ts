@@ -30,6 +30,8 @@ export async function createSceneFingerprint(
       endMs: Math.max(0, cue.endMs - scene.startMs),
       text: cue.text,
       wordIds: cue.wordIds,
+      emphasisWordIds: cue.emphasisWordIds,
+      lineCount: cue.lineCount,
     }));
 
   const videoClips = manifest.timeline.tracks
@@ -60,6 +62,7 @@ export async function createSceneFingerprint(
     videoClips,
     visualProduction,
     subtitleCues,
+    subtitleStyle: manifest.subtitles.style,
     render: manifest.render,
     preset,
   });

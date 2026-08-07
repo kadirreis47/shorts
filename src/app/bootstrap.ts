@@ -8,6 +8,7 @@ import { configureDirectorAnalysisController } from '@/services/directorAnalysis
 import { configureEditingController } from '@/services/editingController';
 import { configureAudioProductionController } from '@/services/audioProductionController';
 import { configureVisualProductionController } from '@/services/visualProductionController';
+import { configureSubtitleIntelligenceController } from '@/services/subtitleIntelligenceController';
 
 let bootstrapPromise: Promise<void> | null = null;
 let detachRenderQueueInspector: (() => void) | null = null;
@@ -37,6 +38,7 @@ async function runBootstrap() {
   configureEditingController(applicationContainer.resolve(dependencyTokens.editingApplicationService));
   configureAudioProductionController(applicationContainer.resolve(dependencyTokens.audioProductionApplicationService));
   configureVisualProductionController(applicationContainer.resolve(dependencyTokens.visualProductionApplicationService));
+  configureSubtitleIntelligenceController(applicationContainer.resolve(dependencyTokens.subtitleIntelligenceApplicationService));
 
   detachRenderQueueInspector?.();
   detachRenderQueueInspector = attachRenderQueueInspector(

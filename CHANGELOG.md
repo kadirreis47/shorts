@@ -1,5 +1,23 @@
 # Changelog
 
+## Epic 7.5 review hardening
+
+- Added token-safe preview-family supersession so rapid subtitle approval changes resolve to the latest preview without stale errors or loading-state writes.
+- Preserved explicit subtitle line breaks and whitespace while applying highlight and karaoke ASS tags.
+- Corrected top-aligned subtitle margins with orientation-aware safe-area placement.
+- Added validated snapshot and redo persistence, legacy history migration and stale-revision quarantine for subtitle undo/redo across restarts.
+- Marked vertical subtitle line spacing planned-only instead of misusing ASS horizontal character spacing.
+- Preserved approved keyword highlights across split/merge cue restructuring with deterministic word-ID remapping.
+- Restored UTF-8 Turkish CTA, Unicode currency and ellipsis punctuation matching in subtitle analysis.
+- Aligned subtitle split planning and transform eligibility, including safe oversized three-word 1|2 or 2|1 splits.
+
+## Epic 7.5 — AI Subtitle & Typography Intelligence
+
+- Added deterministic subtitle line breaking, timing, typography, density, keyword highlight, readability and safe-area intelligence on the existing canonical subtitle timeline.
+- Added caption profiles and renderer-backed typography parameters with an explicit planned-only boundary for unsupported animations.
+- Added mandatory approval-bound preview, immutable apply, scene cache invalidation, project-scoped concurrency and atomic subtitle undo/redo transactions.
+- Added the lazy-loaded AI Subtitle Studio, JSON export, persisted revision history and production regression coverage.
+
 ## [7.4.0] - 2026-08-05
 
 ### Added

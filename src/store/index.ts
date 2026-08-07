@@ -13,3 +13,4 @@ export * from '@/store/directorReportStore';
 export * from '@/store/editingStore';
 export * from '@/store/audioProductionStore';
 export * from '@/store/visualProductionStore';
+export * from '@/store/subtitleIntelligenceStore';

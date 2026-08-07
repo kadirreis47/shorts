@@ -30,6 +30,7 @@ export * from '@/services/editingMonitor';
 export * from '@/services/audioProductionApplicationService';
 export * from '@/services/audioProductionMonitor';
 export * from '@/services/visualProductionApplicationService';
+export * from '@/services/subtitleIntelligenceApplicationService';
 
 export { createDirectorApplicationService, createDirectorInput } from './directorApplicationService';
 export type {
