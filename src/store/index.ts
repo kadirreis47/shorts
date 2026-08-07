@@ -15,3 +15,4 @@ export * from '@/store/audioProductionStore';
 export * from '@/store/visualProductionStore';
 export * from '@/store/subtitleIntelligenceStore';
 export * from '@/store/exportIntelligenceStore';
+export * from '@/store/publishingStore';

@@ -41,3 +41,5 @@ export type {
   DirectorApplicationOptions,
   DirectorApplicationService,
 } from './directorApplicationService';
+export * from './publishingApplicationService';
+export * from './publishingController';

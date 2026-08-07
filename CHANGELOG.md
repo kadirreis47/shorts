@@ -208,3 +208,9 @@ Bu projedeki önemli değişiklikler bu dosyada kaydedilir.
 * Hardened export rendering so planned encoders and preset encoding settings reach the FFmpeg command unchanged.
 * Fixed Windows cache-hit materialization when the approved export destination already exists, with serialized replacement and rollback protection.
 * Made export encoder selection hardware-policy aware and deterministic across capability ordering.
+* Added Epic 7.8 publishing/scheduling orchestration with verified artifact gates, deterministic idempotency, UTC scheduling, recovery and honest platform capability reporting.
+* Fixed Epic 7.8 scheduled wake-up, restart recovery, fresh approval binding, persisted reconciliation and bounded retry bookkeeping.
+* Hardened Epic 7.8 reconciliation backoff, interrupted retry idempotency, exact account binding and structured rate-limit cooldowns.
+* Fixed automatic execution of retryable failures and eliminated stale retry wake-up loops.
+* Enforced canonical UTC schedule validation and mandatory preview-bound approval fingerprints.
+* Hardened retry approval preservation and execution-time authenticated binding checks.

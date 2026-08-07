@@ -1,6 +1,6 @@
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { useAppStore, useChannelStore, useUIStore } from '@/store';
+import { useAppStore, useChannelStore, useUIStore, usePublishingStore } from '@/store';
 import { registerApplicationDependencies } from './registerDependencies';
 import { attachRenderQueueInspector } from '@/services/renderQueueInspectorMonitor';
 import { attachRenderRecoveryCenter } from '@/services/renderRecoveryCenterMonitor';
@@ -9,6 +9,7 @@ import { configureEditingController } from '@/services/editingController';
 import { configureAudioProductionController } from '@/services/audioProductionController';
 import { configureVisualProductionController } from '@/services/visualProductionController';
 import { configureSubtitleIntelligenceController } from '@/services/subtitleIntelligenceController';
+import { initializePublishingQueue } from '@/services/publishingController';
 
 let bootstrapPromise: Promise<void> | null = null;
 let detachRenderQueueInspector: (() => void) | null = null;
@@ -64,6 +65,10 @@ async function runBootstrap() {
 
   try {
     const hydrationResult = await persistenceManager.hydrate();
+    await usePublishingStore.persist.rehydrate();
+    // Restore the single shared publishing queue, reconcile interrupted jobs,
+    // and install the runtime-only next-due wake-up after persistence hydration.
+    await initializePublishingQueue();
 
     await eventBus.emit('app:hydration-completed', {
       completedAt: new Date().toISOString(),

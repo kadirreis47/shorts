@@ -3,6 +3,19 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'publish:created': { jobId: string; platform: import('@/core/publishing').PublishPlatform; accountRef: string; createdAt: string };
+  'publish:queued': { jobId: string; platform: import('@/core/publishing').PublishPlatform; accountRef: string; queuedAt: string };
+  'publish:started': { jobId: string; platform: import('@/core/publishing').PublishPlatform; accountRef: string; startedAt: string };
+  'publish:progress': { jobId: string; progress: import('@/core/publishing').PublishProgress };
+  'publish:rate-limited': { jobId: string; retryAfterUtc: string | null; occurredAt: string };
+  'publish:retry-scheduled': { jobId: string; retryAtUtc: string | null; scheduledAt: string };
+  'publish:remote-processing': { jobId: string; remotePublishId: string; occurredAt: string };
+  'publish:verified': { jobId: string; receipt: import('@/core/publishing').PublishReceipt; verifiedAt: string };
+  'publish:completed': { jobId: string; receipt: import('@/core/publishing').PublishReceipt; completedAt: string };
+  'publish:failed': { jobId: string; failure: import('@/core/publishing').PublishFailure; failedAt: string };
+  'publish:cancelled': { jobId: string; cancelledAt: string };
+  'publish:interrupted': { jobId: string; interruptedAt: string };
+  'publish:reconciled': { jobId: string; remotePublishId: string | null; state: string; reconciledAt: string };
   'export-intelligence:job-queued': { jobId: string; projectId: string; presetId: string; queuedAt: string };
   'export-intelligence:progress': { jobId: string; progress: import('@/core/export-intelligence').ExportProgress };
   'export-intelligence:completed': { jobId: string; artifact: import('@/core/export-intelligence').ExportArtifact; completedAt: string };

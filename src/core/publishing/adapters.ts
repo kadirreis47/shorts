@@ -1,0 +1,4 @@
+import { getPublishCapability } from './capabilities';
+import type { PublishAdapter, PublishAdapterContext, PublishAdapterRegistry, PublishPlatform } from './types';
+function unavailable(platform: PublishPlatform): PublishAdapter { return { platform, capability: () => getPublishCapability(platform), async publish() { throw new Error(`Publishing adapter ${platform} is not implemented; no remote upload was attempted.`); }, async reconcile() { return { found: false, state: 'unknown' }; } }; }
+export function createPublishAdapterRegistry(): PublishAdapterRegistry { const adapters = (['youtube', 'tiktok', 'instagram'] as const).map(unavailable); return { get(platform) { const adapter = adapters.find((item) => item.platform === platform); if (!adapter) throw new Error(`Unsupported publishing platform: ${platform}`); return adapter; }, list() { return adapters; } }; }

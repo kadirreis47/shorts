@@ -7,6 +7,7 @@ export type ViewKey =
   | 'dashboard'
   | 'studio'
   | 'subtitle-studio'
+  | 'publishing-studio'
   | 'videos'
   | 'calendar'
   | 'automation'

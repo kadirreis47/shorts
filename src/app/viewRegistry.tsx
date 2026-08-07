@@ -67,6 +67,7 @@ const AIVisualStudio = lazyNamed(() => import('@/views/AIVisualStudio'), 'AIVisu
 const AISubtitleStudio = lazyNamed(() => import('@/views/AISubtitleStudio'), 'AISubtitleStudio');
 const AIPlatformStudio = lazyNamed(() => import('@/views/AIPlatformStudio'), 'AIPlatformStudio');
 const AIExportStudio = lazyNamed(() => import('@/views/AIExportStudio'), 'AIExportStudio');
+const AIPublishingStudio = lazyNamed(() => import('@/views/AIPublishingStudio'), 'AIPublishingStudio');
 
 export interface ViewRenderContext {
   channels: Channel[];
@@ -132,5 +133,6 @@ export const VIEW_REGISTRY: Record<ViewKey, ViewRenderer> = {
   'subtitle-studio': () => <AISubtitleStudio />,
   'platform-studio': () => <AIPlatformStudio />,
   'export-studio': () => <AIExportStudio />,
+  'publishing-studio': () => <AIPublishingStudio />,
   settings: ({ channels }) => <Settings channels={channels} />,
 };
