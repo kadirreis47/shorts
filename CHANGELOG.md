@@ -181,3 +181,30 @@ Bu projedeki önemli değişiklikler bu dosyada kaydedilir.
 - Bound previews to plan/profile/approval signatures and invalidated source validation after variant changes.
 - Added source-binding watcher to invalidate stale Platform Studio plans before user actions.
 - Consumed applied previews and bounded/deduplicated platform variant history.
+
+# Epic 7.7 Export Intelligence Engine
+
+- Added runtime FFmpeg capability detection, export presets, deterministic queue and artifact verification.
+# Epic 7.7 restart recovery
+
+- Persisted export queue hydration ve version normalization eklendi.
+- Restart sÄ±rasÄ±ndaki iÅŸler `interrupted` olarak güvenli retry state'ine alÄ±nÄ±yor.
+- Persisted active job restore edilmiyor; duplicate execution engelleniyor.
+# Epic 7.7 export guardrails
+
+- Native save dialog destination seçimi ve absolute path validation eklendi.
+- FFmpeg unavailable durumunda production export gating eklendi.
+# Epic 7.7 recovery and capability hardening
+
+- Every export rehydration now normalizes persisted in-flight jobs to `interrupted`.
+- FFprobe capability is probed independently and required for production export.
+# Epic 7.7 codec/encoder consistency
+
+- Archive and built-in presets now emit compatible codec/encoder pairs.
+- Renderer rejects manually constructed plans with incompatible encoder metadata.
+# Epic 7.7 cache destination correctness
+
+- Cache-hit artifacts are atomically materialized to the requested export destination before verification.
+* Hardened export rendering so planned encoders and preset encoding settings reach the FFmpeg command unchanged.
+* Fixed Windows cache-hit materialization when the approved export destination already exists, with serialized replacement and rollback protection.
+* Made export encoder selection hardware-policy aware and deterministic across capability ordering.

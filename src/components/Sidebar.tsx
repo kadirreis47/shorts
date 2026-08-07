@@ -57,7 +57,8 @@ export type ViewKey =
   | 'editor'
   | 'audio-studio'
   | 'visual-studio'
-  | 'platform-studio';
+  | 'platform-studio'
+  | 'export-studio';
 
 interface SidebarProps {
   current: ViewKey;

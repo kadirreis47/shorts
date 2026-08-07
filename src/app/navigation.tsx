@@ -66,6 +66,7 @@ export function useNavigationItems(): NavigationItem[] {
       { key: 'visual-studio', label: 'AI Visual Studio', icon: <Eye size={18} /> },
       { key: 'subtitle-studio', label: 'AI Subtitle Studio', icon: <Type size={18} /> },
       { key: 'platform-studio', label: 'AI Platform Studio', icon: <Send size={18} /> },
+      { key: 'export-studio', label: 'AI Export Studio', icon: <Film size={18} /> },
       { key: 'faceless', label: t('nav.faceless'), icon: <Film size={18} /> },
       { key: 'videos', label: t('nav.videos'), icon: <VideoIcon size={18} /> },
       { key: 'calendar', label: t('nav.calendar'), icon: <Calendar size={18} />, section: t('nav.section.manage') },

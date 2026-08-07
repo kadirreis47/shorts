@@ -3,6 +3,12 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'export-intelligence:job-queued': { jobId: string; projectId: string; presetId: string; queuedAt: string };
+  'export-intelligence:progress': { jobId: string; progress: import('@/core/export-intelligence').ExportProgress };
+  'export-intelligence:completed': { jobId: string; artifact: import('@/core/export-intelligence').ExportArtifact; completedAt: string };
+  'export-intelligence:failed': { jobId: string; failure: import('@/core/export-intelligence').ExportFailure; failedAt: string };
+  'export-intelligence:cancelled': { jobId: string; cancelledAt: string };
+  'export-intelligence:capabilities-detected': { capability: import('@/core/export-intelligence').ExportCapability; detectedAt: string };
   'platform-optimization:analysis-started': { projectId: string; platformId: import('@/core/platform-optimization').PlatformId; startedAt: string };
   'platform-optimization:analysis-completed': { projectId: string; platformId: import('@/core/platform-optimization').PlatformId; plan: import('@/core/platform-optimization').PlatformOptimizationPlan; completedAt: string };
   'platform-optimization:preview-started': { projectId: string; platformId: import('@/core/platform-optimization').PlatformId; startedAt: string };

@@ -137,6 +137,9 @@ export function selectHardware(preset: RenderPreset, capabilities: FFmpegCapabil
 }
 
 export function withHardwareSelection(preset: RenderPreset, selection: HardwareSelection): RenderPreset {
+  // An explicit planner encoder is authoritative. Hardware scheduling may
+  // control admission, but it must never replace QSV/AMF/VideoToolbox/etc.
+  if (preset.encoder) return { ...preset };
   return { ...preset, hardwareAcceleration: selection.backend === 'nvenc' ? 'nvenc' : 'disabled' };
 }
 

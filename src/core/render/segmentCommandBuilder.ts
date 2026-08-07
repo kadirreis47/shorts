@@ -28,7 +28,7 @@ export function buildSceneSegmentCommand(input: {
   outputPath: string;
 }): SceneSegmentCommandPlan {
   const { manifest, scene, preset, outputPath } = input;
-  const fps = manifest.render.fps;
+  const fps = preset.frameRate ?? manifest.render.fps;
   const width = manifest.render.width;
   const height = manifest.render.height;
   const durationSeconds = Math.max(0.1, scene.durationMs / 1000);
@@ -106,8 +106,12 @@ export function buildSceneSegmentCommand(input: {
     '-c:v',
     videoCodec(preset),
     ...qualityArgs(preset),
+    ...(preset.frameRate !== undefined ? ['-r', String(preset.frameRate)] : []),
+    ...(preset.bitrateKbps !== undefined ? ['-b:v', `${preset.bitrateKbps}k`] : []),
+    ...(preset.gopFrames !== undefined ? ['-g', String(preset.gopFrames)] : []),
+    ...(preset.threads !== undefined ? ['-threads', String(preset.threads)] : []),
     '-pix_fmt',
-    'yuv420p',
+    preset.pixelFormat ?? 'yuv420p',
     '-movflags',
     '+faststart',
     '-progress',
@@ -156,7 +160,7 @@ export function buildSegmentConcatCommand(input: {
       '-t',
       durationSeconds.toFixed(3),
       '-i',
-      'anullsrc=channel_layout=stereo:sample_rate=48000',
+      `anullsrc=channel_layout=${(preset.audioChannels ?? 2) === 1 ? 'mono' : 'stereo'}:sample_rate=${preset.sampleRate ?? 48000}`,
       '-map',
       '0:v:0',
       '-map',
@@ -170,11 +174,11 @@ export function buildSegmentConcatCommand(input: {
     '-c:a',
     preset.audioCodec === 'opus' ? 'libopus' : 'aac',
     '-b:a',
-    '192k',
+    `${preset.audioBitrateKbps ?? 192}k`,
     '-ar',
-    '48000',
+    String(preset.sampleRate ?? 48000),
     '-ac',
-    '2',
+    String(preset.audioChannels ?? 2),
     '-movflags',
     '+faststart',
     '-shortest',
@@ -189,7 +193,7 @@ export function buildSegmentConcatCommand(input: {
     concatContent: segmentPaths
       .map((segmentPath) => `file '${escapeConcatPath(segmentPath)}'`)
       .join('\n'),
-    totalFrames: Math.ceil(durationSeconds * manifest.render.fps),
+    totalFrames: Math.ceil(durationSeconds * (preset.frameRate ?? manifest.render.fps)),
   };
 }
 
@@ -200,6 +204,7 @@ function sceneColor(index: number): string {
 }
 
 function videoCodec(preset: RenderPreset): string {
+  if (preset.encoder) return preset.encoder;
   if (preset.hardwareAcceleration === 'nvenc') {
     return preset.videoCodec === 'hevc' ? 'hevc_nvenc' : 'h264_nvenc';
   }
@@ -209,6 +214,13 @@ function videoCodec(preset: RenderPreset): string {
 }
 
 function qualityArgs(preset: RenderPreset): string[] {
+  if (preset.encoderPreset || preset.crf !== undefined) {
+    return [
+      ...(preset.encoderPreset ? ['-preset', preset.encoderPreset] : []),
+      ...(preset.crf !== undefined ? ['-crf', String(preset.crf)] : []),
+    ];
+  }
+  if (preset.bitrateKbps !== undefined) return preset.encoderMode === 'hardware' ? [] : ['-preset', preset.quality === 'draft' ? 'veryfast' : preset.quality === 'high' ? 'slow' : 'medium'];
   if (preset.hardwareAcceleration === 'nvenc') {
     return [
       '-preset',

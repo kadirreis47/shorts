@@ -35,6 +35,7 @@ import {
   createVisualProductionApplicationService,
   createSubtitleIntelligenceApplicationService,
   createPlatformOptimizationApplicationService,
+  createExportIntelligenceApplicationService,
 } from '@/services';
 
 let dependenciesRegistered = false;
@@ -88,6 +89,7 @@ export function registerApplicationDependencies() {
   applicationContainer.registerSingleton(dependencyTokens.subtitleIntelligenceEngine, () => createSubtitleIntelligenceEngine());
   applicationContainer.registerSingleton(dependencyTokens.subtitleIntelligenceApplicationService, (container) => createSubtitleIntelligenceApplicationService(container.resolve(dependencyTokens.subtitleIntelligenceEngine), container.resolve(dependencyTokens.eventBus)));
   applicationContainer.registerSingleton(dependencyTokens.platformOptimizationApplicationService, () => createPlatformOptimizationApplicationService(createPlatformOptimizationEngine()));
+  applicationContainer.registerSingleton(dependencyTokens.exportIntelligenceApplicationService, () => createExportIntelligenceApplicationService());
 
   applicationContainer.registerSingleton(
     dependencyTokens.aiPipelineRunner,

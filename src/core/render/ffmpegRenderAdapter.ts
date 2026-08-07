@@ -44,7 +44,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
         }
         return await this.runFFmpeg(context, effectivePreset, capabilities);
       } catch (error) {
-        const shouldFallback = context.preset.hardwareAcceleration === 'auto' && lease.selection.backend === 'nvenc' && !context.signal.aborted;
+        const shouldFallback = !context.preset.encoder && context.preset.hardwareAcceleration === 'auto' && lease.selection.backend === 'nvenc' && !context.signal.aborted;
         if (!shouldFallback) throw error;
         await context.reportProgress({ stage: 'planning', progress: 4, message: 'NVENC başarısız oldu; CPU kodlamaya güvenli geçiş yapılıyor' });
         return await this.runFFmpeg(

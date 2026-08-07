@@ -1,4 +1,4 @@
-const { app, ipcMain } = require('electron');
+const { app, ipcMain, dialog, BrowserWindow } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -6,9 +6,16 @@ const os = require('os');
 const { validateFFmpegRunRequest, validateTargetPath } = require('./ffmpeg-security.cjs');
 
 const active = new Map();
+const materializationLocks = new Map();
 let cachedCapabilities = null;
 
 function registerFFmpegHandlers() {
+  ipcMain.handle('ffmpeg:pick-output-path', async (event, options = {}) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showSaveDialog(window, { title: 'Export destination', defaultPath: typeof options.defaultPath === 'string' ? options.defaultPath : 'export.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
+    if (result.canceled || !result.filePath) return null;
+    return validateTargetPath(result.filePath);
+  });
   ipcMain.handle('ffmpeg:capabilities', async (_event, forceRefresh = false) => {
     if (cachedCapabilities && !forceRefresh) return cachedCapabilities;
     cachedCapabilities = await detectCapabilities();
@@ -59,6 +66,20 @@ function registerFFmpegHandlers() {
       return false;
     }
   });
+  ipcMain.handle('ffmpeg:copy-file', async (_event, request) => {
+    const sourcePath = validateTargetPath(request?.sourcePath);
+    const destinationPath = validateTargetPath(request?.destinationPath);
+    const samePath = process.platform === 'win32'
+      ? sourcePath.toLowerCase() === destinationPath.toLowerCase()
+      : sourcePath === destinationPath;
+    if (samePath) { const stat = await fs.promises.stat(destinationPath); return { path: destinationPath, sizeBytes: stat.size }; }
+    const key = process.platform === 'win32' ? destinationPath.toLowerCase() : destinationPath;
+    const previous = materializationLocks.get(key) || Promise.resolve();
+    const operation = previous.then(() => materializeFile(sourcePath, destinationPath));
+    const locked = operation.catch(() => undefined);
+    materializationLocks.set(key, locked);
+    try { return await operation; } finally { if (materializationLocks.get(key) === locked) materializationLocks.delete(key); }
+  });
   ipcMain.handle('ffmpeg:cancel', async (_event, jobId) => {
     const child = active.get(jobId);
     if (!child) return false;
@@ -68,17 +89,63 @@ function registerFFmpegHandlers() {
   });
 }
 
+async function materializeFile(sourcePath, destinationPath) {
+  await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
+  const temporaryPath = path.join(path.dirname(destinationPath), `.${path.basename(destinationPath)}.${process.pid}.${Date.now()}.tmp`);
+  const backupPath = path.join(path.dirname(destinationPath), `.${path.basename(destinationPath)}.${process.pid}.${Date.now()}.bak`);
+  let backedUp = false;
+  let committed = false;
+  try {
+    await fs.promises.copyFile(sourcePath, temporaryPath);
+    const temporaryStat = await fs.promises.stat(temporaryPath);
+    if (!temporaryStat.isFile() || temporaryStat.size <= 0) throw new Error('Materialized cache artifact is empty.');
+    try {
+      await fs.promises.rename(destinationPath, backupPath);
+      backedUp = true;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    try {
+      await fs.promises.rename(temporaryPath, destinationPath);
+    } catch (error) {
+      if (backedUp) {
+        try { await fs.promises.rename(backupPath, destinationPath); } catch {}
+      }
+      throw error;
+    }
+    const stat = await fs.promises.stat(destinationPath);
+    if (!stat.isFile() || stat.size !== temporaryStat.size) throw new Error('Materialized destination failed integrity check.');
+    committed = true;
+    if (backedUp) { try { await fs.promises.rm(backupPath, { force: true }); } catch {} }
+    return { path: destinationPath, sizeBytes: stat.size };
+  } catch (error) {
+    if (backedUp && !committed) {
+      try {
+        await fs.promises.rm(destinationPath, { force: true });
+      } catch {}
+      try { await fs.promises.rename(backupPath, destinationPath); } catch {}
+    }
+    throw error;
+  } finally {
+    try { await fs.promises.rm(temporaryPath, { force: true }); } catch {}
+    if (backedUp && committed) { try { await fs.promises.rm(backupPath, { force: true }); } catch {} }
+  }
+}
+
 async function detectCapabilities() {
-  const executable = process.env.SHORTSFLOW_FFMPEG_PATH || 'ffmpeg';
+  const executable = resolveExecutable();
   try {
     const versionOutput = await capture(executable, ['-version']);
     const encodersOutput = await capture(executable, ['-hide_banner', '-encoders']);
     const encoders = encodersOutput.split(/\r?\n/).filter((line) => /^\s*[VAS\.]{6}\s+\S+/.test(line)).map((line) => line.trim().split(/\s+/)[1]).filter(Boolean);
     const hardwareEncoders = encoders.filter((name) => /nvenc|qsv|vaapi|videotoolbox|amf/i.test(name));
     const gpuDevices = await detectNvidiaGpus();
-    return { available: true, executable, version: versionOutput.split(/\r?\n/)[0] || null, encoders, hardwareEncoders, gpuDevices };
+    const ffprobeExecutable = resolveFFprobeExecutable();
+    let ffprobeAvailable = false; let ffprobeVersion = null;
+    try { const probe = await capture(ffprobeExecutable, ['-version']); ffprobeAvailable = true; ffprobeVersion = probe.split(/\r?\n/)[0] || null; } catch {}
+    return { available: true, executable, version: versionOutput.split(/\r?\n/)[0] || null, encoders, hardwareEncoders, gpuDevices, ffprobeAvailable, ffprobeExecutable: ffprobeAvailable ? ffprobeExecutable : null, ffprobeVersion };
   } catch {
-    return { available: false, executable: null, version: null, encoders: [], hardwareEncoders: [], gpuDevices: [] };
+    return { available: false, executable: null, version: null, encoders: [], hardwareEncoders: [], gpuDevices: [], ffprobeAvailable: false, ffprobeExecutable: null, ffprobeVersion: null };
   }
 }
 
@@ -176,6 +243,12 @@ function resolveFFprobeExecutable() {
 
   if (fs.existsSync(candidate)) return candidate;
   return 'ffprobe';
+}
+
+function resolveExecutable() {
+  const explicit = process.env.SHORTSFLOW_FFMPEG_PATH;
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
+  return process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
 }
 
 async function runFFmpeg(webContents, request) {

@@ -68,3 +68,5 @@ Masaüstü paketleme ayrıntıları için `README-desktop.md`, sprint kapsamı i
 # Platform Optimization
 
 Epic 7.6 adds a versioned, configurable Platform Optimization Engine for Shorts, TikTok, Reels and generic short video. It creates immutable platform variants, previews readiness and keeps unsupported crop, pacing and export work planned-only. Upload and publishing are intentionally outside the scope.
+
+Epic 7.7 adds AI Export Intelligence: runtime FFmpeg capability detection, versioned export presets, deterministic queue/retry/progress management and post-render artifact verification.

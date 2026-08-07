@@ -26,10 +26,28 @@ export interface RenderPreset {
   id: string;
   name: string;
   container: 'mp4' | 'webm';
-  videoCodec: 'h264' | 'hevc' | 'vp9';
+  videoCodec: 'h264' | 'hevc' | 'av1' | 'vp9';
   audioCodec: 'aac' | 'opus';
   quality: 'draft' | 'standard' | 'high';
   hardwareAcceleration: 'auto' | 'disabled' | 'nvenc';
+  /** Effective encoder selected by the export planner. */
+  encoder?: string;
+  encoderMode?: 'software' | 'hardware';
+  bitrateKbps?: number;
+  maxBitrateKbps?: number;
+  bufferSizeKbps?: number;
+  crf?: number;
+  encoderPreset?: string;
+  frameRate?: number;
+  pixelFormat?: 'yuv420p' | 'yuv444p';
+  gopFrames?: number;
+  keyframeInterval?: number;
+  threads?: number;
+  audioBitrateKbps?: number;
+  sampleRate?: number;
+  audioChannels?: number;
+  colorSpace?: string;
+  profile?: string;
 }
 
 export interface RenderJobRequest {

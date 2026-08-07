@@ -33,6 +33,8 @@ export * from '@/services/visualProductionApplicationService';
 export * from '@/services/subtitleIntelligenceApplicationService';
 export * from '@/services/platformOptimizationApplicationService';
 export * from '@/services/platformOptimizationController';
+export * from '@/services/exportIntelligenceApplicationService';
+export * from '@/services/exportIntelligenceController';
 
 export { createDirectorApplicationService, createDirectorInput } from './directorApplicationService';
 export type {

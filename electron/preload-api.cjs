@@ -3,12 +3,14 @@ const ALLOWED_FFMPEG_API_KEYS = Object.freeze([
   'run',
   'cancel',
   'fileExists',
+  'copyFile',
   'getSegmentPath',
   'segmentExists',
   'getSegmentCacheStats',
   'clearSegmentCache',
   'analyzeOutput',
-  'onProgress',
+    'onProgress',
+  'pickOutputPath',
 ]);
 
 function createFFmpegBridge(ipcRenderer) {
@@ -17,11 +19,13 @@ function createFFmpegBridge(ipcRenderer) {
     run: (request) => ipcRenderer.invoke('ffmpeg:run', request),
     cancel: (jobId) => ipcRenderer.invoke('ffmpeg:cancel', jobId),
     fileExists: (targetPath) => ipcRenderer.invoke('ffmpeg:file-exists', targetPath),
+    copyFile: (sourcePath, destinationPath) => ipcRenderer.invoke('ffmpeg:copy-file', { sourcePath, destinationPath }),
     getSegmentPath: (fingerprint) => ipcRenderer.invoke('ffmpeg:segment-path', fingerprint),
     segmentExists: (fingerprint) => ipcRenderer.invoke('ffmpeg:segment-exists', fingerprint),
     getSegmentCacheStats: () => ipcRenderer.invoke('ffmpeg:segment-cache-stats'),
     clearSegmentCache: () => ipcRenderer.invoke('ffmpeg:segment-cache-clear'),
     analyzeOutput: (targetPath) => ipcRenderer.invoke('ffmpeg:analyze-output', targetPath),
+    pickOutputPath: (options) => ipcRenderer.invoke('ffmpeg:pick-output-path', options),
     onProgress: (listener) => {
       if (typeof listener !== 'function') throw new TypeError('Progress listener must be a function.');
       const handler = (_event, payload) => listener(payload);

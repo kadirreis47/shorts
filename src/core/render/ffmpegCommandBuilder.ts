@@ -10,7 +10,7 @@ export function buildFFmpegCommand(
   context: Pick<RenderExecutionContext, 'manifest' | 'preset'>,
 ): FFmpegCommandPlan {
   const { manifest, preset } = context;
-  const fps = manifest.render.fps;
+  const fps = preset.frameRate ?? manifest.render.fps;
   const width = manifest.render.width;
   const height = manifest.render.height;
   const scenes = manifest.timeline.scenes;
@@ -39,7 +39,7 @@ export function buildFFmpegCommand(
 
     filters.push(
       `[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,` +
-      `crop=${width}:${height},fps=${fps},format=yuv420p,` +
+      `crop=${width}:${height},fps=${fps},format=${preset.pixelFormat ?? 'yuv420p'},` +
       `trim=duration=${durationSeconds.toFixed(3)},setpts=PTS-STARTPTS[v${index}]`,
     );
   });
@@ -56,15 +56,18 @@ export function buildFFmpegCommand(
   args.push(
     '-f', 'lavfi',
     '-t', durationSeconds.toFixed(3),
-    '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+    '-i', `anullsrc=channel_layout=${(preset.audioChannels ?? 2) === 1 ? 'mono' : 'stereo'}:sample_rate=${preset.sampleRate ?? 48000}`,
     '-filter_complex', filters.join(';'),
     '-map', '[videoout]',
     '-map', `${scenes.length}:a`,
     '-c:v', videoCodec(preset),
     ...qualityArgs(preset),
+    ...videoSettings(preset),
     '-c:a', preset.audioCodec === 'opus' ? 'libopus' : 'aac',
-    '-b:a', '192k',
-    '-pix_fmt', 'yuv420p',
+    '-b:a', `${preset.audioBitrateKbps ?? 192}k`,
+    '-ar', String(preset.sampleRate ?? 48000),
+    '-ac', String(preset.audioChannels ?? 2),
+    '-pix_fmt', preset.pixelFormat ?? 'yuv420p',
     '-movflags', '+faststart',
     '-shortest',
     '-progress', 'pipe:1',
@@ -99,16 +102,43 @@ function sceneColor(index: number): string {
   return ['0x0f172a','0x111827','0x1e293b','0x172554','0x312e81'][index % 5];
 }
 function videoCodec(preset: RenderExecutionContext['preset']): string {
+  if (preset.encoder) return preset.encoder;
   if (preset.hardwareAcceleration === 'nvenc') return preset.videoCodec === 'hevc' ? 'hevc_nvenc' : 'h264_nvenc';
   if (preset.videoCodec === 'hevc') return 'libx265';
   if (preset.videoCodec === 'vp9') return 'libvpx-vp9';
+  if (preset.videoCodec === 'av1') return 'libaom-av1';
   return 'libx264';
 }
 function qualityArgs(preset: RenderExecutionContext['preset']): string[] {
+  if (preset.encoderPreset || preset.crf !== undefined) {
+    return [
+      ...(preset.encoderPreset ? ['-preset', preset.encoderPreset] : []),
+      ...(preset.crf !== undefined ? ['-crf', String(preset.crf)] : []),
+    ];
+  }
+  if (preset.bitrateKbps !== undefined) {
+    if (preset.encoderMode === 'hardware') return [];
+    const speed = preset.quality === 'draft' ? 'veryfast' : preset.quality === 'high' ? 'slow' : 'medium';
+    return ['-preset', speed];
+  }
   if (preset.hardwareAcceleration === 'nvenc') {
     return ['-preset', preset.quality === 'draft' ? 'p1' : preset.quality === 'high' ? 'p6' : 'p4', '-cq', preset.quality === 'high' ? '18' : '23'];
   }
   const crf = preset.quality === 'draft' ? '30' : preset.quality === 'high' ? '18' : '23';
   const speed = preset.quality === 'draft' ? 'veryfast' : preset.quality === 'high' ? 'slow' : 'medium';
   return ['-preset', speed, '-crf', crf];
+}
+
+function videoSettings(preset: RenderExecutionContext['preset']): string[] {
+  return [
+    ...(preset.bitrateKbps !== undefined ? ['-b:v', `${preset.bitrateKbps}k`] : []),
+    ...(preset.maxBitrateKbps !== undefined ? ['-maxrate', `${preset.maxBitrateKbps}k`] : []),
+    ...(preset.bufferSizeKbps !== undefined ? ['-bufsize', `${preset.bufferSizeKbps}k`] : []),
+    ...(preset.frameRate !== undefined ? ['-r', String(preset.frameRate)] : []),
+    ...(preset.gopFrames !== undefined ? ['-g', String(preset.gopFrames)] : []),
+    ...(preset.keyframeInterval !== undefined ? ['-keyint_min', String(preset.keyframeInterval)] : []),
+    ...(preset.threads !== undefined ? ['-threads', String(preset.threads)] : []),
+    ...(preset.colorSpace ? ['-colorspace', preset.colorSpace] : []),
+    ...(preset.profile ? ['-profile:v', preset.profile] : []),
+  ];
 }
