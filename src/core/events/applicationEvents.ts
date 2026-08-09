@@ -3,6 +3,16 @@ import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
 export interface ApplicationEventMap extends Record<string, unknown> {
+  'analytics.collection.started': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.collection.completed': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.collection.partial': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.collection.failed': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.rate_limited': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.snapshot.updated': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.learning.started': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.learning.completed': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.insight.generated': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
+  'analytics.recommendation.generated': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
   'publish:created': { jobId: string; platform: import('@/core/publishing').PublishPlatform; accountRef: string; createdAt: string };
   'publish:queued': { jobId: string; platform: import('@/core/publishing').PublishPlatform; accountRef: string; queuedAt: string };
   'publish:started': { jobId: string; platform: import('@/core/publishing').PublishPlatform; accountRef: string; startedAt: string };

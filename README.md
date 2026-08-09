@@ -1,5 +1,9 @@
 # ShortsFlow — Epic 7.3 AI Voice & Audio Production Engine
 
+## Analytics and Learning
+
+The lazy-loaded AI Analytics Studio uses canonical, publication-bound analytics rather than simulated production numbers. Platform adapters are capability-gated, missing metrics stay unavailable instead of becoming zero, and learning recommendations are explicitly observational rather than causal. See [Analytics Learning Engine](docs/ANALYTICS_LEARNING_ENGINE.md).
+
 ## AI Audio Studio
 
 Epic 7.3 adds deterministic voice timing, silence, speech pacing and technical

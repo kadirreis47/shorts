@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added Epic 7.9 Analytics, Performance Intelligence & Learning Engine with canonical metrics, publication bindings, bounded persistence, explainable learning and no fabricated production platform data.
+
 ## Epic 7.5 review hardening
 
 - Added token-safe preview-family supersession so rapid subtitle approval changes resolve to the latest preview without stale errors or loading-state writes.

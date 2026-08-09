@@ -42,6 +42,7 @@ function createToken<T>(name: string): DependencyToken<T> {
 export const dependencyTokens = {
   exportIntelligenceApplicationService: createToken<ExportIntelligenceApplicationService>('ExportIntelligenceApplicationService'),
   publishingApplicationService: createToken<import('@/services/publishingApplicationService').PublishingApplicationService>('PublishingApplicationService'),
+  analyticsApplicationService: createToken<import('@/services/analyticsApplicationService').AnalyticsApplicationService>('AnalyticsApplicationService'),
   platformOptimizationApplicationService: createToken<PlatformOptimizationApplicationService>('PlatformOptimizationApplicationService'),
   subtitleIntelligenceEngine: createToken<SubtitleIntelligenceEngine>('SubtitleIntelligenceEngine'),
   subtitleIntelligenceApplicationService: createToken<SubtitleIntelligenceApplicationService>('SubtitleIntelligenceApplicationService'),

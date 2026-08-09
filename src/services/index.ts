@@ -43,3 +43,5 @@ export type {
 } from './directorApplicationService';
 export * from './publishingApplicationService';
 export * from './publishingController';
+export * from './analyticsApplicationService';
+export * from './analyticsController';

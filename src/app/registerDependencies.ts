@@ -37,6 +37,7 @@ import {
   createPlatformOptimizationApplicationService,
   createExportIntelligenceApplicationService,
   createPublishingApplicationService,
+  createAnalyticsApplicationService,
 } from '@/services';
 
 let dependenciesRegistered = false;
@@ -92,6 +93,7 @@ export function registerApplicationDependencies() {
   applicationContainer.registerSingleton(dependencyTokens.platformOptimizationApplicationService, () => createPlatformOptimizationApplicationService(createPlatformOptimizationEngine()));
   applicationContainer.registerSingleton(dependencyTokens.exportIntelligenceApplicationService, () => createExportIntelligenceApplicationService());
   applicationContainer.registerSingleton(dependencyTokens.publishingApplicationService, (container) => createPublishingApplicationService(container.resolve(dependencyTokens.eventBus)));
+  applicationContainer.registerSingleton(dependencyTokens.analyticsApplicationService, (container) => createAnalyticsApplicationService(container.resolve(dependencyTokens.eventBus)));
 
   applicationContainer.registerSingleton(
     dependencyTokens.aiPipelineRunner,
