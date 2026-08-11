@@ -2,6 +2,7 @@
 
 import type { FFmpegBridge } from '@/core/render/ffmpegTypes';
 import type { YouTubePublishingClient } from '@/core/publishing/adapters';
+import type { AnalyticsAdapterResponse, AnalyticsWindow } from '@/core/analytics';
 
 declare global {
   interface YouTubeConnectionResult {
@@ -31,6 +32,21 @@ declare global {
     ok: false;
     error: { code: string; message: string };
   }
+  interface YouTubeAnalyticsRequest {
+    credentialRef: string;
+    channelRef: string;
+    remotePublicationId: string;
+    publishedAt: string;
+    window: AnalyticsWindow;
+  }
+  interface YouTubeAnalyticsResult {
+    ok: true;
+    result: AnalyticsAdapterResponse;
+  }
+  interface YouTubeAnalyticsFailure {
+    ok: false;
+    error: { code: string; message: string; retryable: boolean; status: number; retryAfterMs: number | null };
+  }
   interface Window {
     electronAPI?: {
       platform: string;
@@ -42,6 +58,7 @@ declare global {
         cancelSelection(selectionRef: string): Promise<{ selectionRef: string; cancelled: boolean }>;
         disconnect(credentialRef: string): Promise<{ credentialRef: string; disconnected: boolean }>;
         status(credentialRef: string): Promise<YouTubeStatusResult | YouTubeStatusFailure>;
+        collectAnalytics?(request: YouTubeAnalyticsRequest): Promise<YouTubeAnalyticsResult | YouTubeAnalyticsFailure>;
       };
     };
   }

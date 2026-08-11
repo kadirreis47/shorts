@@ -2,16 +2,18 @@ const http = require('http');
 const { shell } = require('electron');
 const { createPkce, createState, YouTubeCredentialError } = require('./youtube-credentials.cjs');
 
-const SCOPES = ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'];
+const PUBLISHING_SCOPES = ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'];
+const ANALYTICS_SCOPE = 'https://www.googleapis.com/auth/yt-analytics.readonly';
+const SCOPES = [...PUBLISHING_SCOPES, ANALYTICS_SCOPE];
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const CHANNEL_URL = 'https://www.googleapis.com/youtube/v3/channels?part=id,snippet&mine=true';
 
 function config(clientIdOverride) { const clientId = typeof clientIdOverride === 'function' ? clientIdOverride() : clientIdOverride || process.env.SHORTSFLOW_YOUTUBE_CLIENT_ID; if (!clientId) throw new YouTubeCredentialError('oauth-configuration-missing', 'YouTube OAuth is not configured for this application.'); return { clientId }; }
 function oauthError(payload) { const code = payload?.error === 'access_denied' ? 'oauth-cancelled' : 'oauth-callback-failed'; return new YouTubeCredentialError(code, code === 'oauth-cancelled' ? 'YouTube authorization was cancelled.' : 'YouTube authorization callback failed.'); }
 function sanitizeTokenResponse(response) { return { accessToken: String(response.access_token || ''), refreshToken: typeof response.refresh_token === 'string' ? response.refresh_token : null, expiresAt: new Date(Date.now() + Number(response.expires_in || 0) * 1000).toISOString(), scopes: typeof response.scope === 'string' ? response.scope.split(' ').filter(Boolean) : [], tokenType: String(response.token_type || 'Bearer'), provider: 'youtube' }; }
-function assertRequiredScopes(token) {
+function assertPublishingScopes(token) {
   const granted = new Set(token.scopes);
-  if (SCOPES.some((scope) => !granted.has(scope))) throw new YouTubeCredentialError('insufficient-scope', 'The connected YouTube account does not grant the required publishing permissions. Reconnect the account and approve all requested permissions.');
+  if (PUBLISHING_SCOPES.some((scope) => !granted.has(scope))) throw new YouTubeCredentialError('insufficient-scope', 'The connected YouTube account does not grant the required publishing permissions. Reconnect the account and approve all requested permissions.');
 }
 async function jsonFetch(fetchImpl, url, options, errorCode, message) { let response; try { response = await fetchImpl(url, options); } catch { throw new YouTubeCredentialError('youtube-network-failure', 'Unable to reach YouTube. Please try again.'); } let body = {}; try { body = await response.json(); } catch {} if (!response.ok) { if (body?.error === 'invalid_grant' || response.status === 401) throw new YouTubeCredentialError('credential-reconnect-required', 'YouTube authorization has expired or was revoked. Reconnect the account.'); if (response.status === 403) throw new YouTubeCredentialError('insufficient-scope', 'The connected YouTube account does not grant the required permissions.'); throw new YouTubeCredentialError(errorCode, message); } return body; }
 
@@ -25,9 +27,9 @@ function createYouTubeAuthService({ vault, fetchImpl = fetch, openExternal = she
     if (context.timer !== null) selectionClearTimeout(context.timer);
     return context;
   }
-  async function exchange(code, verifier, redirectUri) { const { clientId: configuredClientId } = config(clientId); const body = new URLSearchParams({ code, client_id: configuredClientId, redirect_uri: redirectUri, grant_type: 'authorization_code', code_verifier: verifier }); const result = await jsonFetch(fetchImpl, TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }, 'oauth-exchange-failed', 'YouTube authorization could not be completed.'); const token = sanitizeTokenResponse(result); if (!token.accessToken) throw new YouTubeCredentialError('oauth-exchange-failed', 'YouTube authorization returned no access token.'); assertRequiredScopes(token); return token; }
+  async function exchange(code, verifier, redirectUri) { const { clientId: configuredClientId } = config(clientId); const body = new URLSearchParams({ code, client_id: configuredClientId, redirect_uri: redirectUri, grant_type: 'authorization_code', code_verifier: verifier }); const result = await jsonFetch(fetchImpl, TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }, 'oauth-exchange-failed', 'YouTube authorization could not be completed.'); const token = sanitizeTokenResponse(result); if (!token.accessToken) throw new YouTubeCredentialError('oauth-exchange-failed', 'YouTube authorization returned no access token.'); assertPublishingScopes(token); return token; }
   async function identity(token) { const channels = []; const seenChannelIds = new Set(); const seenPageTokens = new Set(); let pageToken = null; do { if (pageToken) { if (seenPageTokens.has(pageToken)) throw new YouTubeCredentialError('youtube-identity-failed', 'Unable to verify the YouTube channel identity.'); seenPageTokens.add(pageToken); } const url = new URL(CHANNEL_URL); url.searchParams.set('maxResults', '50'); if (pageToken) url.searchParams.set('pageToken', pageToken); const data = await jsonFetch(fetchImpl, url.toString(), { headers: { Authorization: `${token.tokenType} ${token.accessToken}` } }, 'youtube-identity-failed', 'Unable to verify the YouTube channel identity.'); const items = Array.isArray(data.items) ? data.items : []; for (const channel of items) { if (typeof channel?.id !== 'string' || !channel.id || seenChannelIds.has(channel.id)) continue; seenChannelIds.add(channel.id); channels.push({ channelId: channel.id, displayName: String(channel?.snippet?.title || channel.id) }); } pageToken = typeof data.nextPageToken === 'string' && data.nextPageToken ? data.nextPageToken : null; } while (pageToken); if (!channels.length) throw new YouTubeCredentialError('youtube-channel-missing', 'No YouTube channel was found for this account.'); return channels; }
-  async function bind(token, account) { assertRequiredScopes(token); const credentialRef = await vault.store({ ...token, channelId: account.channelId, displayName: account.displayName }); return { platform: 'youtube', credentialRef, accountRef: account.channelId, channelRef: account.channelId, displayName: account.displayName, authenticated: true, grantedScopes: token.scopes }; }
+  async function bind(token, account) { assertPublishingScopes(token); const credentialRef = await vault.store({ ...token, channelId: account.channelId, displayName: account.displayName }); return { platform: 'youtube', credentialRef, accountRef: account.channelId, channelRef: account.channelId, displayName: account.displayName, authenticated: true, grantedScopes: token.scopes }; }
   async function connect() {
     const { clientId: configuredClientId } = config(clientId); const { verifier, challenge } = createPkce(); const state = createState(); let server; let timer;
     try {
@@ -61,7 +63,7 @@ function createYouTubeAuthService({ vault, fetchImpl = fetch, openExternal = she
     const flight = (async () => {
       try {
         if (!material.refreshToken) throw new YouTubeCredentialError('credential-reconnect-required', 'YouTube authorization has expired. Reconnect the account.');
-        const { clientId: configuredClientId } = config(clientId); const body = new URLSearchParams({ client_id: configuredClientId, refresh_token: material.refreshToken, grant_type: 'refresh_token' }); const refreshed = sanitizeTokenResponse(await jsonFetch(fetchImpl, TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }, 'credential-refresh-failed', 'YouTube authorization could not be refreshed.')); const next = { ...material, ...refreshed, scopes: refreshed.scopes.length ? refreshed.scopes : material.scopes, refreshToken: refreshed.refreshToken || material.refreshToken }; assertRequiredScopes(next); await vault.update(credentialRef, next); return next;
+        const { clientId: configuredClientId } = config(clientId); const body = new URLSearchParams({ client_id: configuredClientId, refresh_token: material.refreshToken, grant_type: 'refresh_token' }); const refreshed = sanitizeTokenResponse(await jsonFetch(fetchImpl, TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }, 'credential-refresh-failed', 'YouTube authorization could not be refreshed.')); const next = { ...material, ...refreshed, scopes: refreshed.scopes.length ? refreshed.scopes : material.scopes, refreshToken: refreshed.refreshToken || material.refreshToken }; assertPublishingScopes(next); await vault.update(credentialRef, next); return next;
       } catch (error) {
         if (error?.code === 'credential-reconnect-required') {
           try { await vault.remove(credentialRef); } catch { /* Preserve the terminal authentication result without exposing vault details. */ }
@@ -73,4 +75,4 @@ function createYouTubeAuthService({ vault, fetchImpl = fetch, openExternal = she
   return { connect, finalizeSelection, cancelSelection, resolveExecutionCredential, disconnect: (ref) => vault.remove(ref), status: async (ref) => ({ credentialRef: ref, authenticated: await vault.exists(ref) }) };
 }
 
-module.exports = { SCOPES, createYouTubeAuthService };
+module.exports = { ANALYTICS_SCOPE, PUBLISHING_SCOPES, SCOPES, createYouTubeAuthService };

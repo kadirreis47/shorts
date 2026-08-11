@@ -83,4 +83,20 @@ describe('Electron FFmpeg IPC güvenliği', () => {
     expect(safePublishError(new YouTubeCredentialError('secure-storage-unavailable', 'Secure storage is temporarily unavailable.'))).toMatchObject({ code: 'secure-storage-unavailable', status: 503, retryable: true });
     expect(safePublishError(new YouTubeCredentialError('credential-refresh-failed', 'Refresh failed temporarily.'))).toMatchObject({ code: 'credential-refresh-failed', status: 503, retryable: true });
   });
+  it('exposes only the bounded analytics operation and rejects token or query injection', async () => {
+    const ipc: ElectronIpcMock = { invoke: vi.fn().mockResolvedValue(true), on: vi.fn(), removeListener: vi.fn() };
+    const bridge = createYouTubeBridge(ipc) as { collectAnalytics: (request: unknown) => Promise<unknown> };
+    const request = { credentialRef: 'youtube_11111111-1111-1111-1111-111111111111', channelRef: 'UC-channel', remotePublicationId: 'video-1', publishedAt: '2026-08-01T00:00:00.000Z', window: '24h' };
+    await bridge.collectAnalytics(request); expect(ipc.invoke).toHaveBeenCalledWith('youtube:collect-analytics', request);
+    await expect(bridge.collectAnalytics({ ...request, accessToken: 'secret' })).rejects.toThrow('Invalid YouTube analytics request');
+    await expect(bridge.collectAnalytics({ ...request, remotePublicationId: 'video&metrics=all' })).rejects.toThrow('Invalid YouTube analytics request');
+  });
+  it('sanitizes analytics IPC responses and never returns credential material', async () => {
+    const handlers = new Map<string, (event: unknown, input: unknown) => Promise<unknown>>();
+    const electron = { app: { getPath: () => 'unused' }, ipcMain: { handle: (channel: string, handler: (event: unknown, input: unknown) => Promise<unknown>) => handlers.set(channel, handler), removeHandler: vi.fn() }, safeStorage: {} };
+    registerYouTubeHandlers({ electron, service: { status: vi.fn() }, analyticsService: { collect: async () => ({ metrics: [{ rawMetricId: 'views', value: 1, accessToken: 'access-secret', refreshToken: 'refresh-secret' }], diagnostics: [] }) } });
+    const result = await handlers.get('youtube:collect-analytics')!({}, { credentialRef: 'youtube_11111111-1111-1111-1111-111111111111', channelRef: 'UC-channel', remotePublicationId: 'video-1', publishedAt: '2026-08-01T00:00:00.000Z', window: '24h' });
+    expect(result).toEqual({ ok: true, result: { metrics: [{ rawMetricId: 'views', value: 1, availability: undefined, observedAt: null }], diagnostics: [] } });
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
 });

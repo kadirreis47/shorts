@@ -16,7 +16,7 @@ const ALLOWED_FFMPEG_API_KEYS = Object.freeze([
   'pickOutputPath',
 ]);
 
-const ALLOWED_YOUTUBE_API_KEYS = Object.freeze(['connect', 'disconnect', 'status', 'finalizeSelection', 'cancelSelection', 'publish', 'reconcilePublish', 'cancelPublish', 'acknowledgeReceipt']);
+const ALLOWED_YOUTUBE_API_KEYS = Object.freeze(['connect', 'disconnect', 'status', 'finalizeSelection', 'cancelSelection', 'publish', 'reconcilePublish', 'cancelPublish', 'acknowledgeReceipt', 'collectAnalytics']);
 
 function validCredentialRef(value) {
   return typeof value === 'string' && /^youtube_[0-9a-f-]{36}$/i.test(value);
@@ -44,6 +44,14 @@ function validArtifactIntegrityRequest(value) {
     && Number.isSafeInteger(value.sizeBytes) && value.sizeBytes >= 0
     && typeof value.contentDigest === 'string' && /^[a-f0-9]{64}$/.test(value.contentDigest);
 }
+function validAnalyticsRequest(value) {
+  return Boolean(value) && typeof value === 'object'
+    && validCredentialRef(value.credentialRef) && validChannelRef(value.channelRef)
+    && typeof value.remotePublicationId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.remotePublicationId)
+    && typeof value.publishedAt === 'string' && Number.isFinite(Date.parse(value.publishedAt))
+    && ['1h', '6h', '24h', '48h', '7d', '30d', 'lifetime'].includes(value.window)
+    && !Object.prototype.hasOwnProperty.call(value, 'accessToken') && !Object.prototype.hasOwnProperty.call(value, 'refreshToken');
+}
 
 function createYouTubeBridge(ipcRenderer) {
   return Object.freeze({
@@ -68,6 +76,7 @@ function createYouTubeBridge(ipcRenderer) {
     reconcilePublish: (request) => validPublishRequest(request) ? ipcRenderer.invoke('youtube:reconcile-publish', request) : Promise.reject(new TypeError('Invalid YouTube reconciliation request.')),
     cancelPublish: (jobId) => typeof jobId === 'string' && jobId.length > 0 ? ipcRenderer.invoke('youtube:cancel-publish', { jobId }) : Promise.reject(new TypeError('Invalid YouTube publish job.')),
     acknowledgeReceipt: (request) => validPublishRequest(request) && typeof request.remotePublishId === 'string' ? ipcRenderer.invoke('youtube:acknowledge-receipt', request) : Promise.reject(new TypeError('Invalid YouTube receipt acknowledgement.')),
+    collectAnalytics: (request) => validAnalyticsRequest(request) ? ipcRenderer.invoke('youtube:collect-analytics', request) : Promise.reject(new TypeError('Invalid YouTube analytics request.')),
   });
 }
 
@@ -99,4 +108,4 @@ function createFFmpegBridge(ipcRenderer) {
   });
 }
 
-module.exports = { ALLOWED_FFMPEG_API_KEYS, ALLOWED_YOUTUBE_API_KEYS, createFFmpegBridge, createYouTubeBridge };
+module.exports = { ALLOWED_FFMPEG_API_KEYS, ALLOWED_YOUTUBE_API_KEYS, createFFmpegBridge, createYouTubeBridge, validAnalyticsRequest };
