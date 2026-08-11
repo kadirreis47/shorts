@@ -9,6 +9,18 @@ import { usePublishingStore } from '@/store/publishingStore';
 import { canRebindPublishJobCredential, type PublishAccount } from '@/core/publishing';
 import { rebindPublishingAccountCredential } from '@/services/publishingController';
 
+type NativeYouTubeBridge = NonNullable<Window['electronAPI']>['youtube'];
+
+function hasNativeYouTubeConnectionBridge(value: unknown): value is NativeYouTubeBridge {
+  if (!value || typeof value !== 'object') return false;
+  const bridge = value as Partial<NativeYouTubeBridge>;
+  return typeof bridge.connect === 'function'
+    && typeof bridge.disconnect === 'function'
+    && typeof bridge.status === 'function'
+    && typeof bridge.finalizeSelection === 'function'
+    && typeof bridge.cancelSelection === 'function';
+}
+
 export function Settings(_props: { channels?: Channel[] }) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<Record<string, AppSetting>>({});
@@ -32,7 +44,7 @@ export function Settings(_props: { channels?: Channel[] }) {
   const reconciledCredentialRefs = useRef(new Set<string>());
   const publishingAccounts = usePublishingStore((state) => state.accounts);
   const upsertPublishingAccount = usePublishingStore((state) => state.upsertAccount);
-  const nativeYouTube = Boolean(window.electronAPI?.youtube);
+  const nativeYouTube = hasNativeYouTubeConnectionBridge(window.electronAPI?.youtube);
   const nativeYouTubeAccounts = useMemo(() => publishingAccounts.filter((account) => account.platform === 'youtube'), [publishingAccounts]);
 
   useEffect(() => {

@@ -46,6 +46,30 @@ afterEach(() => {
 });
 
 describe('Settings native YouTube connection', () => {
+  it('accepts the packaged preload connection shape and invokes only native connect', async () => {
+    const connect = vi.fn(async () => connection);
+    const nativeBridge = { connect, disconnect: vi.fn(), status: vi.fn(async () => ({ ok: true as const, status: { credentialRef: connection.credentialRef, authenticated: true } })), finalizeSelection: vi.fn(), cancelSelection: vi.fn() };
+    window.electronAPI = { youtube: nativeBridge } as never;
+    container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Settings /></I18nProvider>); }); await act(async () => {});
+    const connectButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Connect'));
+    expect(connectButton).toBeDefined();
+    await act(async () => { connectButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(connect).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('Authoritative channel');
+    expect(container.textContent).not.toContain(connection.credentialRef);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('keeps the safe fallback when the native bridge is absent or incomplete', async () => {
+    window.electronAPI = { youtube: { connect: vi.fn() } } as never;
+    container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Settings /></I18nProvider>); }); await act(async () => {});
+    expect(container.textContent).toContain('Native YouTube connection is available in the ShortsFlow desktop app.');
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.includes('Connect YouTube'))).toBe(false);
+    await act(async () => { root.unmount(); });
+  });
+
   it('uses the Electron bridge and persists only a safe PublishAccount binding', async () => {
     const connect = vi.fn(async () => connection);
     const disconnect = vi.fn(async () => ({ credentialRef: connection.credentialRef, disconnected: true }));

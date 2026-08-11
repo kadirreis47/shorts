@@ -1,13 +1,15 @@
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const { ALLOWED_FFMPEG_API_KEYS, ALLOWED_YOUTUBE_API_KEYS, createFFmpegBridge, createYouTubeBridge } = require('../../electron/preload-api.cjs') as {
+const { ALLOWED_FFMPEG_API_KEYS, ALLOWED_YOUTUBE_API_KEYS, createFFmpegBridge, createYouTubeBridge, installPreloadBridge } = require('../../electron/preload-api.cjs') as {
   ALLOWED_FFMPEG_API_KEYS: readonly string[];
   ALLOWED_YOUTUBE_API_KEYS: readonly string[];
   createFFmpegBridge: (ipc: ElectronIpcMock) => Record<string, unknown>;
   createYouTubeBridge: (ipc: ElectronIpcMock) => Record<string, unknown>;
+  installPreloadBridge: (input: { contextBridge: { exposeInMainWorld: ReturnType<typeof vi.fn> }; ipcRenderer: ElectronIpcMock; platform: string; version: string }) => Record<string, unknown>;
 };
 const { validateFFmpegRunRequest, validateTargetPath, validateArtifactIntegrityRequest } = require('../../electron/ffmpeg-security.cjs') as {
   validateFFmpegRunRequest: (request: unknown) => unknown;
@@ -24,6 +26,18 @@ interface ElectronIpcMock {
 }
 
 describe('Electron FFmpeg IPC güvenliği', () => {
+  it('installs the packaged-safe preload bridge without sibling module loading', () => {
+    const ipc: ElectronIpcMock = { invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
+    const contextBridge = { exposeInMainWorld: vi.fn() };
+    const api = installPreloadBridge({ contextBridge, ipcRenderer: ipc, platform: 'win32', version: '43.2.0' }) as { youtube: Record<string, unknown> };
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledWith('electronAPI', api);
+    expect(Object.keys(api.youtube).sort()).toEqual([...ALLOWED_YOUTUBE_API_KEYS].sort());
+    expect(api.youtube).not.toHaveProperty('resolveExecutionCredential');
+    expect(JSON.stringify(api)).not.toContain('accessToken');
+    expect(JSON.stringify(api)).not.toContain('refreshToken');
+    expect(readFileSync(path.resolve('electron/preload.cjs'), 'utf8')).not.toContain("require('./preload-api.cjs')");
+  });
+
   it('preload yalnızca izin verilen ve frozen API yüzeyini oluşturur', () => {
     const ipc: ElectronIpcMock = { invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
     const bridge = createFFmpegBridge(ipc);
