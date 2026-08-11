@@ -2,6 +2,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { loadLocalYouTubeClientId } = require('./electron-local-config.cjs');
 
 const HOST = '127.0.0.1';
 const START_PORT = 5173;
@@ -94,6 +95,7 @@ function stopProcess(child) {
 }
 
 async function main() {
+  const youtubeClientId = loadLocalYouTubeClientId();
   const port = await findAvailablePort();
   const devServerUrl = `http://${HOST}:${port}`;
   const viteEntry = require.resolve('vite');
@@ -170,6 +172,7 @@ async function main() {
       ...process.env,
       ELECTRON_IS_DEV: '1',
       SHORTSFLOW_DEV_SERVER_URL: devServerUrl,
+      ...(youtubeClientId ? { SHORTSFLOW_YOUTUBE_CLIENT_ID: youtubeClientId } : {}),
     },
   });
 

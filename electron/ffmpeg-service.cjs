@@ -3,7 +3,9 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { validateFFmpegRunRequest, validateTargetPath } = require('./ffmpeg-security.cjs');
+const { validateFFmpegRunRequest, validateTargetPath, validateArtifactIntegrityRequest } = require('./ffmpeg-security.cjs');
+const { ArtifactIntegrityError, hashFileSha256, revalidateVerifiedArtifact } = require('./artifact-integrity.cjs');
+const { createArtifactSnapshotStore } = require('./artifact-snapshot.cjs');
 
 const active = new Map();
 const materializationLocks = new Map();
@@ -27,6 +29,22 @@ function registerFFmpegHandlers() {
   ipcMain.handle('ffmpeg:analyze-output', async (_event, targetPath) =>
     analyzeOutput(validateTargetPath(targetPath)),
   );
+  ipcMain.handle('ffmpeg:artifact-digest', async (_event, targetPath) =>
+    hashFileSha256(validateTargetPath(targetPath)),
+  );
+  ipcMain.handle('ffmpeg:verify-artifact-snapshot', async (_event, targetPath) => {
+    const trustedPath = validateTargetPath(targetPath);
+    const snapshots = createArtifactSnapshotStore({ directory: path.join(app.getPath('temp'), 'shortsflow-artifact-verification') });
+    return verifyArtifactSnapshot(trustedPath, { snapshots });
+  });
+  ipcMain.handle('ffmpeg:revalidate-artifact', async (_event, artifact) => {
+    try {
+      return { ok: true, artifact: await revalidateVerifiedArtifact(validateArtifactIntegrityRequest(artifact)) };
+    } catch (error) {
+      if (error instanceof ArtifactIntegrityError) return { ok: false, error: { code: error.code, message: error.message } };
+      return { ok: false, error: { code: 'artifact-unreadable', message: 'Verified export could not be read safely.' } };
+    }
+  });
   ipcMain.handle('ffmpeg:segment-path', async (_event, fingerprint) =>
     getSegmentPath(fingerprint),
   );
@@ -206,6 +224,22 @@ async function analyzeOutput(targetPath) {
   };
 }
 
+async function verifyArtifactSnapshot(targetPath, { snapshots, analyze = analyzeOutput, digest = hashFileSha256 } = {}) {
+  if (!snapshots) throw new TypeError('Trusted artifact snapshot storage is required.');
+  const snapshot = await snapshots.create(targetPath); let operationError = null;
+  try {
+    const diagnostics = await analyze(snapshot.snapshotPath);
+    const integrity = await digest(snapshot.snapshotPath);
+    if (integrity.sizeBytes !== snapshot.sizeBytes) throw new ArtifactIntegrityError('artifact-integrity-mismatch', 'The verification snapshot changed while it was analyzed.');
+    await snapshots.assertSourceUnchanged(snapshot);
+    return { diagnostics: { ...diagnostics, outputPath: targetPath }, integrity: { artifactPath: targetPath, sizeBytes: integrity.sizeBytes, contentDigest: integrity.contentDigest } };
+  } catch (error) { operationError = error; throw error; }
+  finally {
+    const removed = await snapshots.remove(snapshot.snapshotPath);
+    if (!removed && !operationError) throw new ArtifactIntegrityError('artifact-snapshot-cleanup-failed', 'The temporary verification snapshot could not be removed safely.');
+  }
+}
+
 function normalizeStream(stream) {
   return {
     codecName: stream.codec_name ?? null,
@@ -345,4 +379,4 @@ function capture(executable, args) {
     child.on('error', reject); child.on('close', code => code === 0 ? resolve(out || err) : reject(new Error(err || `Exit ${code}`)));
   });
 }
-module.exports = { registerFFmpegHandlers };
+module.exports = { registerFFmpegHandlers, verifyArtifactSnapshot };

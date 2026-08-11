@@ -16,8 +16,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "electron:dev": "node scripts/electron-dev.cjs",
-    "electron:build": "vite build && electron-builder",
-    "electron:start": "vite build && electron electron/main.cjs"
+    "electron:build": "node scripts/generate-electron-runtime-config.cjs && vite build && electron-builder",
+    "electron:start": "node scripts/electron-start.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
@@ -59,6 +59,12 @@
     "files": [
       "dist/**/*",
       "electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".shortsflow-build/shortsflow.runtime.json",
+        "to": "shortsflow.runtime.json"
+      }
     ],
     "win": {
       "target": "nsis",

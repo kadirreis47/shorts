@@ -1,4 +1,23 @@
-import type { PublishAccount, PublishTarget } from './types';
+import type { PublishAccount, PublishJob, PublishTarget } from './types';
+export function isCredentialRebindablePublishJob(job: PublishJob): boolean {
+  return job.state === 'failed' && job.failure?.kind === 'authentication';
+}
+export function isTerminalPublishJob(job: PublishJob): boolean {
+  return job.state === 'published' || job.state === 'cancelled' || (job.state === 'failed' && !job.failure?.retryable && !isCredentialRebindablePublishJob(job));
+}
+export function canRebindPublishJobCredential(job: PublishJob, account: PublishAccount, previousCredentialRef: string): boolean {
+  return !isTerminalPublishJob(job)
+    && job.accountBinding.id === account.id
+    && job.accountBinding.platform === account.platform
+    && job.accountBinding.accountRef === account.accountRef
+    && job.accountBinding.channelRef === account.channelRef
+    && job.accountBinding.credentialRef === previousCredentialRef;
+}
+export function rebindPublishJobCredential(job: PublishJob, account: PublishAccount, previousCredentialRef: string): PublishJob {
+  return canRebindPublishJobCredential(job, account, previousCredentialRef)
+    ? { ...job, accountBinding: { ...job.accountBinding, credentialRef: account.credentialRef, authenticated: account.authenticated }, updatedAt: new Date().toISOString() }
+    : job;
+}
 export function validatePublishAccountBinding(target: PublishTarget, account: PublishAccount): string[] {
   const issues: string[] = [];
   if (account.id !== target.accountId) issues.push('Publishing account does not match the target account.');

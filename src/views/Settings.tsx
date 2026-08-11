@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, Palette, Plug, Zap, Clock, Save, Check, Key, Youtube, Eye, EyeOff, ExternalLink, Loader2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { AppSetting, Channel, YoutubeToken } from '@/lib/types';
+import type { AppSetting, Channel } from '@/lib/types';
 import { Card, Button, Toggle } from '@/components/ui';
-import { classNames } from '@/lib/utils';
-import { saveApiKey, getApiKeyKeys, getYouTubeAuthUrl } from '@/lib/api';
+import { saveApiKey } from '@/lib/api';
 import { useI18n } from '@/lib/i18n';
+import { usePublishingStore } from '@/store/publishingStore';
+import { canRebindPublishJobCredential, type PublishAccount } from '@/core/publishing';
+import { rebindPublishingAccountCredential } from '@/services/publishingController';
 
-export function Settings({ channels = [] }: { channels?: Channel[] }) {
+export function Settings(_props: { channels?: Channel[] }) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<Record<string, AppSetting>>({});
   const [loading, setLoading] = useState(true);
@@ -18,22 +20,26 @@ export function Settings({ channels = [] }: { channels?: Channel[] }) {
   const [openaiKey, setOpenaiKey] = useState('');
   const [elevenlabsKey, setElevenlabsKey] = useState('');
   const [pexelsKey, setPexelsKey] = useState('');
-  const [ytClientId, setYtClientId] = useState('');
-  const [ytClientSecret, setYtClientSecret] = useState('');
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [savingKey, setSavingKey] = useState('');
   const [keySaved, setKeySaved] = useState('');
 
   // YouTube connections
-  const [ytTokens, setYtTokens] = useState<YoutubeToken[]>([]);
   const [connecting, setConnecting] = useState('');
+  const [youtubeConnectionError, setYoutubeConnectionError] = useState<string | null>(null);
+  const [youtubeSelection, setYoutubeSelection] = useState<YouTubeSelectionRequired | null>(null);
+  const accountStatusVersion = useRef(0);
+  const reconciledCredentialRefs = useRef(new Set<string>());
+  const publishingAccounts = usePublishingStore((state) => state.accounts);
+  const upsertPublishingAccount = usePublishingStore((state) => state.upsertAccount);
+  const nativeYouTube = Boolean(window.electronAPI?.youtube);
+  const nativeYouTubeAccounts = useMemo(() => publishingAccounts.filter((account) => account.platform === 'youtube'), [publishingAccounts]);
 
   useEffect(() => {
     (async () => {
-      const [{ data: s }, { data: keys }, { data: tokens }] = await Promise.all([
+      const [{ data: s }, { data: keys }] = await Promise.all([
         supabase.from('app_settings').select('*'),
         supabase.from('api_keys').select('key'),
-        supabase.from('youtube_tokens').select('*'),
       ]);
       const map: Record<string, AppSetting> = {};
       s?.forEach((row) => { map[row.key] = row; });
@@ -41,10 +47,34 @@ export function Settings({ channels = [] }: { channels?: Channel[] }) {
       const keyMap: Record<string, boolean> = {};
       keys?.forEach((row: { key: string }) => { keyMap[row.key] = true; });
       setApiKeyStatus(keyMap);
-      setYtTokens(tokens ?? []);
       setLoading(false);
     })();
   }, []);
+
+  useEffect(() => {
+    if (!nativeYouTube || !window.electronAPI?.youtube) return;
+    const accounts = nativeYouTubeAccounts.filter((account) => account.credentialRef && !reconciledCredentialRefs.current.has(account.credentialRef));
+    if (!accounts.length) return;
+    const version = ++accountStatusVersion.current;
+    accounts.forEach((account) => reconciledCredentialRefs.current.add(account.credentialRef!));
+    void Promise.all(accounts.map(async (account) => {
+      try {
+        const result = await window.electronAPI!.youtube.status(account.credentialRef!);
+        if (accountStatusVersion.current !== version) return;
+        if (!result.ok) {
+          if ((result.error.code === 'credential-missing' || result.error.code === 'credential-reconnect-required' || result.error.code === 'secure-storage-unavailable') && account.authenticated) upsertPublishingAccount({ ...account, authenticated: false });
+          else setYoutubeConnectionError(result.error.message);
+          return;
+        }
+        const status = result.status;
+        if (!status.authenticated && account.authenticated) upsertPublishingAccount({ ...account, authenticated: false });
+        if (status.authenticated && !account.authenticated) upsertPublishingAccount({ ...account, authenticated: true });
+      } catch (error) {
+        if (accountStatusVersion.current !== version) return;
+        setYoutubeConnectionError('Unable to verify the YouTube account right now. Please try again later.');
+      }
+    }));
+  }, [nativeYouTube, nativeYouTubeAccounts, upsertPublishingAccount]);
 
   async function updateSetting(key: string, value: Record<string, unknown>) {
     await supabase.from('app_settings').upsert({
@@ -66,18 +96,91 @@ export function Settings({ channels = [] }: { channels?: Channel[] }) {
       setTimeout(() => setKeySaved(''), 2000);
       if (key === 'openai') setOpenaiKey('');
       if (key === 'elevenlabs') setElevenlabsKey('');
-      if (key === 'youtube_client_id') setYtClientId('');
-      if (key === 'youtube_client_secret') setYtClientSecret('');
     } finally {
       setSavingKey('');
     }
   }
 
-  async function handleConnectYouTube(channelId: string) {
-    setConnecting(channelId);
+  async function persistYouTubeAccount(result: YouTubeConnectionResult) {
+    const account: PublishAccount = {
+      id: `youtube:${result.accountRef}`,
+      platform: result.platform,
+      accountRef: result.accountRef,
+      channelRef: result.channelRef,
+      displayName: result.displayName,
+      credentialRef: result.credentialRef,
+      authenticated: result.authenticated,
+      createdAt: new Date().toISOString(),
+    };
+    const priorCredentialRef = usePublishingStore.getState().accounts.find((existing) => existing.id === account.id)?.credentialRef;
+    if (priorCredentialRef && priorCredentialRef !== account.credentialRef && window.electronAPI?.youtube) {
+      try {
+        const safeToRemove = await rebindPublishingAccountCredential(account, priorCredentialRef);
+        if (safeToRemove) await window.electronAPI.youtube.disconnect(priorCredentialRef);
+        else setYoutubeConnectionError('The previous YouTube credential remains secured because a publishing job still references it.');
+      } catch {
+        setYoutubeConnectionError('The previous YouTube credential was retained because publishing bindings could not be updated safely.');
+      }
+    } else upsertPublishingAccount(account);
+  }
+
+  async function handleConnectYouTube() {
+    if (!window.electronAPI?.youtube) {
+      setYoutubeConnectionError('Native YouTube connection is available only in the ShortsFlow desktop app.');
+      return;
+    }
+    accountStatusVersion.current += 1;
+    setConnecting('youtube');
+    setYoutubeConnectionError(null);
     try {
-      const authUrl = await getYouTubeAuthUrl(channelId);
-      window.open(authUrl, 'youtube-auth', 'width=600,height=700');
+      const result = await window.electronAPI.youtube.connect();
+      if ('credentialRef' in result) await persistYouTubeAccount(result);
+      else setYoutubeSelection(result);
+    } catch (error) {
+      setYoutubeConnectionError(error instanceof Error ? error.message : 'YouTube authorization failed. You can try again.');
+    } finally {
+      setConnecting('');
+    }
+  }
+
+  async function handleFinalizeYouTubeSelection(channelRef: string) {
+    if (!window.electronAPI?.youtube || !youtubeSelection) return;
+    accountStatusVersion.current += 1;
+    setConnecting('youtube-selection');
+    setYoutubeConnectionError(null);
+    try {
+      await persistYouTubeAccount(await window.electronAPI.youtube.finalizeSelection(youtubeSelection.selectionRef, channelRef));
+      setYoutubeSelection(null);
+    } catch (error) {
+      setYoutubeSelection(null);
+      setYoutubeConnectionError(error instanceof Error ? error.message : 'YouTube channel selection failed. Reconnect the account.');
+    } finally {
+      setConnecting('');
+    }
+  }
+
+  async function handleCancelYouTubeSelection() {
+    if (!window.electronAPI?.youtube || !youtubeSelection) return;
+    setConnecting('youtube-selection');
+    try { await window.electronAPI.youtube.cancelSelection(youtubeSelection.selectionRef); } catch { /* The main process treats an already-expired selection as cancelled. */ } finally { setYoutubeSelection(null); setConnecting(''); }
+  }
+
+  async function handleDisconnectYouTube(account: PublishAccount) {
+    if (!window.electronAPI?.youtube || !account.credentialRef) return;
+    accountStatusVersion.current += 1;
+    setConnecting(account.id);
+    setYoutubeConnectionError(null);
+    try {
+      const dependentJobs = usePublishingStore.getState().queue.jobs.filter((job) => canRebindPublishJobCredential(job, account, account.credentialRef!));
+      if (dependentJobs.length > 0) {
+        await rebindPublishingAccountCredential({ ...account, authenticated: false }, account.credentialRef);
+        setYoutubeConnectionError('YouTube is disconnected for new publishing. Its secured credential is retained until dependent publishing jobs can be rebound.');
+        return;
+      }
+      await window.electronAPI.youtube.disconnect(account.credentialRef);
+      upsertPublishingAccount({ ...account, credentialRef: null, authenticated: false });
+    } catch (error) {
+      setYoutubeConnectionError(error instanceof Error ? error.message : 'YouTube disconnect failed. You can try again.');
     } finally {
       setConnecting('');
     }
@@ -189,79 +292,45 @@ export function Settings({ channels = [] }: { channels?: Channel[] }) {
           {t('settings.youtubeDesc')}
         </p>
         <div className="space-y-4">
-          <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">
-            <p className="font-medium">{t('settings.setupRequired')}</p>
-            <p className="mt-1">
-              {t('settings.setupDesc')}
-            </p>
-            <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-amber-800 underline">
-              {t('settings.openCloudConsole')} <ExternalLink size={12} />
-            </a>
-          </div>
-
-          <ApiKeyRow
-            label={t('settings.ytClientId')}
-            desc={t('settings.fromCloudConsole')}
-            placeholder="xxxx.apps.googleusercontent.com"
-            value={ytClientId}
-            onChange={setYtClientId}
-            show={showKeys.ytClientId}
-            onToggleShow={() => setShowKeys((p) => ({ ...p, ytClientId: !p.ytClientId }))}
-            configured={apiKeyStatus.youtube_client_id}
-            saving={savingKey === 'youtube_client_id'}
-            saved={keySaved === 'youtube_client_id'}
-            onSave={() => handleSaveKey('youtube_client_id', ytClientId)}
-          />
-          <ApiKeyRow
-            label={t('settings.ytClientSecret')}
-            desc={t('settings.fromCloudConsole')}
-            placeholder="GOCSPX-..."
-            value={ytClientSecret}
-            onChange={setYtClientSecret}
-            show={showKeys.ytClientSecret}
-            onToggleShow={() => setShowKeys((p) => ({ ...p, ytClientSecret: !p.ytClientSecret }))}
-            configured={apiKeyStatus.youtube_client_secret}
-            saving={savingKey === 'youtube_client_secret'}
-            saved={keySaved === 'youtube_client_secret'}
-            onSave={() => handleSaveKey('youtube_client_secret', ytClientSecret)}
-          />
-
-          {channels.length > 0 && apiKeyStatus.youtube_client_id && apiKeyStatus.youtube_client_secret && (
+          {nativeYouTube ? (
             <div className="space-y-2 border-t border-slate-100 pt-4">
-              <p className="text-sm font-medium text-slate-700">{t('settings.connectChannels')}</p>
-              {channels.map((ch) => {
-                const token = ytTokens.find((t) => t.channel_id === ch.id);
-                return (
-                  <div key={ch.id} className="flex items-center justify-between rounded-lg border border-slate-100 p-3">
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-7 w-7 items-center justify-center rounded text-xs font-bold text-white"
-                        style={{ backgroundColor: ch.avatar_color }}>
-                        {ch.name.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-slate-800">{ch.name}</p>
-                        {token?.youtube_channel_name && (
-                          <p className="text-xs text-emerald-600">{t('settings.connected')}: {token.youtube_channel_name}</p>
-                        )}
-                      </div>
-                    </div>
-                    {token ? (
-                      <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                        <Check size={12} /> {t('settings.connected')}
-                      </span>
-                    ) : (
-                      <Button size="sm" variant="secondary" onClick={() => handleConnectYouTube(ch.id)}
-                        disabled={connecting === ch.id}>
-                        {connecting === ch.id ? <Loader2 size={14} className="animate-spin" /> : <Youtube size={14} />}
-                        {t('settings.connect')}
-                      </Button>
-                    )}
+              <p className="text-sm font-medium text-slate-700">YouTube desktop account</p>
+              {youtubeSelection && (
+                <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+                  <p className="text-sm text-slate-700">Choose the YouTube channel to connect.</p>
+                  {youtubeSelection.channels.map((channel) => (
+                    <Button key={channel.channelId} size="sm" variant="secondary" onClick={() => handleFinalizeYouTubeSelection(channel.channelId)} disabled={connecting === 'youtube-selection'}>
+                      {connecting === 'youtube-selection' ? <Loader2 size={14} className="animate-spin" /> : null}
+                      {channel.displayName} ({channel.channelId})
+                    </Button>
+                  ))}
+                  <Button size="sm" variant="ghost" onClick={handleCancelYouTubeSelection} disabled={connecting === 'youtube-selection'}>Cancel</Button>
+                </div>
+              )}
+              {nativeYouTubeAccounts.map((account) => (
+                <div key={account.id} className="flex items-center justify-between rounded-lg border border-slate-100 p-3">
+                  <div>
+                    <p className="text-sm font-medium text-slate-800">{account.displayName}</p>
+                    <p className="text-xs text-emerald-600">{account.authenticated ? t('settings.connected') : 'Authentication required'}</p>
                   </div>
-                );
-              })}
+                  {account.authenticated && account.credentialRef ? (
+                    <Button size="sm" variant="secondary" onClick={() => handleDisconnectYouTube(account)} disabled={connecting === account.id}>
+                      {connecting === account.id ? <Loader2 size={14} className="animate-spin" /> : null}
+                      Disconnect
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+              <Button size="sm" variant="secondary" onClick={handleConnectYouTube} disabled={connecting === 'youtube' || Boolean(youtubeSelection)}>
+                {connecting === 'youtube' ? <Loader2 size={14} className="animate-spin" /> : <Youtube size={14} />}
+                {nativeYouTubeAccounts.some((account) => !account.authenticated) ? 'Reconnect YouTube' : nativeYouTubeAccounts.length > 0 ? 'Connect another account' : t('settings.connect')}
+              </Button>
+              {youtubeConnectionError && <p role="alert" className="text-sm text-red-600">{youtubeConnectionError}</p>}
             </div>
+          ) : (
+            <p className="text-sm text-slate-500">Native YouTube connection is available in the ShortsFlow desktop app.</p>
           )}
+
         </div>
       </Card>
 

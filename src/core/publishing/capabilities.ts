@@ -1,6 +1,6 @@
 import type { PublishCapability, PublishPlatform } from './types';
 const capabilities: Record<PublishPlatform, PublishCapability> = {
-  youtube: { platform: 'youtube', adapterStatus: 'authentication-required', authenticated: false, supportsScheduling: true, supportsRemoteLookup: false, supportsIdempotency: false, maxTitleLength: 100, maxDescriptionLength: 5000, maxHashtags: 15, reason: 'Official credentials and OAuth integration are not configured in this repository.', version: '2026.1' },
+  youtube: { platform: 'youtube', adapterStatus: 'implemented', authenticated: false, supportsScheduling: true, supportsRemoteLookup: true, supportsIdempotency: true, maxTitleLength: 100, maxDescriptionLength: 5000, maxHashtags: 15, reason: 'Modern Electron resumable publishing is available for authenticated accounts.', version: '2026.2' },
   tiktok: { platform: 'tiktok', adapterStatus: 'planned-only', authenticated: false, supportsScheduling: false, supportsRemoteLookup: false, supportsIdempotency: false, maxTitleLength: 150, maxDescriptionLength: 2200, maxHashtags: 10, reason: 'Official publishing adapter is planned but not implemented.', version: '2026.1' },
   instagram: { platform: 'instagram', adapterStatus: 'planned-only', authenticated: false, supportsScheduling: false, supportsRemoteLookup: false, supportsIdempotency: false, maxTitleLength: 150, maxDescriptionLength: 2200, maxHashtags: 30, reason: 'Official publishing adapter is planned but not implemented.', version: '2026.1' },
 };

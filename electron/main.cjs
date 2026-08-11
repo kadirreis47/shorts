@@ -1,6 +1,7 @@
 const { app, BrowserWindow, Menu, shell } = require('electron');
 const path = require('path');
 const { registerFFmpegHandlers } = require('./ffmpeg-service.cjs');
+const { registerYouTubeHandlers } = require('./youtube-ipc.cjs');
 
 let mainWindow;
 
@@ -78,6 +79,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   registerFFmpegHandlers();
+  registerYouTubeHandlers();
   createWindow();
 
   app.on('activate', () => {

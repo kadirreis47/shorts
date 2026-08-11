@@ -1,14 +1,55 @@
 import { applicationContainer, dependencyTokens } from '@/core/di';
-import { approvalFingerprint, type PublishAccount, type PublishJob, type PublishMetadata, type PublishSchedule, type PublishTarget } from '@/core/publishing';
+import { approvalFingerprint, isTerminalPublishJob, youtubePublishRequest, type PublishAccount, type PublishJob, type PublishMetadata, type PublishSchedule, type PublishTarget } from '@/core/publishing';
 import type { ExportArtifact } from '@/core/export-intelligence';
 import { usePublishingStore } from '@/store/publishingStore';
 import type { PublishingApplicationService } from './publishingApplicationService';
 function service(): PublishingApplicationService { return applicationContainer.resolve(dependencyTokens.publishingApplicationService); }
 let sharedQueue: ReturnType<PublishingApplicationService['createQueue']> | null = null;
+const pendingCredentialCleanups = new Map<string, { account: PublishAccount; previousCredentialRef: string }>();
+let credentialCleanupFlush: Promise<void> | null = null;
 export async function createPublishJob(input: { projectId: string; variantId?: string | null; account: PublishAccount; target: PublishTarget; artifact: ExportArtifact; sourceManifestFingerprint: string; metadata: PublishMetadata; schedule?: PublishSchedule; }): Promise<PublishJob> { const job = service().createJob(input); usePublishingStore.getState().updateJob(job); return job; }
 export async function previewPublishJob(job: PublishJob): Promise<PublishJob> { const readiness = service().readiness(job); if (!readiness.ready) throw new Error(readiness.issues.join(' ')); const previewed = { ...job, readiness, approvalFingerprint: approvalFingerprint(job), approvedAt: null, updatedAt: new Date().toISOString() }; usePublishingStore.getState().updateJob(previewed); return previewed; }
 export async function approveAndEnqueuePublish(job: PublishJob): Promise<PublishJob> { if (!job.approvalFingerprint) throw new Error('Publish preview required before approval.'); const freshReadiness = service().readiness(job); if (!freshReadiness.ready) throw new Error(freshReadiness.issues.join(' ')); if (!job.accountBinding.authenticated) throw new Error('Publishing account authentication is required.'); const fingerprint = approvalFingerprint(job); if (job.approvalFingerprint !== fingerprint) throw new Error('Publish preview is stale; please preview again before approval.'); const queue = await ensureQueue(); const approved = { ...job, readiness: freshReadiness, state: job.schedule.mode === 'scheduled' ? 'scheduled' as const : 'queued' as const, approvedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; queue.enqueue(approved); usePublishingStore.getState().updateJob(approved); void queue.start(); return approved; }
 export async function retryPublishJob(jobId: string): Promise<PublishJob | null> { const queue = await ensureQueue(); const job = await queue.retry(jobId); return job; }
 export async function reconcilePublishJob(jobId: string): Promise<PublishJob | null> { const queue = await ensureQueue(); return queue.reconcile(jobId); }
-async function ensureQueue() { if (sharedQueue) return sharedQueue; await usePublishingStore.persist.rehydrate(); sharedQueue = service().createQueue(undefined, usePublishingStore.getState().updateJob); sharedQueue.hydrate(usePublishingStore.getState().queue); usePublishingStore.getState().setQueue(sharedQueue.snapshot()); return sharedQueue; }
+function hasNonterminalCredentialReference(credentialRef: string) { return usePublishingStore.getState().queue.jobs.some((job) => !isTerminalPublishJob(job) && job.accountBinding.credentialRef === credentialRef) || Boolean(sharedQueue?.list().some((job) => !isTerminalPublishJob(job) && job.accountBinding.credentialRef === credentialRef)); }
+function restoreDeferredCredentialCleanups() {
+  const state = usePublishingStore.getState();
+  for (const job of state.queue.jobs) {
+    if (isTerminalPublishJob(job) || !job.accountBinding.credentialRef) continue;
+    const replacement = state.accounts.find((account) => account.authenticated
+      && account.credentialRef
+      && account.credentialRef !== job.accountBinding.credentialRef
+      && account.id === job.accountBinding.id
+      && account.platform === job.accountBinding.platform
+      && account.accountRef === job.accountBinding.accountRef
+      && account.channelRef === job.accountBinding.channelRef);
+    if (replacement) pendingCredentialCleanups.set(job.accountBinding.credentialRef, { account: replacement, previousCredentialRef: job.accountBinding.credentialRef });
+  }
+}
+async function performPendingCredentialCleanups() {
+  for (const [credentialRef, pending] of [...pendingCredentialCleanups]) {
+    const activeJobId = sharedQueue?.snapshot().activeJobId;
+    if (activeJobId && sharedQueue?.get(activeJobId)?.accountBinding.credentialRef === credentialRef) continue;
+    await usePublishingStore.getState().rebindAccountCredential(pending.account, credentialRef);
+    sharedQueue?.rebindAccountCredential(pending.account, credentialRef);
+    if (hasNonterminalCredentialReference(credentialRef)) continue;
+    try { await window.electronAPI?.youtube.disconnect(credentialRef); pendingCredentialCleanups.delete(credentialRef); } catch { /* Keep the reference queued for the next publishing state transition. */ }
+  }
+}
+function flushPendingCredentialCleanups() {
+  if (!credentialCleanupFlush) credentialCleanupFlush = performPendingCredentialCleanups().finally(() => { credentialCleanupFlush = null; });
+  return credentialCleanupFlush;
+}
+function schedulePendingCredentialCleanup() { queueMicrotask(() => { void flushPendingCredentialCleanups(); }); }
+export async function rebindPublishingAccountCredential(account: PublishAccount, previousCredentialRef: string): Promise<boolean> {
+  const activeJobId = sharedQueue?.snapshot().activeJobId;
+  const activeUsesPreviousCredential = Boolean(activeJobId && sharedQueue?.get(activeJobId)?.accountBinding.credentialRef === previousCredentialRef);
+  const storeSafe = await usePublishingStore.getState().rebindAccountCredential(account, previousCredentialRef, activeUsesPreviousCredential ? activeJobId : null);
+  sharedQueue?.rebindAccountCredential(account, previousCredentialRef, activeUsesPreviousCredential ? activeJobId : null);
+  const liveQueueSafe = !hasNonterminalCredentialReference(previousCredentialRef);
+  if (activeUsesPreviousCredential) { pendingCredentialCleanups.set(previousCredentialRef, { account, previousCredentialRef }); return false; }
+  return storeSafe && liveQueueSafe;
+}
+async function ensureQueue() { if (sharedQueue) return sharedQueue; await usePublishingStore.persist.rehydrate(); const persisted = usePublishingStore.getState().queue; const acknowledge = window.electronAPI?.youtube.acknowledgeReceipt; if (acknowledge) { for (const job of persisted.jobs) { if (job.state === 'published' && job.receipt && job.target.platform === 'youtube') { try { await acknowledge({ ...youtubePublishRequest(job), remotePublishId: job.receipt.remotePublishId }); } catch { /* Cleanup is best-effort only after the receipt has survived hydration. */ } } } } sharedQueue = service().createQueue(undefined, (job) => { usePublishingStore.getState().updateJob(job); schedulePendingCredentialCleanup(); }); sharedQueue.hydrate(persisted); usePublishingStore.getState().setQueue(sharedQueue.snapshot()); restoreDeferredCredentialCleanups(); await flushPendingCredentialCleanups(); return sharedQueue; }
 export async function initializePublishingQueue() { const queue = await ensureQueue(); await queue.start(); return queue; }

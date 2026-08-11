@@ -28,7 +28,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    environmentMatchGlobs: [['tests/recovery/**', 'jsdom']],
+    environmentMatchGlobs: [['tests/recovery/**', 'jsdom'], ['tests/views/**', 'jsdom']],
     include: ['tests/**/*.test.{ts,tsx}'],
     clearMocks: true,
     restoreMocks: true,

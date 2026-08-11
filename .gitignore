@@ -27,5 +27,6 @@ out/
 release/
 .vite/
 coverage/
+.shortsflow-build/
 .env
 .env.*

@@ -9,9 +9,67 @@ const ALLOWED_FFMPEG_API_KEYS = Object.freeze([
   'getSegmentCacheStats',
   'clearSegmentCache',
   'analyzeOutput',
-    'onProgress',
+  'artifactDigest',
+  'verifyArtifactSnapshot',
+  'revalidateArtifact',
+  'onProgress',
   'pickOutputPath',
 ]);
+
+const ALLOWED_YOUTUBE_API_KEYS = Object.freeze(['connect', 'disconnect', 'status', 'finalizeSelection', 'cancelSelection', 'publish', 'reconcilePublish', 'cancelPublish', 'acknowledgeReceipt']);
+
+function validCredentialRef(value) {
+  return typeof value === 'string' && /^youtube_[0-9a-f-]{36}$/i.test(value);
+}
+function validSelectionRef(value) { return typeof value === 'string' && /^youtube_selection_[A-Za-z0-9_-]{32,}$/.test(value); }
+function validChannelRef(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value); }
+function validPublishRequest(value) {
+  return Boolean(value) && typeof value === 'object' && value.platform === 'youtube'
+    && typeof value.jobId === 'string' && value.jobId.length > 0
+    && typeof value.idempotencyKey === 'string' && value.idempotencyKey.length > 0
+    && validCredentialRef(value.account?.credentialRef) && validChannelRef(value.account?.channelRef) && typeof value.account?.accountId === 'string'
+    && typeof value.target?.accountId === 'string' && validChannelRef(value.target?.channelRef)
+    && typeof value.artifact?.artifactPath === 'string' && !value.artifact.artifactPath.includes('\0')
+    && Number.isSafeInteger(value.artifact?.sizeBytes) && value.artifact.sizeBytes > 0
+    && /^[a-f0-9]{64}$/.test(value.artifact?.contentDigest || '')
+    && typeof value.outboundDescription === 'string' && value.outboundDescription.length <= 5000
+    && (!value.recovery || (typeof value.recovery === 'object'
+      && typeof value.recovery.jobState === 'string'
+      && (value.recovery.remoteState === null || typeof value.recovery.remoteState === 'string')
+      && (value.recovery.failureCode === null || typeof value.recovery.failureCode === 'string')));
+}
+function validArtifactIntegrityRequest(value) {
+  return Boolean(value) && typeof value === 'object'
+    && typeof value.artifactPath === 'string' && value.artifactPath.length > 0 && !value.artifactPath.includes('\0')
+    && Number.isSafeInteger(value.sizeBytes) && value.sizeBytes >= 0
+    && typeof value.contentDigest === 'string' && /^[a-f0-9]{64}$/.test(value.contentDigest);
+}
+
+function createYouTubeBridge(ipcRenderer) {
+  return Object.freeze({
+    connect: () => ipcRenderer.invoke('youtube:connect'),
+    disconnect: (credentialRef) => {
+      if (!validCredentialRef(credentialRef)) return Promise.reject(new TypeError('Invalid YouTube credential reference.'));
+      return ipcRenderer.invoke('youtube:disconnect', { credentialRef });
+    },
+    status: (credentialRef) => {
+      if (!validCredentialRef(credentialRef)) return Promise.reject(new TypeError('Invalid YouTube credential reference.'));
+      return ipcRenderer.invoke('youtube:status', { credentialRef });
+    },
+    finalizeSelection: (selectionRef, channelRef) => {
+      if (!validSelectionRef(selectionRef) || !validChannelRef(channelRef)) return Promise.reject(new TypeError('Invalid YouTube channel selection.'));
+      return ipcRenderer.invoke('youtube:finalize-selection', { selectionRef, channelRef });
+    },
+    cancelSelection: (selectionRef) => {
+      if (!validSelectionRef(selectionRef)) return Promise.reject(new TypeError('Invalid YouTube channel selection.'));
+      return ipcRenderer.invoke('youtube:cancel-selection', { selectionRef });
+    },
+    publish: (request) => validPublishRequest(request) ? ipcRenderer.invoke('youtube:publish', request) : Promise.reject(new TypeError('Invalid YouTube publish request.')),
+    reconcilePublish: (request) => validPublishRequest(request) ? ipcRenderer.invoke('youtube:reconcile-publish', request) : Promise.reject(new TypeError('Invalid YouTube reconciliation request.')),
+    cancelPublish: (jobId) => typeof jobId === 'string' && jobId.length > 0 ? ipcRenderer.invoke('youtube:cancel-publish', { jobId }) : Promise.reject(new TypeError('Invalid YouTube publish job.')),
+    acknowledgeReceipt: (request) => validPublishRequest(request) && typeof request.remotePublishId === 'string' ? ipcRenderer.invoke('youtube:acknowledge-receipt', request) : Promise.reject(new TypeError('Invalid YouTube receipt acknowledgement.')),
+  });
+}
 
 function createFFmpegBridge(ipcRenderer) {
   return Object.freeze({
@@ -25,6 +83,12 @@ function createFFmpegBridge(ipcRenderer) {
     getSegmentCacheStats: () => ipcRenderer.invoke('ffmpeg:segment-cache-stats'),
     clearSegmentCache: () => ipcRenderer.invoke('ffmpeg:segment-cache-clear'),
     analyzeOutput: (targetPath) => ipcRenderer.invoke('ffmpeg:analyze-output', targetPath),
+    artifactDigest: (targetPath) => ipcRenderer.invoke('ffmpeg:artifact-digest', targetPath),
+    verifyArtifactSnapshot: (targetPath) => ipcRenderer.invoke('ffmpeg:verify-artifact-snapshot', targetPath),
+    revalidateArtifact: (artifact) => {
+      if (!validArtifactIntegrityRequest(artifact)) return Promise.reject(new TypeError('Invalid artifact integrity request.'));
+      return ipcRenderer.invoke('ffmpeg:revalidate-artifact', artifact);
+    },
     pickOutputPath: (options) => ipcRenderer.invoke('ffmpeg:pick-output-path', options),
     onProgress: (listener) => {
       if (typeof listener !== 'function') throw new TypeError('Progress listener must be a function.');
@@ -35,4 +99,4 @@ function createFFmpegBridge(ipcRenderer) {
   });
 }
 
-module.exports = { ALLOWED_FFMPEG_API_KEYS, createFFmpegBridge };
+module.exports = { ALLOWED_FFMPEG_API_KEYS, ALLOWED_YOUTUBE_API_KEYS, createFFmpegBridge, createYouTubeBridge };

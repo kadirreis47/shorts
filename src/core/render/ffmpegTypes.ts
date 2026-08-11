@@ -56,6 +56,9 @@ export interface FFmpegBridge {
   getSegmentCacheStats(): Promise<import('./segmentCache').SegmentCacheStats>;
   clearSegmentCache(): Promise<void>;
   analyzeOutput(path: string): Promise<import('./renderDiagnosticsTypes').RenderDiagnostics>;
+  artifactDigest?(path: string): Promise<{ artifactPath: string; sizeBytes: number; contentDigest: string }>;
+  verifyArtifactSnapshot?(path: string): Promise<{ diagnostics: import('./renderDiagnosticsTypes').RenderDiagnostics; integrity: { artifactPath: string; sizeBytes: number; contentDigest: string } }>;
+  revalidateArtifact?(artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }): Promise<{ ok: true; artifact: { artifactPath: string; sizeBytes: number; contentDigest: string } } | { ok: false; error: { code: string; message: string } }>;
   onProgress(listener: (payload: FFmpegProgressPayload) => void): () => void;
   pickOutputPath?(options?: { defaultPath?: string }): Promise<string | null>;
 }
