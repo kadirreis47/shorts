@@ -6,6 +6,7 @@ const os = require('os');
 const { validateFFmpegRunRequest, validateTargetPath, validateArtifactIntegrityRequest } = require('./ffmpeg-security.cjs');
 const { ArtifactIntegrityError, hashFileSha256, revalidateVerifiedArtifact } = require('./artifact-integrity.cjs');
 const { createArtifactSnapshotStore } = require('./artifact-snapshot.cjs');
+const { isPackagedRuntime, resolveFFmpegRuntime } = require('./ffmpeg-runtime.cjs');
 
 const active = new Map();
 const materializationLocks = new Map();
@@ -150,20 +151,23 @@ async function materializeFile(sourcePath, destinationPath) {
   }
 }
 
-async function detectCapabilities() {
-  const executable = resolveExecutable();
+async function detectCapabilities(options = {}) {
+  const runtime = resolveRuntime(options);
+  const executable = runtime.ffmpeg;
+  const captureFn = options.capture ?? capture;
+  if (!executable) return { available: false, executable: null, version: null, encoders: [], hardwareEncoders: [], gpuDevices: [], ffprobeAvailable: false, ffprobeExecutable: null, ffprobeVersion: null, reason: 'Bundled FFmpeg is missing from this ShortsFlow installation.' };
   try {
-    const versionOutput = await capture(executable, ['-version']);
-    const encodersOutput = await capture(executable, ['-hide_banner', '-encoders']);
+    const versionOutput = await captureFn(executable, ['-version']);
+    const encodersOutput = await captureFn(executable, ['-hide_banner', '-encoders']);
     const encoders = encodersOutput.split(/\r?\n/).filter((line) => /^\s*[VAS\.]{6}\s+\S+/.test(line)).map((line) => line.trim().split(/\s+/)[1]).filter(Boolean);
     const hardwareEncoders = encoders.filter((name) => /nvenc|qsv|vaapi|videotoolbox|amf/i.test(name));
     const gpuDevices = await detectNvidiaGpus();
-    const ffprobeExecutable = resolveFFprobeExecutable();
+    const ffprobeExecutable = resolveFFprobeExecutable({ runtime, fsApi: options.fsApi ?? fs });
     let ffprobeAvailable = false; let ffprobeVersion = null;
-    try { const probe = await capture(ffprobeExecutable, ['-version']); ffprobeAvailable = true; ffprobeVersion = probe.split(/\r?\n/)[0] || null; } catch {}
-    return { available: true, executable, version: versionOutput.split(/\r?\n/)[0] || null, encoders, hardwareEncoders, gpuDevices, ffprobeAvailable, ffprobeExecutable: ffprobeAvailable ? ffprobeExecutable : null, ffprobeVersion };
+    try { const probe = await captureFn(ffprobeExecutable, ['-version']); ffprobeAvailable = true; ffprobeVersion = probe.split(/\r?\n/)[0] || null; } catch {}
+    return { available: true, executable, version: versionOutput.split(/\r?\n/)[0] || null, encoders, hardwareEncoders, gpuDevices, ffprobeAvailable, ffprobeExecutable: ffprobeAvailable ? ffprobeExecutable : null, ffprobeVersion, reason: ffprobeAvailable ? null : runtime.source === 'bundled' ? 'Bundled FFprobe is missing from this ShortsFlow installation.' : 'FFprobe is unavailable on the current development PATH.' };
   } catch {
-    return { available: false, executable: null, version: null, encoders: [], hardwareEncoders: [], gpuDevices: [], ffprobeAvailable: false, ffprobeExecutable: null, ffprobeVersion: null };
+    return { available: false, executable: null, version: null, encoders: [], hardwareEncoders: [], gpuDevices: [], ffprobeAvailable: false, ffprobeExecutable: null, ffprobeVersion: null, reason: runtime.source === 'bundled' ? 'Bundled FFmpeg could not be executed. Reinstall ShortsFlow.' : 'FFmpeg is unavailable on the current development PATH.' };
   }
 }
 
@@ -266,23 +270,32 @@ function parseFrameRate(value) {
   return numerator / denominator;
 }
 
-function resolveFFprobeExecutable() {
-  const explicit = process.env.SHORTSFLOW_FFPROBE_PATH;
-  if (explicit) return explicit;
-
-  const ffmpeg = resolveExecutable();
+function resolveFFprobeExecutable({ runtime = resolveRuntime(), fsApi = fs } = {}) {
+  if (runtime.source === 'bundled') return runtime.ffprobe;
+  if (runtime.ffprobe) return runtime.ffprobe;
+  const ffmpeg = runtime.ffmpeg;
+  if (!ffmpeg) return null;
   const directory = path.dirname(ffmpeg);
   const extension = process.platform === 'win32' ? '.exe' : '';
   const candidate = path.join(directory, `ffprobe${extension}`);
 
-  if (fs.existsSync(candidate)) return candidate;
+  if (fsApi.existsSync(candidate)) return candidate;
   return 'ffprobe';
 }
 
-function resolveExecutable() {
-  const explicit = process.env.SHORTSFLOW_FFMPEG_PATH;
-  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
-  return process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+function resolveExecutable(options = {}) {
+  return resolveRuntime(options).ffmpeg;
+}
+
+function resolveRuntime({ isPackaged, resourcesPath, env = process.env, fsApi = fs } = {}) {
+  const packaged = isPackaged ?? isPackagedRuntime({ appIsPackaged: Boolean(app?.isPackaged), env });
+  const e2ePackaged = !app?.isPackaged && env.SHORTSFLOW_PRODUCT_E2E_PACKAGED === '1';
+  return resolveFFmpegRuntime({
+    isPackaged: packaged,
+    resourcesPath: resourcesPath ?? (e2ePackaged ? env.SHORTSFLOW_E2E_RESOURCES_PATH : process.resourcesPath),
+    env,
+    fsApi
+  });
 }
 
 async function runFFmpeg(webContents, request) {
@@ -379,4 +392,4 @@ function capture(executable, args) {
     child.on('error', reject); child.on('close', code => code === 0 ? resolve(out || err) : reject(new Error(err || `Exit ${code}`)));
   });
 }
-module.exports = { registerFFmpegHandlers, verifyArtifactSnapshot };
+module.exports = { registerFFmpegHandlers, verifyArtifactSnapshot, detectCapabilities, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };

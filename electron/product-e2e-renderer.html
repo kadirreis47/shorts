@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>ShortsFlow Product E2E</title><script>
+(async () => {
+  try {
+    const api = window.electronAPI;
+    const capabilities = await api.ffmpeg.getCapabilities(true);
+    if (!capabilities.available || !capabilities.ffprobeAvailable) throw new Error(capabilities.reason || 'Bundled FFmpeg and FFprobe are required.');
+    const existing = JSON.parse(localStorage.getItem('shortsflow-product-e2e') || 'null');
+    if (existing) {
+      if (!existing.receipt || !existing.analytics || !existing.digest) throw new Error('Durable product E2E state did not survive restart.');
+      console.log(`SHORTSFLOW_PRODUCT_E2E:${JSON.stringify({ restarted: true, ffmpeg: capabilities.executable, ffprobe: capabilities.ffprobeExecutable, receipt: existing.receipt, analyticsMetrics: existing.analytics, verified: Boolean(existing.digest) })}`);
+      return;
+    }
+    const render = await api.ffmpeg.run({ jobId: 'product-e2e-render', args: ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=160x90:d=0.2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', '{{OUTPUT_FILE}}'] });
+    const verified = await api.ffmpeg.verifyArtifactSnapshot(render.outputPath); const digest = await api.ffmpeg.artifactDigest(render.outputPath);
+    const request = { jobId: 'product-e2e-publish', idempotencyKey: 'product-e2e-publish', platform: 'youtube', approvalFingerprint: 'product-e2e-approval', approvedAt: '2026-08-11T10:00:00.000Z', target: { accountId: 'youtube:UC-e2e', channelRef: 'UC-e2e' }, account: { platform: 'youtube', accountId: 'youtube:UC-e2e', accountRef: 'UC-e2e', channelRef: 'UC-e2e', credentialRef: 'youtube_11111111-1111-1111-1111-111111111111' }, artifact: { artifactPath: render.outputPath, artifactFingerprint: 'product-e2e-artifact', contentDigest: digest.contentDigest, sizeBytes: digest.sizeBytes }, metadata: { title: 'Product E2E', description: '', caption: '', hashtags: [], visibility: 'private', language: null, category: null, audienceFlags: {}, thumbnailPath: null, playlistRef: null, commentsEnabled: null }, outboundDescription: '', recovery: { jobState: 'queued', remoteState: null, failureCode: null } };
+    const publication = await api.youtube.publish(request); if (!publication.ok || publication.result.remotePublishId !== 'e2e-video') throw new Error('Modern publishing IPC did not return a canonical remote publication.');
+    const analytics = await api.youtube.collectAnalytics({ credentialRef: request.account.credentialRef, channelRef: 'UC-e2e', remotePublicationId: publication.result.remotePublishId, publishedAt: '2026-08-01T00:00:00.000Z', window: '24h' }); if (!analytics.ok || !analytics.result.metrics.some((metric) => metric.rawMetricId === 'views')) throw new Error('Native analytics IPC did not return metrics.');
+    localStorage.setItem('shortsflow-product-e2e', JSON.stringify({ receipt: publication.result.remotePublishId, analytics: analytics.result.metrics.length, digest: verified.integrity.contentDigest })); const persisted = JSON.parse(localStorage.getItem('shortsflow-product-e2e'));
+    console.log(`SHORTSFLOW_PRODUCT_E2E:${JSON.stringify({ seeded: true, ffmpeg: capabilities.executable, ffprobe: capabilities.ffprobeExecutable, receipt: persisted.receipt, analyticsMetrics: persisted.analytics, verified: Boolean(persisted.digest) })}`);
+  } catch (error) { console.error(`SHORTSFLOW_PRODUCT_E2E:${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`); }
+})();
+</script>
