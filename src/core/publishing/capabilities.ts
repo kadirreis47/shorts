@@ -4,5 +4,19 @@ const capabilities: Record<PublishPlatform, PublishCapability> = {
   tiktok: { platform: 'tiktok', adapterStatus: 'planned-only', authenticated: false, supportsScheduling: false, supportsRemoteLookup: false, supportsIdempotency: false, maxTitleLength: 150, maxDescriptionLength: 2200, maxHashtags: 10, reason: 'Official publishing adapter is planned but not implemented.', version: '2026.1' },
   instagram: { platform: 'instagram', adapterStatus: 'planned-only', authenticated: false, supportsScheduling: false, supportsRemoteLookup: false, supportsIdempotency: false, maxTitleLength: 150, maxDescriptionLength: 2200, maxHashtags: 30, reason: 'Official publishing adapter is planned but not implemented.', version: '2026.1' },
 };
-export function getPublishCapability(platform: PublishPlatform): PublishCapability { return { ...capabilities[platform] }; }
-export function listPublishCapabilities(): readonly PublishCapability[] { return Object.values(capabilities).map((item) => ({ ...item })); }
+export function getPublishCapability(platform: PublishPlatform, authenticated?: boolean): PublishCapability {
+  const capability = capabilities[platform];
+  return {
+    ...capability,
+    authenticated: platform === 'youtube' && typeof authenticated === 'boolean'
+      ? authenticated
+      : capability.authenticated,
+  };
+}
+
+export function listPublishCapabilities(authentication: Partial<Record<PublishPlatform, boolean>> = {}): readonly PublishCapability[] {
+  return Object.keys(capabilities).map((platform) => getPublishCapability(
+    platform as PublishPlatform,
+    authentication[platform as PublishPlatform],
+  ));
+}

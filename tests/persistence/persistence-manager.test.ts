@@ -8,6 +8,7 @@ import {
   useDirectorReportStore,
   useEditingStore,
   useExportIntelligenceStore,
+  usePublishingStore,
   useProjectStore,
   useSettingsStore,
   useSubtitleIntelligenceStore,
@@ -27,6 +28,7 @@ const persistedStores = [
   useVisualProductionStore,
   useSubtitleIntelligenceStore,
   useExportIntelligenceStore,
+  usePublishingStore,
   useAnalyticsStore,
 ];
 

@@ -25,3 +25,12 @@ export function verifyArtifact(job: ExportJob, artifact: ExportArtifact): Export
   if (zeroByte) issues.push('Output is zero bytes.'); if (!durationMatch) issues.push('Output duration differs from manifest.'); if (!resolutionMatch) issues.push('Output resolution differs from manifest.'); if (!codecMatch) issues.push('Output video codec differs from preset.'); if (!audioPresent) issues.push('Output has no audio stream.'); if (!subtitlesPresent) issues.push('Output has no subtitle stream.'); if (corruption) issues.push('Output corruption detected.');
   return { valid: issues.length === 0, zeroByte, durationMatch, resolutionMatch, codecMatch, audioPresent, subtitlesPresent, corruption, issues, diagnostics };
 }
+
+export function isVerifiedExportJob(job: ExportJob | null | undefined): job is ExportJob & { artifact: ExportArtifact } {
+  return job?.state === 'completed'
+    && job.artifact?.verified === true
+    && typeof job.artifact.contentDigest === 'string'
+    && /^[a-f0-9]{64}$/.test(job.artifact.contentDigest)
+    && job.artifact.sizeBytes > 0
+    && job.artifact.path.trim().length > 0;
+}

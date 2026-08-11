@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Search, Plus, Filter, LayoutGrid, List, Eye, Heart, MessageCircle,
-  Share2, Clock, X, Calendar, Tag, Zap, FileText, Play, Trash2, Download, Clapperboard, Youtube, AlertCircle, RefreshCw,
+  Share2, Clock, X, Calendar, Tag, FileText, Play, Trash2, Download, Clapperboard, Youtube, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import type { Video, Channel } from '@/lib/types';
 import { formatNumber, formatDuration, timeAgo, timeUntil, classNames } from '@/lib/utils';
 import { StatusBadge, Card, Button, Modal, EmptyState } from '@/components/ui';
 import { VIDEO_STATUSES, statusConfig } from '@/lib/status';
-import { publishToYouTube } from '@/lib/api';
 import { useI18n } from '@/lib/i18n';
 import { withTimeout } from '@/lib/async';
+import { resolveVideoPublishingHandoff, usePublishingStore } from '@/store/publishingStore';
+import { useExportIntelligenceStore } from '@/store/exportIntelligenceStore';
+import { useUIStore } from '@/store/uiStore';
 
 interface VideosProps {
   channels: Channel[];
@@ -30,8 +32,18 @@ export function Videos({ channels, onNavigateStudio }: VideosProps) {
   const [sortBy, setSortBy] = useState<'recent' | 'views' | 'likes'>('recent');
   const [error, setError] = useState<string | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
+  const navigate = useUIStore((state) => state.navigate);
 
   const channelMap = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
+
+  function openModernPublishing(video: Video) {
+    const publishing = usePublishingStore.getState();
+    const exportJobId = publishing.videoExportLinks[video.id];
+    const linkedJob = exportJobId ? useExportIntelligenceStore.getState().queue.jobs.find((job) => job.id === exportJobId) : null;
+    const handoff = resolveVideoPublishingHandoff(video, linkedJob);
+    publishing.setHandoff(handoff);
+    navigate(handoff.kind === 'video-needs-verification' && linkedJob ? 'export-studio' : 'publishing-studio');
+  }
 
   const loadVideos = useCallback(async () => {
     setLoading(true);
@@ -80,16 +92,6 @@ export function Videos({ channels, onNavigateStudio }: VideosProps) {
       setError(actionError instanceof Error ? actionError.message : 'Video durumu güncellenemedi.');
     } finally {
       setActionId(null);
-    }
-  }
-
-  async function handlePublishYouTube(video: Video) {
-    try {
-      await publishToYouTube(video.channel_id, video.id);
-      await loadVideos();
-      setSelected(null);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : 'Failed to publish to YouTube');
     }
   }
 
@@ -294,7 +296,7 @@ export function Videos({ channels, onNavigateStudio }: VideosProps) {
           onClose={() => setSelected(null)}
           onUpdateStatus={updateStatus}
           onDelete={deleteVideo}
-          onPublishYouTube={handlePublishYouTube}
+          onOpenPublishing={() => openModernPublishing(selected)}
         />
       )}
 
@@ -305,14 +307,14 @@ export function Videos({ channels, onNavigateStudio }: VideosProps) {
 }
 
 function VideoDrawer({
-  video, channel, onClose, onUpdateStatus, onDelete, onPublishYouTube,
+  video, channel, onClose, onUpdateStatus, onDelete, onOpenPublishing,
 }: {
   video: Video;
   channel?: Channel;
   onClose: () => void;
   onUpdateStatus: (v: Video, s: string) => void;
   onDelete: (v: Video) => void;
-  onPublishYouTube: (v: Video) => void;
+  onOpenPublishing: () => void;
 }) {
   const { t } = useI18n();
   const [tab, setTab] = useState<'overview' | 'script' | 'analytics'>('overview');
@@ -433,13 +435,8 @@ function VideoDrawer({
 
               <div className="flex flex-wrap gap-2 pt-2">
                 {video.status === 'rendered' && (
-                  <Button size="sm" onClick={() => onPublishYouTube(video)}>
-                    <Youtube size={14} /> {t('studio.publishToYouTube')}
-                  </Button>
-                )}
-                {video.status !== 'published' && video.status !== 'rendered' && (
-                  <Button size="sm" onClick={() => onUpdateStatus(video, 'published')}>
-                    <Zap size={14} /> {t('videos.publishNow')}
+                  <Button size="sm" onClick={onOpenPublishing}>
+                    <Youtube size={14} /> Open AI Publishing Studio
                   </Button>
                 )}
                 {video.status !== 'scheduled' && (

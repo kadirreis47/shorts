@@ -10,6 +10,7 @@ import {
   useVisualProductionStore,
   useSubtitleIntelligenceStore,
   useExportIntelligenceStore,
+  usePublishingStore,
   useAnalyticsStore,
 } from '@/store';
 
@@ -25,6 +26,7 @@ export type PersistenceStoreName =
   | 'visual-production'
   | 'subtitle-intelligence'
   | 'export-intelligence'
+  | 'publishing'
   | 'analytics';
 
 export interface PersistenceHydrationResult {
@@ -47,6 +49,7 @@ const stores = [
   { name: 'visual-production' as const, persist: useVisualProductionStore.persist },
   { name: 'subtitle-intelligence' as const, persist: useSubtitleIntelligenceStore.persist },
   { name: 'export-intelligence' as const, persist: useExportIntelligenceStore.persist },
+  { name: 'publishing' as const, persist: usePublishingStore.persist },
   { name: 'analytics' as const, persist: useAnalyticsStore.persist },
 ];
 

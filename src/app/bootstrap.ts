@@ -1,6 +1,6 @@
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { useAppStore, useChannelStore, useUIStore, usePublishingStore } from '@/store';
+import { useAppStore, useChannelStore, useUIStore } from '@/store';
 import { registerApplicationDependencies } from './registerDependencies';
 import { attachRenderQueueInspector } from '@/services/renderQueueInspectorMonitor';
 import { attachRenderRecoveryCenter } from '@/services/renderRecoveryCenterMonitor';
@@ -65,7 +65,6 @@ async function runBootstrap() {
 
   try {
     const hydrationResult = await persistenceManager.hydrate();
-    await usePublishingStore.persist.rehydrate();
     // Restore the single shared publishing queue, reconcile interrupted jobs,
     // and install the runtime-only next-due wake-up after persistence hydration.
     await initializePublishingQueue();

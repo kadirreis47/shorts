@@ -8,8 +8,8 @@ import {
 import { supabase } from '@/lib/supabase';
 import type { Channel, Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
 import {
-  generateVoiceover, listVoices, uploadMedia, publishToYouTube,
-  getYouTubeAuthUrl, getApiKeyKeys, searchImages, searchVideos,
+  generateVoiceover, listVoices, uploadMedia,
+  getApiKeyKeys, searchImages, searchVideos,
   generateAIImage, researchFootage, generateSRT, translateSubtitles,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
@@ -25,7 +25,8 @@ import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
-import { useProjectStore } from '@/store';
+import { enqueueActiveExport, loadExportCapabilities, planActiveExport } from '@/services/exportIntelligenceController';
+import { useMediaStore, useProjectStore, usePublishingStore, useUIStore } from '@/store';
 import { createStudioProjectDraft, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
 
 interface StudioProps {
@@ -157,11 +158,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [renderProgress, setRenderProgress] = useState(0);
   const [rendering, setRendering] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
-  const [videoId, setVideoId] = useState('');
+  const [studioVideoId, setStudioVideoId] = useState<string | null>(null);
+  const [preparingPublish, setPreparingPublish] = useState(false);
 
-  const [publishing, setPublishing] = useState(false);
-  const [published, setPublished] = useState(false);
-  const [youtubeVideoId, setYoutubeVideoId] = useState('');
+  const navigate = useUIStore((state) => state.navigate);
   const [draftStatus, setDraftStatus] = useState<'loading' | 'saved' | 'saving' | 'empty'>('loading');
   const [draftSavedAt, setDraftSavedAt] = useState<string>('');
   const draftHydratedRef = useRef(false);
@@ -304,9 +304,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setAudioBlob(null);
     setAudioUrl('');
     setVideoUrl('');
-    setVideoId('');
-    setPublished(false);
-    setYoutubeVideoId('');
+    setStudioVideoId(null);
     setMusicBlob(null);
     setMusicId('');
     setDraftSavedAt('');
@@ -351,8 +349,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     script,
     sceneCount: scenes.length,
     videoUrl,
-    published,
-  }), [step, channelId, topic, script, scenes.length, videoUrl, published]);
+    published: false,
+  }), [step, channelId, topic, script, scenes.length, videoUrl]);
 
   const currentWorkflowHint = useMemo(() => {
     switch (step) {
@@ -708,7 +706,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         caption_highlight_color: captionHighlightColor || null,
         beat_sync: beatSync,
       }).select().single();
-      setVideoId(data?.id ?? '');
+      setStudioVideoId(data?.id ?? null);
       setStep('publish');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to render video');
@@ -717,26 +715,29 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
   }
 
-  async function handlePublish() {
-    setPublishing(true);
+  async function prepareModernPublish() {
+    setPreparingPublish(true);
     setError('');
     try {
-      const ytId = await publishToYouTube(channelId, videoId);
-      setYoutubeVideoId(ytId);
-      setPublished(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to publish');
+      const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
+      const build = await mediaEngine.buildProject({ projectId: directorProjectId, title: title || topic || 'Studio video', scenes });
+      if (!build.renderReady || build.validation.renderReady !== true) throw new Error('Studio content must pass canonical media validation before export.');
+      useMediaStore.getState().setBuildResult(build.project, build.manifest, build.renderReady, build.assetResolution, build.validation);
+      await loadExportCapabilities();
+      const plan = await planActiveExport('youtube-shorts');
+      if (plan.blockingIssues.length > 0) throw new Error(plan.blockingIssues.join(' '));
+      const outputPath = await window.electronAPI?.ffmpeg.pickOutputPath?.({ defaultPath: `studio-${directorProjectId}.mp4` });
+      if (!outputPath) return;
+      const exportJob = await enqueueActiveExport(plan, outputPath);
+      const publishing = usePublishingStore.getState();
+      publishing.setHandoff(studioVideoId
+        ? { kind: 'video-needs-verification', sourceVideoId: studioVideoId, title: title || topic || 'Studio video', exportJobId: exportJob.id }
+        : { kind: 'verified-export', exportJobId: exportJob.id, sourceVideoId: null });
+      navigate('publishing-studio');
+    } catch (publishError) {
+      setError(publishError instanceof Error ? publishError.message : 'Verified export could not be prepared.');
     } finally {
-      setPublishing(false);
-    }
-  }
-
-  async function handleConnectYouTube() {
-    try {
-      const authUrl = await getYouTubeAuthUrl(channelId);
-      window.open(authUrl, 'youtube-auth', 'width=600,height=700');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to start YouTube connection');
+      setPreparingPublish(false);
     }
   }
 
@@ -1578,48 +1579,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       {step === 'publish' && (
         <Card className="p-6">
           <h2 className="mb-4 text-lg font-semibold text-slate-900">{t('studio.publishToYouTube')}</h2>
-          {published ? (
-            <div className="space-y-4 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-                <Check size={32} />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900">{t('studio.published')}</h3>
-                <p className="mt-1 text-sm text-slate-500">{t('studio.publishedDesc')}</p>
-                {youtubeVideoId && (
-                  <a href={`https://www.youtube.com/watch?v=${youtubeVideoId}`} target="_blank" rel="noopener noreferrer"
-                    className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:underline">
-                    <Youtube size={16} /> {t('studio.viewOnYouTube')}
-                  </a>
-                )}
-              </div>
-              <Button variant="secondary" onClick={handleClearDraft}>
-                {t('studio.createAnother')}
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {videoUrl && (
-                <div className="overflow-hidden rounded-lg bg-slate-900">
-                  <video src={videoUrl} controls className="mx-auto max-h-96" />
-                </div>
-              )}
-              <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-700">
-                <p className="flex items-center gap-2"><Youtube size={16} /> {t('settings.youtubeDesc')}</p>
-              </div>
-              <div className="flex justify-between gap-2">
-                <Button variant="secondary" onClick={() => setStep('render')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
-                <div className="flex gap-2">
-                  <Button variant="secondary" onClick={handleConnectYouTube}>
-                    {t('studio.connectYouTube')}
-                  </Button>
-                  <Button onClick={handlePublish} disabled={publishing}>
-                    {publishing ? <><Loader2 size={16} className="animate-spin" /> {t('studio.publishing')}</> : <><Youtube size={16} /> {t('studio.publishToYouTube')}</>}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
+          <div className="space-y-4">
+            {videoUrl && <div className="overflow-hidden rounded-lg bg-slate-900"><video src={videoUrl} controls className="mx-auto max-h-96" /></div>}
+            <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-700"><p className="flex items-center gap-2"><Youtube size={16} /> Create a canonical local export for publishing.</p><p className="mt-1">ShortsFlow will render through the existing export queue, verify the exact bytes with FFprobe and SHA-256, then keep the publishing handoff bound to that export.</p></div>
+            <div className="flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep('render')}><ArrowLeft size={16} /> {t('studio.back')}</Button><Button onClick={() => void prepareModernPublish()} disabled={preparingPublish}>{preparingPublish ? <><Loader2 size={16} className="animate-spin" /> Preparing verified export…</> : <><Youtube size={16} /> Export &amp; publish safely</>}</Button></div>
+          </div>
         </Card>
       )}
     </div>
