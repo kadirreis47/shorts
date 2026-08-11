@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { readFileSync } from 'node:fs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AIPublishingStudio } from '@/views/AIPublishingStudio';
 import { useExportIntelligenceStore } from '@/store/exportIntelligenceStore';
 import { usePublishingStore } from '@/store/publishingStore';
@@ -14,6 +14,9 @@ const controller = vi.hoisted(() => ({
 }));
 vi.mock('@/services/publishingController', () => controller);
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+const originalTimezone = process.env.TZ;
+beforeAll(() => { process.env.TZ = 'America/New_York'; });
+afterAll(() => { if (originalTimezone === undefined) delete process.env.TZ; else process.env.TZ = originalTimezone; });
 
 const artifact = { path: 'C:/exports/verified.mp4', sizeBytes: 1024, durationMs: 1000, verified: true, contentDigest: 'a'.repeat(64), diagnostics: {}, createdAt: 'now' };
 const exportJob = { id: 'export-1', projectId: 'project-1', sourceManifestFingerprint: 'manifest-1', plan: { id: 'variant-1', preset: { name: 'Short' } }, state: 'completed', artifact } as unknown as ExportJob;
@@ -22,7 +25,7 @@ function jobFromInput(input: Parameters<typeof controller.buildPublishJob>[0]): 
   return {
     id: 'publish-1', projectId: input.projectId, variantId: input.variantId ?? null, target: input.target, accountBinding: input.account,
     artifact: { artifactPath: input.artifact.path, artifactFingerprint: 'artifact-1', projectId: input.projectId, variantId: input.variantId ?? null, exportJobId: 'export-1', verified: true, contentDigest: input.artifact.contentDigest, sizeBytes: input.artifact.sizeBytes, durationMs: input.artifact.durationMs, diagnostics: input.artifact.diagnostics, sourceManifestFingerprint: input.sourceManifestFingerprint },
-    metadata: input.metadata, schedule: { mode: 'now', scheduledAtUtc: null, timezone: 'UTC' }, state: 'draft', progress: { state: 'draft', percent: 0, message: '', remoteState: null, updatedAt: 'now' }, readiness: { ready: true, status: 'safe', issues: [], warnings: [], diagnostics: [] }, idempotencyKey: 'idempotency-1', approvalFingerprint: null, approvedAt: null, attempts: [], maxAttempts: 3, failure: null, receipt: null, remotePublishId: null, createdAt: 'now', updatedAt: 'now',
+    metadata: input.metadata, schedule: input.schedule ?? { mode: 'now', scheduledAtUtc: null, timezone: 'UTC' }, state: 'draft', progress: { state: 'draft', percent: 0, message: '', remoteState: null, updatedAt: 'now' }, readiness: { ready: true, status: 'safe', issues: [], warnings: [], diagnostics: [] }, idempotencyKey: 'idempotency-1', approvalFingerprint: null, approvedAt: null, attempts: [], maxAttempts: 3, failure: null, receipt: null, remotePublishId: null, createdAt: 'now', updatedAt: 'now',
   };
 }
 
@@ -59,7 +62,7 @@ describe('modern export to publish handoff', () => {
     const preview = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
     await act(async () => { preview.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
     expect(usePublishingStore.getState().queue.jobs).toHaveLength(0);
-    expect(controller.buildPublishJob).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project-1', variantId: 'variant-1', artifact, sourceManifestFingerprint: 'manifest-1', account, target: { platform: 'youtube', accountId: account.id, channelRef: account.channelRef } }));
+    expect(controller.buildPublishJob).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project-1', variantId: 'variant-1', artifact, sourceManifestFingerprint: 'manifest-1', account, target: { platform: 'youtube', accountId: account.id, channelRef: account.channelRef }, schedule: { mode: 'now', scheduledAtUtc: null, timezone: 'UTC' } }));
     const approve = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Approve and queue'))!;
     await act(async () => { approve.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
     expect(controller.approveAndEnqueuePublish).toHaveBeenCalledWith(expect.objectContaining({ approvalFingerprint: 'approval-1' }));
@@ -110,6 +113,62 @@ describe('modern export to publish handoff', () => {
     expect(container!.textContent).toContain('View publication');
     await act(async () => { root.unmount(); });
     expect(usePublishingStore.getState().queue.jobs).toEqual([published]);
+  });
+
+  it('creates a canonical local-time schedule and shows it before approval', async () => {
+    const root = setup();
+    await act(async () => { root.render(<AIPublishingStudio />); });
+    const schedule = container!.querySelector<HTMLInputElement>('[aria-label="Schedule"]')!;
+    await act(async () => { schedule.click(); });
+    const scheduledAt = container!.querySelector<HTMLInputElement>('[aria-label="Scheduled publish date and time"]')!;
+    await act(async () => { setInputValue(scheduledAt, '2099-04-05T14:30'); });
+    expect(container!.textContent).toContain('Scheduled for');
+    const preview = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
+    await act(async () => { preview.click(); });
+    expect(controller.buildPublishJob).toHaveBeenLastCalledWith(expect.objectContaining({ schedule: expect.objectContaining({ mode: 'scheduled', scheduledAtUtc: new Date('2099-04-05T14:30').toISOString() }) }));
+    expect(controller.buildPublishJob.mock.lastCall?.[0].schedule.timezone).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+
+  it('blocks scheduled preview when the timestamp is missing or in the past', async () => {
+    const root = setup();
+    await act(async () => { root.render(<AIPublishingStudio />); });
+    await act(async () => { container!.querySelector<HTMLInputElement>('[aria-label="Schedule"]')!.click(); });
+    const preview = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
+    await act(async () => { preview.click(); });
+    expect(container!.textContent).toContain('Choose a future date and time');
+    const scheduledAt = container!.querySelector<HTMLInputElement>('[aria-label="Scheduled publish date and time"]')!;
+    await act(async () => { setInputValue(scheduledAt, '2020-01-01T12:00'); preview.click(); });
+    expect(container!.textContent).toContain('Scheduled publish time must not be in the past');
+    expect(controller.previewPublishJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects a nonexistent local time in a DST spring-forward gap', async () => {
+    const root = setup();
+    await act(async () => { root.render(<AIPublishingStudio />); });
+    await act(async () => { container!.querySelector<HTMLInputElement>('[aria-label="Schedule"]')!.click(); });
+    const scheduledAt = container!.querySelector<HTMLInputElement>('[aria-label="Scheduled publish date and time"]')!;
+    await act(async () => { setInputValue(scheduledAt, '2026-03-08T02:30'); });
+    const preview = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
+    await act(async () => { preview.click(); });
+    expect(container!.textContent).toContain('does not exist in your timezone');
+    expect(controller.previewPublishJob).not.toHaveBeenCalled();
+    expect(controller.buildPublishJob).not.toHaveBeenCalled();
+    expect(container!.querySelector<HTMLInputElement>('[aria-label="Scheduled publish date and time"]')?.value).toBe('2026-03-08T02:30');
+  });
+
+  it('invalidates a preview when switching between now and scheduled timing', async () => {
+    const root = setup();
+    await act(async () => { root.render(<AIPublishingStudio />); });
+    const previewButton = () => Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
+    await act(async () => { previewButton().click(); });
+    expect(Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Approve and queue'))?.hasAttribute('disabled')).toBe(false);
+    await act(async () => { container!.querySelector<HTMLInputElement>('[aria-label="Schedule"]')!.click(); });
+    expect(Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Approve and queue'))?.hasAttribute('disabled')).toBe(true);
+    await act(async () => { setInputValue(container!.querySelector<HTMLInputElement>('[aria-label="Scheduled publish date and time"]')!, '2099-04-05T14:30'); });
+    await act(async () => { previewButton().click(); });
+    expect(controller.buildPublishJob).toHaveBeenLastCalledWith(expect.objectContaining({ schedule: expect.objectContaining({ mode: 'scheduled' }) }));
+    await act(async () => { setInputValue(container!.querySelector<HTMLInputElement>('[aria-label="Scheduled publish date and time"]')!, '2099-04-05T15:30'); });
+    expect(Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Approve and queue'))?.hasAttribute('disabled')).toBe(true);
   });
 
   it('clears an exact handoff only after enqueue succeeds', async () => {

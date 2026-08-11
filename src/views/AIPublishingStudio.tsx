@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, RefreshCw, Send } from 'lucide-react';
 import { isVerifiedExportJob, type ExportJob } from '@/core/export-intelligence';
-import { listPublishCapabilities, type PublishJob, type PublishMetadata } from '@/core/publishing';
+import { createPublishSchedule, listPublishCapabilities, type PublishJob, type PublishMetadata, type PublishSchedule } from '@/core/publishing';
 import { approveAndEnqueuePublish, buildPublishJob, previewPublishJob, reconcilePublishJob, retryPublishJob } from '@/services/publishingController';
 import { useExportIntelligenceStore } from '@/store/exportIntelligenceStore';
 import { usePublishingStore } from '@/store/publishingStore';
@@ -15,6 +15,7 @@ function verifiedExports(jobs: readonly ExportJob[]) {
 
 function queueLabel(job: PublishJob) {
   if (job.state === 'published' && job.receipt) return 'Published and verified';
+  if (job.state === 'scheduled' && job.schedule.scheduledAtUtc) return `Scheduled for ${new Date(job.schedule.scheduledAtUtc).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
   if (job.state === 'processing' || job.progress.remoteState === 'processing') return 'YouTube is processing the upload';
   if (job.state === 'reconciling' || job.state === 'interrupted') return 'Verifying remote publication state';
   if (job.failure?.kind === 'authentication') return 'Authentication required';
@@ -41,6 +42,8 @@ export function AIPublishingStudio() {
   const [artifactId, setArtifactId] = useState('');
   const [accountId, setAccountId] = useState('');
   const [metadata, setMetadata] = useState<PublishMetadata>(emptyMetadata);
+  const [scheduleMode, setScheduleMode] = useState<PublishSchedule['mode']>('now');
+  const [scheduledAtLocal, setScheduledAtLocal] = useState('');
   const [preview, setPreview] = useState<PublishJob | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState<'preview' | 'approve' | null>(null);
@@ -67,16 +70,35 @@ export function AIPublishingStudio() {
 
   function invalidatePreview() { previewVersion.current += 1; if (preview) setMessage('Publishing details changed. Preview and approve the current intent again.'); if (busy === 'preview') setBusy(null); setPreview(null); }
   function updateMetadata<K extends keyof PublishMetadata>(field: K, value: PublishMetadata[K]) { invalidatePreview(); setMetadata((current) => ({ ...current, [field]: value })); }
+  function updateScheduleMode(mode: PublishSchedule['mode']) { invalidatePreview(); setScheduleMode(mode); if (mode === 'now') setScheduledAtLocal(''); }
+  function updateScheduledAtLocal(value: string) { invalidatePreview(); setScheduledAtLocal(value); }
+  function currentSchedule(): PublishSchedule {
+    if (scheduleMode === 'now') return createPublishSchedule('now', null, 'UTC');
+    if (!scheduledAtLocal) throw new Error('Choose a future date and time before continuing.');
+    const components = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(scheduledAtLocal);
+    if (!components) throw new Error('Scheduled publish time is invalid.');
+    const localDate = new Date(scheduledAtLocal);
+    if (!Number.isFinite(localDate.getTime())) throw new Error('Scheduled publish time is invalid.');
+    const [, year, month, day, hour, minute] = components;
+    if (localDate.getFullYear() !== Number(year)
+      || localDate.getMonth() + 1 !== Number(month)
+      || localDate.getDate() !== Number(day)
+      || localDate.getHours() !== Number(hour)
+      || localDate.getMinutes() !== Number(minute)) {
+      throw new Error('This local date and time does not exist in your timezone. Choose another time.');
+    }
+    return createPublishSchedule('scheduled', localDate.toISOString(), Intl.DateTimeFormat().resolvedOptions().timeZone);
+  }
   function buildCurrentJob() {
     if (!selectedExport?.artifact || !selectedAccount) return null;
-    return buildPublishJob({ projectId: selectedExport.projectId, variantId: selectedExport.plan.id, account: selectedAccount, target: { platform: 'youtube', accountId: selectedAccount.id, channelRef: selectedAccount.channelRef }, artifact: selectedExport.artifact, sourceManifestFingerprint: selectedExport.sourceManifestFingerprint, metadata });
+    return buildPublishJob({ projectId: selectedExport.projectId, variantId: selectedExport.plan.id, account: selectedAccount, target: { platform: 'youtube', accountId: selectedAccount.id, channelRef: selectedAccount.channelRef }, artifact: selectedExport.artifact, sourceManifestFingerprint: selectedExport.sourceManifestFingerprint, metadata, schedule: currentSchedule() });
   }
   async function previewCurrentJob() {
-    const job = buildCurrentJob();
-    if (!job) { setMessage(selectedAccount ? 'Select a verified export artifact.' : 'Connect an authenticated YouTube channel in Settings before publishing.'); return; }
     const requestVersion = ++previewVersion.current;
     setBusy('preview'); setMessage(null);
     try {
+      const job = buildCurrentJob();
+      if (!job) throw new Error(selectedAccount ? 'Select a verified export artifact.' : 'Connect an authenticated YouTube channel in Settings before publishing.');
       const nextPreview = await previewPublishJob(job);
       if (previewVersion.current === requestVersion) setPreview(nextPreview);
     } catch (error) { if (previewVersion.current === requestVersion) { setPreview(null); setMessage(error instanceof Error ? error.message : 'Publishing preview could not be created.'); } } finally { if (previewVersion.current === requestVersion) setBusy(null); }
@@ -114,6 +136,14 @@ export function AIPublishingStudio() {
         <label className="text-sm font-medium">Hashtags (comma-separated)<input aria-label="Hashtags" value={metadata.hashtags.join(', ')} onChange={(event) => updateMetadata('hashtags', event.target.value.split(',').map((tag) => tag.trim()).filter(Boolean))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
         <label className="text-sm font-medium">Category (optional)<input aria-label="Category" value={metadata.category ?? ''} onChange={(event) => updateMetadata('category', event.target.value.trim() || null)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
       </div>
+      <fieldset className="mt-4 rounded-lg border border-slate-200 p-3">
+        <legend className="px-1 text-sm font-medium">Publish timing</legend>
+        <div className="flex flex-wrap gap-4 text-sm">
+          <label className="inline-flex items-center gap-2"><input aria-label="Publish now" type="radio" name="publish-timing" checked={scheduleMode === 'now'} onChange={() => updateScheduleMode('now')} /> Publish now</label>
+          <label className="inline-flex items-center gap-2"><input aria-label="Schedule" type="radio" name="publish-timing" checked={scheduleMode === 'scheduled'} onChange={() => updateScheduleMode('scheduled')} /> Schedule</label>
+        </div>
+        {scheduleMode === 'scheduled' && <div className="mt-3 max-w-sm"><label className="text-sm font-medium">Local publish date and time<input aria-label="Scheduled publish date and time" type="datetime-local" value={scheduledAtLocal} onChange={(event) => updateScheduledAtLocal(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label><p className="mt-1 text-xs text-slate-500">Your local timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}</p>{scheduledAtLocal && <p className="mt-2 text-sm text-slate-700">Scheduled for {new Date(scheduledAtLocal).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</p>}</div>}
+      </fieldset>
       <div className="mt-4 flex flex-wrap gap-2"><button type="button" disabled={busy !== null || !selectedExport || !selectedAccount} onClick={() => void previewCurrentJob()} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium disabled:opacity-50">{busy === 'preview' ? 'Checking readiness…' : 'Preview readiness'}</button><button type="button" disabled={!preview || busy !== null} onClick={() => void approveCurrentJob()} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><Send size={15} />{busy === 'approve' ? 'Approving…' : 'Approve and queue'}</button></div>
       {preview && <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm"><p className="font-medium">Ready for explicit approval</p><p className="mt-1">Approval is bound to this verified artifact, channel, metadata, and target. Any change requires a new preview.</p>{preview.readiness.warnings.map((warning) => <p key={warning} className="mt-1 text-amber-800">{warning}</p>)}</div>}
       {artifacts.length === 0 && <p className="mt-4 text-sm text-amber-800">No verified export is available. Complete export verification before publishing.</p>}
