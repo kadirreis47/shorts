@@ -1,9 +1,12 @@
 const path = require('path');
-const { loadLocalYouTubeClientId } = require('./electron-local-config.cjs');
+const { loadLocalYouTubeOAuthConfig } = require('./electron-local-config.cjs');
 const { REQUIRED, RUNTIME_DIRECTORY, validFile } = require('./provision-ffmpeg-runtime.cjs');
 
-function validateV1Release({ clientId = loadLocalYouTubeClientId(), runtimeDirectory = RUNTIME_DIRECTORY } = {}) {
+function validateV1Release({ clientId, clientSecret, runtimeDirectory = RUNTIME_DIRECTORY } = {}) {
+  const local = clientId === undefined && clientSecret === undefined ? loadLocalYouTubeOAuthConfig() : { clientId, clientSecret };
+  clientId = local.clientId; clientSecret = local.clientSecret;
   if (typeof clientId !== 'string' || !clientId.trim() || /^YOUR_/i.test(clientId.trim())) throw new Error('A production SHORTSFLOW_YOUTUBE_CLIENT_ID is required for an official YouTube-enabled release.');
+  if (typeof clientSecret !== 'string' || !clientSecret.trim() || /^YOUR_/i.test(clientSecret.trim())) throw new Error('A production SHORTSFLOW_YOUTUBE_CLIENT_SECRET matching the desktop client ID is required for an official YouTube-enabled release.');
   const missing = REQUIRED.filter((name) => !validFile(path.join(runtimeDirectory, name)));
   if (missing.length) throw new Error(`Official release is missing bundled runtime binaries: ${missing.join(', ')}.`);
   return { clientId: clientId.trim(), runtimeDirectory };

@@ -1,3 +1,4 @@
 {
-  "youtubeClientId": "YOUR_GOOGLE_DESKTOP_OAUTH_CLIENT_ID.apps.googleusercontent.com"
+  "youtubeClientId": "YOUR_GOOGLE_DESKTOP_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+  "youtubeClientSecret": "YOUR_MATCHING_GOOGLE_DESKTOP_OAUTH_CLIENT_SECRET"
 }

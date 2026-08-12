@@ -1,12 +1,12 @@
 import { createRequire } from 'node:module';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const { REQUIRED, provisionFFmpegRuntime } = require('../../scripts/provision-ffmpeg-runtime.cjs') as { REQUIRED: readonly string[]; provisionFFmpegRuntime(input: { sourceDirectory?: string; outputDirectory: string; requireBundle?: boolean }): { bundled: boolean; files: string[] }; };
-const { validateV1Release } = require('../../scripts/validate-v1-release.cjs') as { validateV1Release(input: { clientId?: string | null; runtimeDirectory: string }): unknown; };
+const { validateV1Release } = require('../../scripts/validate-v1-release.cjs') as { validateV1Release(input: { clientId?: string | null; clientSecret?: string | null; runtimeDirectory: string }): unknown; };
 
 function bundle(root: string, missing?: string, empty?: string) {
   const source = path.join(root, 'source'); require('node:fs').mkdirSync(source);
@@ -16,6 +16,11 @@ function bundle(root: string, missing?: string, empty?: string) {
 }
 
 describe('packaged FFmpeg runtime staging and V1 release gate', () => {
+  it('runs the production release gate before electron-builder', () => {
+    const script = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8')).scripts['electron:build'];
+    expect(script).toContain('validate-v1-release.cjs');
+    expect(script.indexOf('validate-v1-release.cjs')).toBeLessThan(script.indexOf('electron-builder'));
+  });
   it('requires a bundle for packaged builds and clears stale staged binaries first', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'shortsflow-release-')); const output = path.join(root, 'runtime');
     try {
@@ -36,8 +41,10 @@ describe('packaged FFmpeg runtime staging and V1 release gate', () => {
     try {
       const staged = provisionFFmpegRuntime({ sourceDirectory: bundle(root), outputDirectory: output, requireBundle: true });
       expect(staged.files).toHaveLength(2);
-      expect(() => validateV1Release({ clientId: null, runtimeDirectory: output })).toThrow(/CLIENT_ID/i);
-      expect(validateV1Release({ clientId: 'synthetic.apps.googleusercontent.com', runtimeDirectory: output })).toMatchObject({ runtimeDirectory: output });
+      expect(() => validateV1Release({ clientId: null, clientSecret: null, runtimeDirectory: output })).toThrow(/CLIENT_ID/i);
+      expect(() => validateV1Release({ clientId: 'synthetic.apps.googleusercontent.com', clientSecret: null, runtimeDirectory: output })).toThrow(/CLIENT_SECRET/i);
+      expect(() => validateV1Release({ clientId: 'synthetic.apps.googleusercontent.com', clientSecret: 'YOUR_DESKTOP_SECRET', runtimeDirectory: output })).toThrow(/CLIENT_SECRET/i);
+      expect(validateV1Release({ clientId: 'synthetic.apps.googleusercontent.com', clientSecret: 'unit-test-client-secret', runtimeDirectory: output })).toMatchObject({ runtimeDirectory: output });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

@@ -1,7 +1,7 @@
 const { app, ipcMain } = require('electron');
 const { createCredentialVault, publicError } = require('./youtube-credentials.cjs');
 const { createYouTubeAuthService } = require('./youtube-auth-service.cjs');
-const { resolveYouTubeClientId } = require('./youtube-runtime-config.cjs');
+const { resolveYouTubeOAuthConfig } = require('./youtube-runtime-config.cjs');
 const { createYouTubeUploadCheckpointStore, YouTubeCheckpointError } = require('./youtube-upload-checkpoints.cjs');
 const { createYouTubePublishService, YouTubePublishError } = require('./youtube-publish-service.cjs');
 const { createYouTubeAnalyticsService, YouTubeAnalyticsError, validRequest: validAnalyticsRequest } = require('./youtube-analytics-service.cjs');
@@ -62,7 +62,7 @@ function safePublishError(error) {
 function registerYouTubeHandlers({ electron = require('electron'), service, publishService, analyticsService } = {}) {
   const runtime = electron;
   const userDataPath = runtime.app.getPath('userData');
-  const auth = service || createYouTubeAuthService({ vault: createCredentialVault({ userDataPath, safeStorage: runtime.safeStorage }), clientId: () => resolveYouTubeClientId({ userDataPath }) });
+  const auth = service || createYouTubeAuthService({ vault: createCredentialVault({ userDataPath, safeStorage: runtime.safeStorage }), oauthConfig: () => resolveYouTubeOAuthConfig({ userDataPath }) });
   const publisher = publishService || createYouTubePublishService({ auth, checkpoints: createYouTubeUploadCheckpointStore({ userDataPath, safeStorage: runtime.safeStorage }), snapshots: createArtifactSnapshotStore({ directory: path.resolve(userDataPath, 'youtube-upload-snapshots') }) });
   let analytics = analyticsService;
   if (typeof publisher.initialize === 'function') void publisher.initialize().catch(() => undefined);

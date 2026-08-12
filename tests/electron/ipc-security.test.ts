@@ -35,7 +35,10 @@ describe('Electron FFmpeg IPC güvenliği', () => {
     expect(api.youtube).not.toHaveProperty('resolveExecutionCredential');
     expect(JSON.stringify(api)).not.toContain('accessToken');
     expect(JSON.stringify(api)).not.toContain('refreshToken');
-    expect(readFileSync(path.resolve('electron/preload.cjs'), 'utf8')).not.toContain("require('./preload-api.cjs')");
+    expect(JSON.stringify(api)).not.toMatch(/client_?secret/i);
+    const preloadSource = readFileSync(path.resolve('electron/preload.cjs'), 'utf8');
+    expect(preloadSource).not.toContain("require('./preload-api.cjs')");
+    expect(preloadSource).not.toMatch(/client_?secret/i);
   });
 
   it('preload yalnızca izin verilen ve frozen API yüzeyini oluşturur', () => {

@@ -61,6 +61,18 @@ describe('Settings native YouTube connection', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it('always clears the Connect loading state when native OAuth rejects', async () => {
+    const connect = vi.fn(async () => { throw new Error('OAuth finalization timed out. Please try again.'); });
+    window.electronAPI = { youtube: { connect, disconnect: vi.fn(), status: vi.fn(), finalizeSelection: vi.fn(), cancelSelection: vi.fn() } } as never;
+    container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Settings /></I18nProvider>); }); await act(async () => {});
+    const connectButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Connect'));
+    await act(async () => { connectButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const retryButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Connect'));
+    expect(retryButton?.disabled).toBe(false); expect(container.textContent).toContain('OAuth finalization timed out. Please try again.');
+    await act(async () => { root.unmount(); });
+  });
+
   it('keeps the safe fallback when the native bridge is absent or incomplete', async () => {
     window.electronAPI = { youtube: { connect: vi.fn() } } as never;
     container = document.createElement('div'); document.body.append(container); const root = createRoot(container);

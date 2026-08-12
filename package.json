@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "electron:dev": "node scripts/electron-dev.cjs",
     "prepare:electron-runtime": "node scripts/generate-electron-runtime-config.cjs && node scripts/provision-ffmpeg-runtime.cjs",
-    "electron:build": "npm run prepare:electron-runtime && vite build && electron-builder",
+    "electron:build": "npm run prepare:electron-runtime && node scripts/validate-v1-release.cjs && vite build && electron-builder",
     "validate:release:v1": "npm run prepare:electron-runtime && node scripts/validate-v1-release.cjs",
     "test:e2e:electron": "node scripts/run-electron-product-e2e.cjs",
     "electron:start": "node scripts/electron-start.cjs"

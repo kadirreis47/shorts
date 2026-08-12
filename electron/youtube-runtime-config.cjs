@@ -3,18 +3,22 @@ const path = require('path');
 
 const CONFIG_FILE = 'shortsflow.runtime.json';
 
-function readClientId(filePath, fsApi = fs) {
+function clean(value) { return typeof value === 'string' && value.trim() ? value.trim() : null; }
+function readOAuthConfig(filePath, fsApi = fs) {
   try {
     const parsed = JSON.parse(fsApi.readFileSync(filePath, 'utf8'));
-    return typeof parsed.youtubeClientId === 'string' && parsed.youtubeClientId.trim() ? parsed.youtubeClientId.trim() : null;
+    const config = { clientId: clean(parsed.youtubeClientId), clientSecret: clean(parsed.youtubeClientSecret) };
+    return config.clientId || config.clientSecret ? config : null;
   } catch { return null; }
 }
 
-function resolveYouTubeClientId({ env = process.env, userDataPath, resourcesPath = process.resourcesPath, fsApi = fs } = {}) {
-  if (typeof env.SHORTSFLOW_YOUTUBE_CLIENT_ID === 'string' && env.SHORTSFLOW_YOUTUBE_CLIENT_ID.trim()) return env.SHORTSFLOW_YOUTUBE_CLIENT_ID.trim();
+function resolveYouTubeOAuthConfig({ env = process.env, userDataPath, resourcesPath = process.resourcesPath, fsApi = fs } = {}) {
+  const environment = { clientId: clean(env.SHORTSFLOW_YOUTUBE_CLIENT_ID), clientSecret: clean(env.SHORTSFLOW_YOUTUBE_CLIENT_SECRET) };
+  if (environment.clientId || environment.clientSecret) return environment;
   const locations = [userDataPath && path.join(userDataPath, CONFIG_FILE), resourcesPath && path.join(resourcesPath, CONFIG_FILE)].filter(Boolean);
-  for (const location of locations) { const clientId = readClientId(location, fsApi); if (clientId) return clientId; }
-  return null;
+  for (const location of locations) { const config = readOAuthConfig(location, fsApi); if (config) return config; }
+  return { clientId: null, clientSecret: null };
 }
+function resolveYouTubeClientId(options) { return resolveYouTubeOAuthConfig(options).clientId; }
 
-module.exports = { CONFIG_FILE, resolveYouTubeClientId };
+module.exports = { CONFIG_FILE, resolveYouTubeClientId, resolveYouTubeOAuthConfig };
