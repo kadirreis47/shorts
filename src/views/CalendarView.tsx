@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalIcon, Plus } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { Video, Channel } from '@/lib/types';
+import type { Video } from '@/lib/types';
 import { classNames, formatTime } from '@/lib/utils';
 import { StatusBadge, Card, Button } from '@/components/ui';
+import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
+import { resolveVideoCanonicalChannelId } from '@/services/videoChannelAttribution';
 
 interface CalendarViewProps {
-  channels: Channel[];
+  channels: CanonicalChannelIdentity[];
 }
 
 export function CalendarView({ channels }: CalendarViewProps) {
@@ -97,7 +99,7 @@ export function CalendarView({ channels }: CalendarViewProps) {
                 </div>
                 <div className="space-y-1">
                   {dayVideos.map((v) => {
-                    const ch = channelMap.get(v.channel_id);
+                    const ch = channelMap.get(resolveVideoCanonicalChannelId(v) ?? '');
                     return (
                       <div
                         key={v.id}

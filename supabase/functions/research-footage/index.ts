@@ -33,7 +33,7 @@ serve(async (req: Request) => {
 
     if (!pexelsKey) {
       return new Response(
-        JSON.stringify({ error: "Pexels API key not configured. Add it in Settings for real footage." }),
+        JSON.stringify({ error: "Footage research is not configured. Contact an administrator." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }

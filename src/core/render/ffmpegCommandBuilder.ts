@@ -47,7 +47,7 @@ export function buildFFmpegCommand(
   const concatInputs = scenes.map((_, index) => `[v${index}]`).join('');
   filters.push(`${concatInputs}concat=n=${scenes.length}:v=1:a=0[basevideo]`);
   filters.push(
-    `[basevideo]subtitles={{SUBTITLE_FILE}}:force_style='Alignment=2,FontName=Arial,` +
+    `[basevideo]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}:force_style='Alignment=2,FontName=Arial,` +
     `FontSize=18,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,` +
     `BorderStyle=1,Outline=3,Shadow=0,MarginV=90'[videoout]`,
   );

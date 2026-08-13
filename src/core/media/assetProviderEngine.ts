@@ -45,7 +45,8 @@ export function createAssetProviderEngine(
             sceneId: scene.id, providerId: provider.id, selectedAt: new Date().toISOString(),
           });
 
-          let candidates = cache.get(provider.id, query);
+          const cacheable = provider.cacheable !== false;
+          let candidates = cacheable ? cache.get(provider.id, query) : null;
           if (candidates) {
             cacheHit = true;
             report.cacheHits += 1;
@@ -54,10 +55,10 @@ export function createAssetProviderEngine(
               hitAt: new Date().toISOString(),
             });
           } else {
-            report.cacheMisses += 1;
+            if (cacheable) report.cacheMisses += 1;
             try {
               candidates = await provider.search(query, { signal: options?.signal, limit: 6 });
-              cache.set(provider.id, query, candidates);
+              if (cacheable) cache.set(provider.id, query, candidates);
             } catch (error) {
               if (isAbortError(error)) throw error;
               fallbackCount += 1;

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { ViewKey } from '@/components/Sidebar';
 import type { Channel } from '@/lib/types';
+import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import { lazyNamed } from '@/app/lazyNamed';
 
 const Dashboard = lazyNamed(() => import('@/views/Dashboard'), 'Dashboard');
@@ -71,18 +72,19 @@ const AIPublishingStudio = lazyNamed(() => import('@/views/AIPublishingStudio'),
 
 export interface ViewRenderContext {
   channels: Channel[];
+  productionChannels: CanonicalChannelIdentity[];
   navigate: (view: ViewKey) => void;
 }
 
 type ViewRenderer = (context: ViewRenderContext) => ReactNode;
 
 export const VIEW_REGISTRY: Record<ViewKey, ViewRenderer> = {
-  dashboard: ({ channels }) => <Dashboard channels={channels} />,
-  studio: ({ channels, navigate }) => <Studio channels={channels} onNavigateDirector={() => navigate('director')} onNavigatePlatform={() => navigate('platform-studio')} />,
-  videos: ({ channels, navigate }) => (
-    <Videos channels={channels} onNavigateStudio={() => navigate('studio')} />
+  dashboard: ({ productionChannels }) => <Dashboard channels={productionChannels} />,
+  studio: ({ productionChannels, navigate }) => <Studio channels={productionChannels} onNavigateDirector={() => navigate('director')} onNavigatePlatform={() => navigate('platform-studio')} />,
+  videos: ({ productionChannels, navigate }) => (
+    <Videos channels={productionChannels} onNavigateStudio={() => navigate('studio')} />
   ),
-  calendar: ({ channels }) => <CalendarView channels={channels} />,
+  calendar: ({ productionChannels }) => <CalendarView channels={productionChannels} />,
   automation: ({ channels }) => <Automation channels={channels} />,
   analytics: ({ channels }) => <Analytics channels={channels} />,
   renderops: () => <RenderOperationsDashboard />,
@@ -93,7 +95,7 @@ export const VIEW_REGISTRY: Record<ViewKey, ViewRenderer> = {
   aitools: () => <AITools />,
   bulk: ({ channels }) => <BulkGeneration channels={channels} />,
   trends: () => <TrendResearch />,
-  monetization: ({ channels }) => <Monetization channels={channels} />,
+  monetization: ({ productionChannels }) => <Monetization channels={productionChannels} />,
   series: ({ channels }) => <SeriesView channels={channels} />,
   thumbnails: () => <ThumbnailGenerator />,
   ideas: ({ channels }) => <ContentIdeas channels={channels} />,

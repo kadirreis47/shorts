@@ -46,6 +46,8 @@ export interface AssetProvider {
   readonly id: string;
   readonly priority: number;
   readonly capabilities: ReadonlySet<AssetProviderCapability>;
+  /** Providers whose results depend on scene-local state must opt out of query caching. */
+  readonly cacheable?: boolean;
   isAvailable(): boolean | Promise<boolean>;
   search(query: AssetSearchQuery, context: AssetProviderContext): Promise<AssetCandidate[]>;
 }

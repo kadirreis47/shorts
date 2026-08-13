@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createExportJob, createExportPlan, verifyArtifact } from '@/core/export-intelligence';
+import { createExportJob, createExportPlan, createExportQueue, isVerifiedExportJob, verifyArtifact } from '@/core/export-intelligence';
 import { editingFixture } from '../editing/fixtures';
 
 async function setup() {
@@ -24,4 +24,47 @@ describe('canonical RenderDiagnostics verification', () => {
   ])('rejects nested %s mismatches', async (_name, override) => { const { job } = await setup(); const base = diagnostics(job); const videoOverride = 'video' in override ? override.video : undefined; const actual = { ...base, ...override, video: { ...base.video, ...(videoOverride as object | undefined) } }; const result = verifyArtifact(job, { path: job.outputPath, sizeBytes: 100, durationMs: job.manifest.durationMs, verified: false, diagnostics: actual, createdAt: 'now' }); expect(result.valid).toBe(false); });
   it('uses artifact fallback only when diagnostics are unavailable', async () => { const { job } = await setup(); const result = verifyArtifact(job, { path: job.outputPath, sizeBytes: 100, durationMs: job.manifest.durationMs, verified: false, diagnostics: {}, createdAt: 'now' }); expect(result.valid).toBe(true); });
   it('rejects canonical zero-byte and corruption diagnostics', async () => { const { job } = await setup(); const result = verifyArtifact(job, { path: job.outputPath, sizeBytes: 0, durationMs: job.manifest.durationMs, verified: false, diagnostics: { ...diagnostics(job), warnings: ['ffprobe corruption detected'] }, createdAt: 'now' }); expect(result.valid).toBe(false); expect(result.zeroByte).toBe(true); expect(result.corruption).toBe(true); });
+});
+
+describe('intentional silent export verification', () => {
+  async function silentSetup() {
+    const result = await setup();
+    result.job.manifest.audio = { ...result.job.manifest.audio, narrationMode: 'silent', voice: [], automation: [] };
+    return result;
+  }
+
+  it('accepts a silent canonical artifact with no audio while preserving all other checks', async () => {
+    const { job } = await silentSetup();
+    const result = verifyArtifact(job, { path: job.outputPath, sizeBytes: 100, durationMs: job.manifest.durationMs, verified: false, diagnostics: diagnostics(job, { audio: null }), createdAt: 'now' });
+    expect(result).toMatchObject({ valid: true, audioPresent: false, zeroByte: false, durationMatch: true, resolutionMatch: true, codecMatch: true, corruption: false });
+    expect(result.issues).not.toContain('Output has no audio stream.');
+  });
+
+  it.each([
+    ['zero-byte', { sizeBytes: 0 }],
+    ['duration', { durationSeconds: 1 }],
+    ['resolution', { video: { width: 1, height: 1 } }],
+    ['codec', { video: { codecName: 'vp9' } }],
+    ['corruption', { warnings: ['ffprobe corruption detected'] }],
+  ])('still rejects silent artifacts with %s failures', async (_name, override) => {
+    const { job } = await silentSetup(); const base = diagnostics(job, { audio: null });
+    const diagnosticsOverride = { ...base, ...override, video: { ...base.video, ...(('video' in override ? override.video : {}) as object) } };
+    const artifactSize = 'sizeBytes' in override ? Number(override.sizeBytes) : 100;
+    expect(verifyArtifact(job, { path: job.outputPath, sizeBytes: artifactSize, durationMs: job.manifest.durationMs, verified: false, diagnostics: diagnosticsOverride, createdAt: 'now' }).valid).toBe(false);
+  });
+
+  it('keeps required and legacy manifests invalid when their audio stream is absent', async () => {
+    const { job } = await setup(); const required = verifyArtifact(job, { path: job.outputPath, sizeBytes: 100, durationMs: job.manifest.durationMs, verified: false, diagnostics: diagnostics(job, { audio: null }), createdAt: 'now' });
+    const legacyJob = structuredClone(job); delete legacyJob.manifest.audio.narrationMode;
+    const legacy = verifyArtifact(legacyJob, { path: legacyJob.outputPath, sizeBytes: 100, durationMs: legacyJob.manifest.durationMs, verified: false, diagnostics: diagnostics(legacyJob, { audio: null }), createdAt: 'now' });
+    expect(required.issues).toContain('Output has no audio stream.'); expect(legacy.issues).toContain('Output has no audio stream.');
+  });
+
+  it('completes a verified silent job without relaxing digest requirements', async () => {
+    const { job } = await silentSetup(); const digest = 'a'.repeat(64);
+    const queue = createExportQueue({ run: async (current) => ({ path: current.outputPath, sizeBytes: 100, durationMs: current.manifest.durationMs, verified: false, contentDigest: digest, diagnostics: diagnostics(current, { audio: null }), createdAt: 'now' }), cancel: async () => true });
+    queue.enqueue(job); await queue.start(); const completed = queue.get(job.id);
+    expect(completed?.state).toBe('completed'); expect(isVerifiedExportJob(completed)).toBe(true);
+    expect(isVerifiedExportJob({ ...completed!, artifact: { ...completed!.artifact!, contentDigest: null } })).toBe(false);
+  });
 });

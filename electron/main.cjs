@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell } = require('electron');
+const { app, BrowserWindow, Menu, shell, ipcMain } = require('electron');
 const path = require('path');
 const { registerFFmpegHandlers } = require('./ffmpeg-service.cjs');
 const { registerYouTubeHandlers } = require('./youtube-ipc.cjs');

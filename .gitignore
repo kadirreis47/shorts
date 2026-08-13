@@ -28,5 +28,6 @@ release/
 .vite/
 coverage/
 .shortsflow-build/
+supabase/.temp/
 .env
 .env.*

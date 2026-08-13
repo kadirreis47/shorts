@@ -21,6 +21,7 @@ afterAll(() => { if (originalTimezone === undefined) delete process.env.TZ; else
 const artifact = { path: 'C:/exports/verified.mp4', sizeBytes: 1024, durationMs: 1000, verified: true, contentDigest: 'a'.repeat(64), diagnostics: {}, createdAt: 'now' };
 const exportJob = { id: 'export-1', projectId: 'project-1', sourceManifestFingerprint: 'manifest-1', plan: { id: 'variant-1', preset: { name: 'Short' } }, state: 'completed', artifact } as unknown as ExportJob;
 const account: PublishAccount = { id: 'youtube:channel-1', platform: 'youtube', accountRef: 'channel-1', channelRef: 'UC-channel-1', displayName: 'Verified channel', credentialRef: 'opaque-credential-ref', authenticated: true, createdAt: 'now' };
+const secondAccount: PublishAccount = { id: 'youtube:channel-2', platform: 'youtube', accountRef: 'channel-2', channelRef: 'UC-channel-2', displayName: 'Second channel', credentialRef: 'opaque-second-credential-ref', authenticated: true, createdAt: 'now' };
 function jobFromInput(input: Parameters<typeof controller.buildPublishJob>[0]): PublishJob {
   return {
     id: 'publish-1', projectId: input.projectId, variantId: input.variantId ?? null, target: input.target, accountBinding: input.account,
@@ -76,16 +77,61 @@ describe('modern export to publish handoff', () => {
     const unrelated = { ...exportJob, id: 'export-unrelated', artifact: { ...artifact, path: 'C:/exports/unrelated.mp4', contentDigest: 'b'.repeat(64) } } as ExportJob;
     const selected = { ...exportJob, id: 'export-selected', artifact: { ...artifact, path: 'C:/exports/selected.mp4', contentDigest: 'c'.repeat(64) } } as ExportJob;
     useExportIntelligenceStore.setState({ queue: { jobs: [unrelated, selected], activeJobId: null, paused: false } });
-    usePublishingStore.setState({ accounts: [account], handoff: { kind: 'verified-export', exportJobId: selected.id, sourceVideoId: 'video-1' }, videoExportLinks: { 'video-1': selected.id } });
+    usePublishingStore.setState({ accounts: [account], handoff: { kind: 'verified-export', exportJobId: selected.id, sourceVideoId: 'video-1', target: null }, videoExportLinks: { 'video-1': selected.id } });
     container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
     await act(async () => { root.render(<AIPublishingStudio />); });
     expect(container!.querySelector<HTMLSelectElement>('[aria-label="Verified export"]')?.value).toBe(selected.id);
     await act(async () => { root.unmount(); });
   });
 
+  it('carries an explicitly selected second native account into Publishing Studio', async () => {
+    const root = setup();
+    usePublishingStore.setState({
+      accounts: [account, secondAccount],
+      handoff: {
+        kind: 'verified-export',
+        exportJobId: exportJob.id,
+        sourceVideoId: 'video-2',
+        target: { platform: 'youtube', publishingAccountId: secondAccount.id, channelRef: secondAccount.channelRef! },
+      },
+    });
+    await act(async () => { root.render(<AIPublishingStudio />); });
+    const channelSelect = container!.querySelector<HTMLSelectElement>('[aria-label="YouTube channel"]')!;
+    expect(channelSelect.value).toBe(secondAccount.id);
+    expect(channelSelect.disabled).toBe(true);
+    const preview = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
+    await act(async () => { preview.click(); });
+    expect(controller.buildPublishJob).toHaveBeenCalledWith(expect.objectContaining({
+      account: secondAccount,
+      target: { platform: 'youtube', accountId: secondAccount.id, channelRef: secondAccount.channelRef },
+    }));
+    expect(controller.buildPublishJob).not.toHaveBeenCalledWith(expect.objectContaining({ account }));
+    await act(async () => { root.unmount(); });
+  });
+
+  it('blocks a stale explicit handoff target instead of silently using another account', async () => {
+    const root = setup();
+    usePublishingStore.setState({
+      accounts: [account],
+      handoff: {
+        kind: 'verified-export',
+        exportJobId: exportJob.id,
+        sourceVideoId: 'video-stale',
+        target: { platform: 'youtube', publishingAccountId: secondAccount.id, channelRef: secondAccount.channelRef! },
+      },
+    });
+    await act(async () => { root.render(<AIPublishingStudio />); });
+    expect(container!.querySelector<HTMLSelectElement>('[aria-label="YouTube channel"]')?.value).toBe('');
+    expect(container!.textContent).toContain('will not substitute another account');
+    const preview = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
+    expect(preview.disabled).toBe(true);
+    expect(controller.buildPublishJob).not.toHaveBeenCalled();
+    await act(async () => { root.unmount(); });
+  });
+
   it('retains an unverified selected video as the subject instead of selecting an unrelated export', async () => {
     useExportIntelligenceStore.setState({ queue: { jobs: [exportJob], activeJobId: null, paused: false } });
-    usePublishingStore.setState({ accounts: [account], handoff: { kind: 'video-needs-verification', sourceVideoId: 'legacy-video', title: 'Selected legacy video', exportJobId: null }, videoExportLinks: {} });
+    usePublishingStore.setState({ accounts: [account], handoff: { kind: 'video-needs-verification', sourceVideoId: 'legacy-video', title: 'Selected legacy video', exportJobId: null, target: null }, videoExportLinks: {} });
     container = document.createElement('div'); document.body.append(container); const root = createRoot(container);
     await act(async () => { root.render(<AIPublishingStudio />); });
     expect(container!.textContent).toContain('Selected legacy video must be exported and verified');
@@ -173,7 +219,7 @@ describe('modern export to publish handoff', () => {
 
   it('clears an exact handoff only after enqueue succeeds', async () => {
     const root = setup();
-    usePublishingStore.getState().setHandoff({ kind: 'verified-export', exportJobId: exportJob.id, sourceVideoId: 'video-1' });
+    usePublishingStore.getState().setHandoff({ kind: 'verified-export', exportJobId: exportJob.id, sourceVideoId: 'video-1', target: null });
     await act(async () => { root.render(<AIPublishingStudio />); });
     const preview = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
     await act(async () => { preview.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
@@ -187,7 +233,7 @@ describe('modern export to publish handoff', () => {
 
   it('preserves the exact handoff when enqueue fails', async () => {
     const root = setup();
-    const handoff = { kind: 'verified-export' as const, exportJobId: exportJob.id, sourceVideoId: 'video-1' };
+    const handoff = { kind: 'verified-export' as const, exportJobId: exportJob.id, sourceVideoId: 'video-1', target: null };
     usePublishingStore.getState().setHandoff(handoff);
     controller.approveAndEnqueuePublish.mockRejectedValueOnce(new Error('queue unavailable'));
     await act(async () => { root.render(<AIPublishingStudio />); });

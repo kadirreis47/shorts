@@ -70,7 +70,12 @@ export interface Channel {
 
 export interface Video {
   id: string;
-  channel_id: string;
+  channel_id: string | null;
+  /** Null is a legacy row; its established interpretation is required narration. */
+  narration_mode?: 'required' | 'silent' | null;
+  publishing_platform?: 'youtube' | null;
+  publishing_account_id?: string | null;
+  publishing_channel_ref?: string | null;
   title: string;
   description: string | null;
   status: string;

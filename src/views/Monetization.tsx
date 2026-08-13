@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { DollarSign, TrendingUp, Eye, BarChart3, Wallet, ArrowUpRight } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { Channel, Video, MonetizationSnapshot } from '@/lib/types';
+import type { Video, MonetizationSnapshot } from '@/lib/types';
 import { Card } from '@/components/ui';
 import { formatNumber, classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
+import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
+import { isVideoAttributedToChannel, resolveVideoCanonicalChannelId } from '@/services/videoChannelAttribution';
 
 interface MonetizationProps {
-  channels: Channel[];
+  channels: CanonicalChannelIdentity[];
 }
 
 const DEFAULT_RPM = 1.5; // USD per 1000 views (conservative Shorts estimate)
@@ -32,7 +34,7 @@ export function Monetization({ channels }: MonetizationProps) {
   }, []);
 
   const channelMap = new Map(channels.map((c) => [c.id, c]));
-  const filteredVideos = channelFilter === 'all' ? videos : videos.filter((v) => v.channel_id === channelFilter);
+  const filteredVideos = channelFilter === 'all' ? videos : videos.filter((v) => isVideoAttributedToChannel(v, channelFilter));
 
   // Calculate estimated revenue (if no snapshots, estimate from views)
   const revenueByVideo = filteredVideos.map((v) => {
@@ -49,7 +51,7 @@ export function Monetization({ channels }: MonetizationProps) {
 
   // Revenue by channel
   const revenueByChannel = channels.map((ch) => {
-    const chVideos = videos.filter((v) => v.channel_id === ch.id);
+    const chVideos = videos.filter((v) => isVideoAttributedToChannel(v, ch.id));
     const chRevenue = chVideos.reduce((s, v) => s + (v.views / 1000) * DEFAULT_RPM, 0);
     return { channel: ch, revenue: chRevenue, views: chVideos.reduce((s, v) => s + v.views, 0) };
   }).sort((a, b) => b.revenue - a.revenue);
@@ -160,7 +162,7 @@ export function Monetization({ channels }: MonetizationProps) {
               <h3 className="mb-4 font-semibold text-slate-900">{t('monetization.revenueByVideo')}</h3>
               <div className="space-y-2">
                 {revenueByVideo.slice(0, 10).map((rv, i) => {
-                  const ch = channelMap.get(rv.video.channel_id);
+                  const ch = channelMap.get(resolveVideoCanonicalChannelId(rv.video) ?? '');
                   return (
                     <div key={rv.video.id} className="flex items-center gap-3 rounded-lg p-2 hover:bg-slate-50">
                       <span className="w-5 text-center text-sm font-bold text-slate-400">{i + 1}</span>

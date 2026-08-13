@@ -13,7 +13,7 @@ function AppContent() {
   const { t } = useI18n();
   const view = useUIStore((state) => state.currentView);
   const navigate = useUIStore((state) => state.navigate);
-  const { channels } = useChannels();
+  const { channels, canonicalChannels } = useChannels();
   const { ready, error, offline, retry } = useAppBootstrap();
   const navigationItems = useNavigationItems();
 
@@ -51,7 +51,7 @@ function AppContent() {
         current={view}
         onNavigate={navigate}
         items={navigationItems}
-        channels={channels}
+        channels={canonicalChannels}
       />
 
       <div className="flex flex-1 flex-col overflow-hidden">
@@ -107,6 +107,7 @@ function AppContent() {
               <ViewHost
                 view={view}
                 channels={channels}
+                productionChannels={canonicalChannels}
                 onNavigate={navigate}
               />
             </AppErrorBoundary>

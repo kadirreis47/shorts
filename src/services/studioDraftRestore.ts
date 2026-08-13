@@ -6,6 +6,15 @@ export interface StudioDraftRestoreDecision {
   readonly draft: StudioDraft | null;
 }
 
+export function resolveRestoredStudioChannelId(
+  savedChannelId: string,
+  availableChannelIds: readonly string[],
+): string {
+  const saved = savedChannelId.trim();
+  if (saved) return availableChannelIds.includes(saved) ? saved : '';
+  return availableChannelIds.length === 1 ? availableChannelIds[0] : '';
+}
+
 export function createStudioProjectDraft(draft: StudioDraft): ProjectDraft {
   const projectId = draft.projectId?.trim();
   if (!projectId) throw new Error('Studio draft project ID is required for autosave.');

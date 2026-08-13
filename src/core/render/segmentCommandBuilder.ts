@@ -95,7 +95,7 @@ export function buildSceneSegmentCommand(input: {
 
   if (subtitleContent) {
     filters.push(
-      'subtitles={{SUBTITLE_FILE}}',
+      'subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}',
     );
   }
 

@@ -1,4 +1,5 @@
 import type { AssetResolutionReport } from './assetProviderTypes';
+import { resolveAudioNarrationMode } from './audioTypes';
 import type {
   MediaProject,
   RenderManifest,
@@ -223,12 +224,13 @@ function validateAudio(
   issues: MediaValidationIssue[],
 ): void {
   const { audio } = project;
+  const narrationRequired = resolveAudioNarrationMode(audio) === 'required';
 
-  if (audio.voice.length === 0) {
+  if (narrationRequired && audio.voice.length === 0) {
     addIssue(issues, 'VOICE_TRACK_EMPTY', 'audio', 'error', 'Seslendirme segmenti bulunmuyor.');
   }
 
-  if (audio.metrics.voiceCoverage < 0.9) {
+  if (narrationRequired && audio.metrics.voiceCoverage < 0.9) {
     addIssue(
       issues,
       'VOICE_COVERAGE_LOW',

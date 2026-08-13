@@ -6,10 +6,11 @@ import {
   Activity, Languages, Eye, EyeOff, ZoomIn, ZoomOut, Save, RotateCcw,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { Channel, Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
+import type { Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
+import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import {
-  generateVoiceover, listVoices, uploadMedia,
-  getApiKeyKeys, searchImages, searchVideos,
+  generateVoiceover, getProviderStatus, listVoices, uploadMedia,
+  searchImages, searchVideos,
   generateAIImage, researchFootage, generateSRT, translateSubtitles,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
@@ -20,22 +21,33 @@ import { Card, Button } from '@/components/ui';
 import { AIPipelineMonitor } from '@/components/AIPipelineMonitor';
 import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
-import { clearStudioDraft, loadStudioDraft, saveStudioDraft, type StudioDraft, type StudioStep } from '@/lib/studioDraft';
+import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
 import { enqueueActiveExport, loadExportCapabilities, planActiveExport } from '@/services/exportIntelligenceController';
 import { useMediaStore, useProjectStore, usePublishingStore, useUIStore } from '@/store';
-import { createStudioProjectDraft, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
+import { createStudioProjectDraft, resolveRestoredStudioChannelId, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
+import { createVideoChannelAttribution, toSafePublishingTarget } from '@/services/videoChannelAttribution';
 
 interface StudioProps {
-  channels: Channel[];
+  channels: CanonicalChannelIdentity[];
   onNavigateDirector: () => void;
   onNavigatePlatform?: () => void;
 }
 
 type Step = StudioStep;
+
+function defaultChannelId(channels: readonly CanonicalChannelIdentity[]) {
+  return channels.length === 1 ? channels[0].id : '';
+}
+
+function providerActionError(action: string, error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/not configured|not available/i.test(message)) return `The provider for ${action} is not configured. Contact an administrator.`;
+  return `Unable to complete ${action}. Check your connection and try again.`;
+}
 
 const CAPTION_STYLES: { key: CaptionStyle; label: string; desc: string }[] = [
   { key: 'karaoke', label: 'Karaoke', desc: 'Word-by-word pop with accent color' },
@@ -90,7 +102,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const projectIdentity = useRef(createStudioProjectIdentity());
   const [directorProjectId, setDirectorProjectId] = useState(projectIdentity.current.current());
   const currentProject = useProjectStore((state) => state.currentProject);
-  const [channelId, setChannelId] = useState(channels[0]?.id ?? '');
+  const [channelId, setChannelId] = useState(() => defaultChannelId(channels));
   const [topic, setTopic] = useState('');
   const [niche, setNiche] = useState('');
   const [tone, setTone] = useState('engaging');
@@ -100,9 +112,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [hasOpenAI, setHasOpenAI] = useState(false);
   const [hasPexels, setHasPexels] = useState(false);
   const [hasElevenLabs, setHasElevenLabs] = useState(false);
+  const [providerStatusError, setProviderStatusError] = useState('');
   const [fetchingImages, setFetchingImages] = useState(false);
   const [fetchingVideos, setFetchingVideos] = useState(false);
-  const [voiceoverMode, setVoiceoverMode] = useState<'elevenlabs' | 'browser' | 'none'>('none');
+  const [voiceoverMode, setVoiceoverMode] = useState<StudioVoiceoverMode>('none');
 
   const [title, setTitle] = useState('');
   const [hook, setHook] = useState('');
@@ -164,6 +177,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const navigate = useUIStore((state) => state.navigate);
   const [draftStatus, setDraftStatus] = useState<'loading' | 'saved' | 'saving' | 'empty'>('loading');
   const [draftSavedAt, setDraftSavedAt] = useState<string>('');
+  const [unavailableRestoredChannelId, setUnavailableRestoredChannelId] = useState<string | null>(null);
   const draftHydratedRef = useRef(false);
 
   const channel = channels.find((c) => c.id === channelId);
@@ -180,8 +194,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     activateStudioProject(projectIdentity.current, projectId);
     setDirectorProjectId(projectId);
     if (draft) {
-      setStep(draft.step);
-      setChannelId(draft.channelId || channels[0]?.id || '');
+      const restoredChannelId = resolveRestoredStudioChannelId(draft.channelId, channels.map((candidate) => candidate.id));
+      const savedChannelUnavailable = Boolean(draft.channelId.trim() && !restoredChannelId);
+      setStep(savedChannelUnavailable ? 'topic' : draft.step);
+      setChannelId(restoredChannelId);
+      setUnavailableRestoredChannelId(savedChannelUnavailable ? draft.channelId : null);
       setTopic(draft.topic);
       setNiche(draft.niche);
       setTone(draft.tone);
@@ -216,7 +233,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setDraftStatus('saved');
     } else {
       setStep('topic');
-      setChannelId(channels[0]?.id ?? '');
+      setChannelId(defaultChannelId(channels));
+      setUnavailableRestoredChannelId(null);
       setTopic('');
       setTitle('');
       setHook('');
@@ -234,7 +252,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     projectId: directorProjectId,
     savedAt: new Date().toISOString(),
     step,
-    channelId,
+    channelId: unavailableRestoredChannelId ?? channelId,
     topic,
     niche,
     tone,
@@ -265,7 +283,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     voiceoverMode,
     selectedVoice,
     targetLanguage,
-  }), [directorProjectId, step, channelId, topic, niche, tone, duration, title, hook, script, cta, scenes,
+  }), [directorProjectId, step, channelId, unavailableRestoredChannelId, topic, niche, tone, duration, title, hook, script, cta, scenes,
     captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicVolume, visualMode,
     selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId,
     watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor,
@@ -305,6 +323,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setAudioUrl('');
     setVideoUrl('');
     setStudioVideoId(null);
+    setChannelId(defaultChannelId(channels));
+    setUnavailableRestoredChannelId(null);
     setMusicBlob(null);
     setMusicId('');
     setDraftSavedAt('');
@@ -320,17 +340,25 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
   useEffect(() => {
     (async () => {
-      const keys = await getApiKeyKeys();
       // Load visual styles
       const { data: styles } = await supabase.from('visual_styles').select('*');
       setVisualStyles(styles ?? []);
       // Load character profiles
       const { data: chars } = await supabase.from('character_profiles').select('*');
       setCharacterProfiles(chars ?? []);
-      setHasOpenAI(!!keys.openai);
-      setHasPexels(!!keys.pexels);
-      setHasElevenLabs(!!keys.elevenlabs);
-      if (keys.elevenlabs) setVoiceoverMode('elevenlabs');
+      try {
+        const status = await getProviderStatus();
+        setHasOpenAI(status.openai.configured);
+        setHasPexels(status.pexels.configured);
+        setHasElevenLabs(status.elevenlabs.configured);
+        setProviderStatusError('');
+      } catch {
+        // Fail closed: provider-backed controls remain unavailable until server status is known.
+        setHasOpenAI(false);
+        setHasPexels(false);
+        setHasElevenLabs(false);
+        setProviderStatusError('Provider availability could not be checked. Provider-backed tools are unavailable right now.');
+      }
     })();
   }, []);
 
@@ -398,45 +426,64 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       const v = await listVoices();
       setVoices(v);
       if (v.length > 0 && !selectedVoice) setSelectedVoice(v[0].voice_id);
-    } catch {
-      // silently fail
+    } catch (loadError) {
+      setError(providerActionError('ElevenLabs voices', loadError));
     }
   }
 
   // Pro Features handlers
   async function handleGenerateAllVisuals() {
     if (scenes.length === 0) return;
+    if (!hasOpenAI) { setError('OpenAI image generation is not configured. Contact an administrator.'); return; }
     setGeneratingVisuals(true);
+    setError('');
     try {
       const charDesc = characterName.trim()
         ? `${characterName.trim()}, ${characterAppearance.trim()}`
         : undefined;
       const updatedScenes = [...scenes];
+      let succeeded = 0;
+      let failed = 0;
+      let firstFailure: unknown;
       for (let i = 0; i < updatedScenes.length; i++) {
         const scene = updatedScenes[i];
         const prompt = scene.imagePrompt || scene.visual || scene.text;
         const mode = scene.visualMode || visualMode;
-        const result = await generateAIImage({
-          prompt,
-          mode: (mode === 'auto' || mode === 'real_footage' || mode === 'mixed') ? 'ai_realistic' : mode,
-          characterDesc: charDesc,
-          sceneContext: scene.text,
-        });
-        updatedScenes[i] = { ...scene, imageUrl: result.imageUrl, imagePrompt: result.revisedPrompt || prompt };
+        try {
+          const result = await generateAIImage({
+            prompt,
+            mode: (mode === 'auto' || mode === 'real_footage' || mode === 'mixed') ? 'ai_realistic' : mode,
+            characterDesc: charDesc,
+            sceneContext: scene.text,
+          });
+          updatedScenes[i] = { ...scene, imageUrl: result.imageUrl, imagePrompt: result.revisedPrompt || prompt };
+          succeeded += 1;
+        } catch (sceneError) {
+          failed += 1;
+          firstFailure ??= sceneError;
+        }
       }
       setScenes(updatedScenes);
-    } catch { /* ignore */ }
-    setGeneratingVisuals(false);
+      if (failed) setError(succeeded ? `${succeeded} scene visuals were generated; ${failed} could not be generated.` : providerActionError('scene visuals', firstFailure));
+    } catch (generationError) {
+      setError(providerActionError('scene visuals', generationError));
+    } finally {
+      setGeneratingVisuals(false);
+    }
   }
 
   async function handleResearchFootage() {
     if (scenes.length === 0) return;
+    if (!hasPexels) { setError('Pexels footage research is not configured. Contact an administrator.'); return; }
     setResearchingFootage(true);
+    setError('');
     try {
       const results = await researchFootage({ topic: title || script.slice(0, 100), scenes, mode: visualMode });
       const updatedScenes = [...scenes];
+      let resolved = 0;
       for (const result of results) {
         if (result.sceneIndex < updatedScenes.length) {
+          if (result.imageUrl || result.videoUrl) resolved += 1;
           updatedScenes[result.sceneIndex] = {
             ...updatedScenes[result.sceneIndex],
             imageUrl: result.imageUrl ?? updatedScenes[result.sceneIndex].imageUrl,
@@ -445,8 +492,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         }
       }
       setScenes(updatedScenes);
-    } catch { /* ignore */ }
-    setResearchingFootage(false);
+      if (resolved === 0) setError('No footage could be found for the current scenes. Try refining the visual descriptions.');
+    } catch (researchError) {
+      setError(providerActionError('footage research', researchError));
+    } finally {
+      setResearchingFootage(false);
+    }
   }
 
   async function handleGenerateSEO() {
@@ -526,6 +577,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   async function handleGenerateSceneImage(sceneIndex: number) {
     const scene = scenes[sceneIndex];
     if (!scene) return;
+    if (!hasOpenAI) { setError('OpenAI image generation is not configured. Contact an administrator.'); return; }
     setGeneratingSceneImage(sceneIndex);
     try {
       const charDesc = characterName.trim()
@@ -539,8 +591,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         sceneContext: scene.text,
       });
       setScenes(prev => prev.map((s, i) => i === sceneIndex ? { ...s, imageUrl: result.imageUrl, imagePrompt: result.revisedPrompt || s.imagePrompt } : s));
-    } catch { /* ignore */ }
-    setGeneratingSceneImage(null);
+    } catch (generationError) {
+      setError(providerActionError('this scene image', generationError));
+    } finally {
+      setGeneratingSceneImage(null);
+    }
   }
 
   async function handleGenerateVoiceover() {
@@ -563,7 +618,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         setStep('render');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to generate voiceover');
+      setError(voiceoverMode === 'elevenlabs'
+        ? providerActionError('voiceover', e)
+        : 'Unable to generate a browser voiceover. Try again.');
     } finally {
       setGeneratingVoice(false);
     }
@@ -591,10 +648,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleFetchImages() {
+    if (!hasPexels) { setError('Pexels image search is not configured. Contact an administrator.'); return; }
     setFetchingImages(true);
     setError('');
     try {
       const updatedScenes = [...scenes];
+      let succeeded = 0;
+      let failed = 0;
+      let unresolved = 0;
+      let firstFailure: unknown;
       for (let i = 0; i < updatedScenes.length; i++) {
         const scene = updatedScenes[i];
         const query = scene.visual || scene.keywords?.[0] || topic;
@@ -602,22 +664,29 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           const images = await searchImages(query, 1);
           if (images.length > 0) {
             updatedScenes[i] = { ...scene, imageUrl: images[0].url, videoUrl: undefined };
-          }
-        } catch { /* skip */ }
+            succeeded += 1;
+          } else unresolved += 1;
+        } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
       }
       setScenes(updatedScenes);
+      if (failed || unresolved || succeeded === 0) setError(succeeded ? `${succeeded} scene images were found; some scenes could not be updated.` : failed ? providerActionError('images', firstFailure) : 'No images could be found. Check provider availability and try again.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch images');
+      setError(providerActionError('images', e));
     } finally {
       setFetchingImages(false);
     }
   }
 
   async function handleFetchBroll() {
+    if (!hasPexels) { setError('Pexels video search is not configured. Contact an administrator.'); return; }
     setFetchingVideos(true);
     setError('');
     try {
       const updatedScenes = [...scenes];
+      let succeeded = 0;
+      let failed = 0;
+      let unresolved = 0;
+      let firstFailure: unknown;
       for (let i = 0; i < updatedScenes.length; i++) {
         const scene = updatedScenes[i];
         const query = scene.visual || scene.keywords?.[0] || topic;
@@ -625,12 +694,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           const videos = await searchVideos(query, 1);
           if (videos.length > 0 && videos[0].fileUrl) {
             updatedScenes[i] = { ...scene, videoUrl: videos[0].fileUrl, imageUrl: videos[0].preview };
-          }
-        } catch { /* skip */ }
+            succeeded += 1;
+          } else unresolved += 1;
+        } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
       }
       setScenes(updatedScenes);
+      if (failed || unresolved || succeeded === 0) setError(succeeded ? `${succeeded} scene video clips were found; some scenes could not be updated.` : failed ? providerActionError('video clips', firstFailure) : 'No video clips could be found. Check provider availability and try again.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch video clips');
+      setError(providerActionError('video clips', e));
     } finally {
       setFetchingVideos(false);
     }
@@ -659,6 +730,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleRender() {
+    if (!channel) {
+      setError('Select an available channel before rendering this restored draft.');
+      setStep('topic');
+      return;
+    }
     setRendering(true);
     setRenderProgress(0);
     setError('');
@@ -685,7 +761,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
       const { data } = await supabase.from('videos').insert({
         title,
-        channel_id: channelId,
+        ...createVideoChannelAttribution(channel),
+        narration_mode: resolveStudioAudioNarrationMode(voiceoverMode),
         description: script,
         script,
         hook,
@@ -716,12 +793,24 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function prepareModernPublish() {
+    if (!channel) {
+      setError('Select an available channel before preparing this video for publishing.');
+      setStep('topic');
+      return;
+    }
     setPreparingPublish(true);
     setError('');
     try {
       const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
-      const build = await mediaEngine.buildProject({ projectId: directorProjectId, title: title || topic || 'Studio video', scenes });
-      if (!build.renderReady || build.validation.renderReady !== true) throw new Error('Studio content must pass canonical media validation before export.');
+      const build = await mediaEngine.buildProject({
+        projectId: directorProjectId,
+        title: title || topic || 'Studio video',
+        scenes,
+        audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode) },
+      });
+      if (!build.renderReady || build.validation.renderReady !== true) {
+        throw new Error('Studio content must pass canonical media validation before export.');
+      }
       useMediaStore.getState().setBuildResult(build.project, build.manifest, build.renderReady, build.assetResolution, build.validation);
       await loadExportCapabilities();
       const plan = await planActiveExport('youtube-shorts');
@@ -730,9 +819,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (!outputPath) return;
       const exportJob = await enqueueActiveExport(plan, outputPath);
       const publishing = usePublishingStore.getState();
+      const target = toSafePublishingTarget(channel);
       publishing.setHandoff(studioVideoId
-        ? { kind: 'video-needs-verification', sourceVideoId: studioVideoId, title: title || topic || 'Studio video', exportJobId: exportJob.id }
-        : { kind: 'verified-export', exportJobId: exportJob.id, sourceVideoId: null });
+        ? { kind: 'video-needs-verification', sourceVideoId: studioVideoId, title: title || topic || 'Studio video', exportJobId: exportJob.id, target }
+        : { kind: 'verified-export', exportJobId: exportJob.id, sourceVideoId: null, target });
       navigate('publishing-studio');
     } catch (publishError) {
       setError(publishError instanceof Error ? publishError.message : 'Verified export could not be prepared.');
@@ -831,6 +921,19 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         </div>
       )}
 
+      {unavailableRestoredChannelId && (
+        <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <span>The channel saved with this draft is no longer available. Select a channel explicitly before rendering or publishing; ShortsFlow will not substitute another channel.</span>
+        </div>
+      )}
+      {providerStatusError && (
+        <div role="status" className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <span>{providerStatusError}</span>
+        </div>
+      )}
+
       {/* Step 1: Topic */}
       {step === 'topic' && (
         <Card className="p-6">
@@ -838,8 +941,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium text-slate-700">{t('studio.channel')}</label>
-              <select value={channelId} onChange={(e) => setChannelId(e.target.value)}
+              <select value={channelId} onChange={(e) => { setChannelId(e.target.value); setUnavailableRestoredChannelId(null); setError(''); }}
                 className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400">
+                {(channels.length !== 1 || !channelId) && <option value="">{t('studio.channel')}…</option>}
                 {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
@@ -979,7 +1083,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <button
                         onClick={() => handleGenerateSceneImage(i)}
-                        disabled={generatingSceneImage === i}
+                        disabled={!hasOpenAI || generatingSceneImage === i}
                         className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50"
                       >
                         {generatingSceneImage === i ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
@@ -1279,12 +1383,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
               {/* Generate All Visuals / Research Footage */}
               <div className="mt-3 flex flex-wrap gap-2">
-                {(visualMode === 'ai_cartoon' || visualMode === 'ai_realistic' || visualMode === 'ai_anime' || visualMode === 'ai_horror' || visualMode === 'auto' || visualMode === 'mixed') && (
+                {hasOpenAI && (visualMode === 'ai_cartoon' || visualMode === 'ai_realistic' || visualMode === 'ai_anime' || visualMode === 'ai_horror' || visualMode === 'auto' || visualMode === 'mixed') && (
                   <Button size="sm" onClick={handleGenerateAllVisuals} disabled={generatingVisuals || scenes.length === 0}>
                     {generatingVisuals ? <><Loader2 size={14} className="animate-spin" /> {t('studio.generatingVisuals')}</> : <><Sparkles size={14} /> {t('studio.generateVisuals')}</>}
                   </Button>
                 )}
-                {(visualMode === 'real_footage' || visualMode === 'mixed') && (
+                {hasPexels && (visualMode === 'real_footage' || visualMode === 'mixed') && (
                   <Button size="sm" variant="secondary" onClick={handleResearchFootage} disabled={researchingFootage || scenes.length === 0}>
                     {researchingFootage ? <><Loader2 size={14} className="animate-spin" /> {t('studio.researchingFootage')}</> : <><Search size={14} /> {t('studio.researchFootage')}</>}
                   </Button>
@@ -1295,7 +1399,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
               <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/30 p-3">
                 <p className="flex items-center gap-1 text-sm font-medium text-slate-700"><Wand2 size={14} /> {t('studio.hookGenerator')}</p>
                 <p className="text-xs text-slate-500">{t('studio.hookGeneratorDesc')}</p>
-                <button onClick={handleGenerateHooks} disabled={generatingHooks || !topic.trim()}
+                <button onClick={handleGenerateHooks} disabled={!hasOpenAI || generatingHooks || !topic.trim()}
                   className="mt-2 flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
                   {generatingHooks ? <><Loader2 size={14} className="animate-spin" /> {t('studio.generatingHooks')}</> : <><Sparkles size={14} /> {t('studio.generateHooks')}</>}
                 </button>
@@ -1319,7 +1423,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
               <div className="mt-3 rounded-lg border border-purple-100 bg-purple-50/30 p-3">
                 <p className="flex items-center gap-1 text-sm font-medium text-slate-700"><Activity size={14} /> {t('studio.scriptAnalyzer')}</p>
                 <p className="text-xs text-slate-500">{t('studio.scriptAnalyzerDesc')}</p>
-                <button onClick={handleAnalyzeScript} disabled={analyzingScript || !script.trim()}
+                <button onClick={handleAnalyzeScript} disabled={!hasOpenAI || analyzingScript || !script.trim()}
                   className="mt-2 flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
                   {analyzingScript ? <><Loader2 size={14} className="animate-spin" /> {t('studio.analyzingScript')}</> : <><Activity size={14} /> {t('studio.analyzeScript')}</>}
                 </button>
@@ -1408,7 +1512,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
               {/* SEO & SRT */}
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button size="sm" variant="secondary" onClick={handleGenerateSEO} disabled={generatingSEOState || !script.trim()}>
+                <Button size="sm" variant="secondary" onClick={handleGenerateSEO} disabled={!hasOpenAI || generatingSEOState || !script.trim()}>
                   {generatingSEOState ? <><Loader2 size={14} className="animate-spin" /> {t('studio.generatingSEO')}</> : <><Tag size={14} /> {t('studio.generateSEO')}</>}
                 </Button>
                 <Button size="sm" variant="secondary" onClick={handleExportSRT} disabled={scenes.length === 0}>
@@ -1568,7 +1672,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
               )}
               <div className="flex justify-between gap-2">
                 <Button variant="secondary" onClick={() => setStep('voice')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
-                <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={handleRender}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
+                <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes, audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode) } } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={handleRender} disabled={!channel}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
               </div>
             </div>
           )}
@@ -1582,7 +1686,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           <div className="space-y-4">
             {videoUrl && <div className="overflow-hidden rounded-lg bg-slate-900"><video src={videoUrl} controls className="mx-auto max-h-96" /></div>}
             <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-700"><p className="flex items-center gap-2"><Youtube size={16} /> Create a canonical local export for publishing.</p><p className="mt-1">ShortsFlow will render through the existing export queue, verify the exact bytes with FFprobe and SHA-256, then keep the publishing handoff bound to that export.</p></div>
-            <div className="flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep('render')}><ArrowLeft size={16} /> {t('studio.back')}</Button><Button onClick={() => void prepareModernPublish()} disabled={preparingPublish}>{preparingPublish ? <><Loader2 size={16} className="animate-spin" /> Preparing verified export…</> : <><Youtube size={16} /> Export &amp; publish safely</>}</Button></div>
+            <div className="flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep('render')}><ArrowLeft size={16} /> {t('studio.back')}</Button><Button onClick={() => void prepareModernPublish()} disabled={preparingPublish || !channel}>{preparingPublish ? <><Loader2 size={16} className="animate-spin" /> Preparing verified export…</> : <><Youtube size={16} /> Export &amp; publish safely</>}</Button></div>
           </div>
         </Card>
       )}

@@ -3,15 +3,21 @@ import { persist } from 'zustand/middleware';
 import { createPersistentStorage } from '@/persistence/storeStorage';
 import { isTerminalPublishJob, normalizePublishQueue, rebindPublishJobCredential, type PublishAccount, type PublishJob, type PublishQueueSnapshot } from '@/core/publishing';
 import { isVerifiedExportJob, type ExportJob } from '@/core/export-intelligence';
+import type { Video } from '@/lib/types';
+import { resolveVideoPublishingTarget, type SafePublishingTarget } from '@/services/videoChannelAttribution';
 
 export type PublishingHandoff =
-  | { kind: 'verified-export'; exportJobId: string; sourceVideoId: string | null }
-  | { kind: 'video-needs-verification'; sourceVideoId: string; title: string; exportJobId: string | null };
+  | { kind: 'verified-export'; exportJobId: string; sourceVideoId: string | null; target: SafePublishingTarget | null }
+  | { kind: 'video-needs-verification'; sourceVideoId: string; title: string; exportJobId: string | null; target: SafePublishingTarget | null };
 
-export function resolveVideoPublishingHandoff(video: { id: string; title: string }, linkedJob: ExportJob | null | undefined): PublishingHandoff {
+export function resolveVideoPublishingHandoff(
+  video: Pick<Video, 'id' | 'title' | 'publishing_platform' | 'publishing_account_id' | 'publishing_channel_ref'>,
+  linkedJob: ExportJob | null | undefined,
+): PublishingHandoff {
+  const target = resolveVideoPublishingTarget(video);
   return isVerifiedExportJob(linkedJob)
-    ? { kind: 'verified-export', exportJobId: linkedJob.id, sourceVideoId: video.id }
-    : { kind: 'video-needs-verification', sourceVideoId: video.id, title: video.title, exportJobId: linkedJob?.id ?? null };
+    ? { kind: 'verified-export', exportJobId: linkedJob.id, sourceVideoId: video.id, target }
+    : { kind: 'video-needs-verification', sourceVideoId: video.id, title: video.title, exportJobId: linkedJob?.id ?? null, target };
 }
 
 interface PublishingState {

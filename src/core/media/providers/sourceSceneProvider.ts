@@ -6,6 +6,8 @@ export function createSourceSceneProvider(sceneMap: ReadonlyMap<string, MediaSce
     id: 'source-scene',
     priority: 100,
     capabilities: new Set(['local', 'image', 'video']),
+    // Results read sceneMap by query.sceneId, so query-scoped cache entries are never safe.
+    cacheable: false,
     isAvailable: () => true,
     async search(query) {
       const scene = sceneMap.get(query.sceneId);

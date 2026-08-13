@@ -1,4 +1,5 @@
 import type { RenderDiagnostics } from '@/core/render/renderDiagnosticsTypes';
+import { resolveAudioNarrationMode } from '@/core/media';
 import type { ExportArtifact, ExportJob, ExportVerification } from './types';
 
 function isRenderDiagnostics(value: unknown): value is RenderDiagnostics {
@@ -19,10 +20,11 @@ export function verifyArtifact(job: ExportJob, artifact: ExportArtifact): Export
   const durationMatch = Number.isFinite(duration) && Math.abs(duration - job.manifest.durationMs) <= 1000;
   const resolutionMatch = Number.isFinite(width) && Number.isFinite(height) && width === job.manifest.render.width && height === job.manifest.render.height;
   const codecMatch = codec.length > 0 && codec.toLowerCase().includes(job.plan.preset.videoCodec.toLowerCase());
+  const intentionalSilence = resolveAudioNarrationMode(job.manifest.audio) === 'silent';
   const audioPresent = canonical ? canonical.audio !== null : diagnostics.audioPresent !== false;
   const subtitlesPresent = canonical ? true : diagnostics.subtitlesPresent !== false;
   const corruption = canonical ? canonical.warnings.some((warning) => /corrupt|invalid|ffprobe/i.test(warning)) : diagnostics.corruption === true;
-  if (zeroByte) issues.push('Output is zero bytes.'); if (!durationMatch) issues.push('Output duration differs from manifest.'); if (!resolutionMatch) issues.push('Output resolution differs from manifest.'); if (!codecMatch) issues.push('Output video codec differs from preset.'); if (!audioPresent) issues.push('Output has no audio stream.'); if (!subtitlesPresent) issues.push('Output has no subtitle stream.'); if (corruption) issues.push('Output corruption detected.');
+  if (zeroByte) issues.push('Output is zero bytes.'); if (!durationMatch) issues.push('Output duration differs from manifest.'); if (!resolutionMatch) issues.push('Output resolution differs from manifest.'); if (!codecMatch) issues.push('Output video codec differs from preset.'); if (!audioPresent && !intentionalSilence) issues.push('Output has no audio stream.'); if (!subtitlesPresent) issues.push('Output has no subtitle stream.'); if (corruption) issues.push('Output corruption detected.');
   return { valid: issues.length === 0, zeroByte, durationMatch, resolutionMatch, codecMatch, audioPresent, subtitlesPresent, corruption, issues, diagnostics };
 }
 

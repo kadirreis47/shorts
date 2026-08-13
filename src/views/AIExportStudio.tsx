@@ -28,17 +28,23 @@ export function AIExportStudio() {
     if (handoff?.kind !== 'video-needs-verification' || !requestedExport || !requestedExportVerified) return;
     const publishing = usePublishingStore.getState();
     publishing.linkVideoExport(handoff.sourceVideoId, requestedExport.id);
-    publishing.setHandoff({ kind: 'verified-export', exportJobId: requestedExport.id, sourceVideoId: handoff.sourceVideoId });
+    publishing.setHandoff({ kind: 'verified-export', exportJobId: requestedExport.id, sourceVideoId: handoff.sourceVideoId, target: handoff.target });
     navigate('publishing-studio');
   }, [handoff, navigate, requestedExport, requestedExportVerified]);
   async function prepareSelectedVideo() {
     if (handoff?.kind !== 'video-needs-verification') return;
-    const result = await supabase.from('videos').select('id,title,scenes').eq('id', handoff.sourceVideoId).single();
+    const result = await supabase.from('videos').select('id,title,scenes,narration_mode').eq('id', handoff.sourceVideoId).single();
     if (result.error) throw new Error(`Selected rendered video could not be loaded: ${result.error.message}`);
-    const video = result.data as Pick<Video, 'id' | 'title' | 'scenes'> | null;
+    const video = result.data as Pick<Video, 'id' | 'title' | 'scenes' | 'narration_mode'> | null;
     if (!video || video.id !== handoff.sourceVideoId || !Array.isArray(video.scenes) || video.scenes.length === 0) throw new Error('Selected rendered video has no canonical scene source to export.');
     const mediaEngine = applicationContainer.resolve<MediaEngine>(dependencyTokens.mediaEngine);
-    const build = await mediaEngine.buildProject({ projectId: `rendered-video-${video.id}`, title: video.title, scenes: video.scenes });
+    const build = await mediaEngine.buildProject({
+      projectId: `rendered-video-${video.id}`,
+      title: video.title,
+      scenes: video.scenes,
+      // Null is reserved for legacy rows that predate durable narration intent.
+      audio: { narrationMode: video.narration_mode === 'silent' ? 'silent' : 'required' },
+    });
     if (!build.renderReady || build.validation.renderReady !== true) throw new Error('Selected rendered video did not pass canonical media validation.');
     useMediaStore.getState().setBuildResult(build.project, build.manifest, build.renderReady, build.assetResolution, build.validation);
   }

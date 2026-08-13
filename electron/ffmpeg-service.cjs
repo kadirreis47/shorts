@@ -159,7 +159,7 @@ async function detectCapabilities(options = {}) {
   try {
     const versionOutput = await captureFn(executable, ['-version']);
     const encodersOutput = await captureFn(executable, ['-hide_banner', '-encoders']);
-    const encoders = encodersOutput.split(/\r?\n/).filter((line) => /^\s*[VAS\.]{6}\s+\S+/.test(line)).map((line) => line.trim().split(/\s+/)[1]).filter(Boolean);
+    const encoders = parseEncoderRows(encodersOutput);
     const hardwareEncoders = encoders.filter((name) => /nvenc|qsv|vaapi|videotoolbox|amf/i.test(name));
     const gpuDevices = await detectNvidiaGpus();
     const ffprobeExecutable = resolveFFprobeExecutable({ runtime, fsApi: options.fsApi ?? fs });
@@ -169,6 +169,16 @@ async function detectCapabilities(options = {}) {
   } catch {
     return { available: false, executable: null, version: null, encoders: [], hardwareEncoders: [], gpuDevices: [], ffprobeAvailable: false, ffprobeExecutable: null, ffprobeVersion: null, reason: runtime.source === 'bundled' ? 'Bundled FFmpeg could not be executed. Reinstall ShortsFlow.' : 'FFmpeg is unavailable on the current development PATH.' };
   }
+}
+
+function parseEncoderRows(output) {
+  return String(output).split(/\r?\n/).flatMap((line) => {
+    // FFmpeg encoder rows begin with a six-character capability field. Its
+    // letters vary by FFmpeg build (for example V....D), so only its stable
+    // structure is parsed; headers, separators, and prose do not match.
+    const match = /^\s*[VAS][A-Z.]{5}\s+([a-z0-9][a-z0-9_.-]*)\s{2,}\S/i.exec(line);
+    return match ? [match[1]] : [];
+  });
 }
 
 
@@ -316,7 +326,7 @@ async function runFFmpeg(webContents, request) {
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
   const args = request.args.map((arg) =>
     arg
-      .replaceAll('{{SUBTITLE_FILE}}', escapeFilterPath(subtitlePath))
+      .replaceAll('{{SUBTITLE_FILE_FILTER_VALUE}}', serializeSubtitleFilterFilename(subtitlePath))
       .replaceAll('{{CONCAT_FILE}}', concatPath)
       .replaceAll('{{OUTPUT_FILE}}', outputPath),
   );
@@ -384,7 +394,11 @@ function resolveOutputPath(requested, jobId) {
   return path.join(dir, `${sanitize(jobId)}.mp4`);
 }
 function sanitize(value) { return String(value).replace(/[^a-z0-9_-]/gi, '_'); }
-function escapeFilterPath(value) { return value.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'"); }
+// Serializes a value for FFmpeg's filtergraph parser, not for a shell. The
+// renderer supplies only a placeholder; this process owns the temporary path.
+function serializeSubtitleFilterFilename(value) {
+  return `'${String(value).replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'")}'`;
+}
 function capture(executable, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { windowsHide: true }); let out=''; let err='';
@@ -392,4 +406,4 @@ function capture(executable, args) {
     child.on('error', reject); child.on('close', code => code === 0 ? resolve(out || err) : reject(new Error(err || `Exit ${code}`)));
   });
 }
-module.exports = { registerFFmpegHandlers, verifyArtifactSnapshot, detectCapabilities, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };
+module.exports = { registerFFmpegHandlers, verifyArtifactSnapshot, detectCapabilities, parseEncoderRows, serializeSubtitleFilterFilename, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };

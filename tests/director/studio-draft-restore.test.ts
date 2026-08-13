@@ -1,8 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import type { StudioDraft } from '@/lib/studioDraft';
-import { createStudioProjectDraft, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
+import { resolveStudioAudioNarrationMode, type StudioDraft } from '@/lib/studioDraft';
+import { createStudioProjectDraft, resolveRestoredStudioChannelId, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
 
 describe('Studio draft restore isolation', () => {
+  it('maps only the explicit no-voice choice to canonical silent narration', () => {
+    expect(resolveStudioAudioNarrationMode('none')).toBe('silent');
+    expect(resolveStudioAudioNarrationMode('browser')).toBe('required');
+    expect(resolveStudioAudioNarrationMode('elevenlabs')).toBe('required');
+  });
+
+  it('auto-selects one available channel only when the restored draft has no prior selection', () => {
+    expect(resolveRestoredStudioChannelId('', ['channel-b'])).toBe('channel-b');
+  });
+
+  it('restores the exact saved channel when it remains available', () => {
+    expect(resolveRestoredStudioChannelId('channel-a', ['channel-a', 'channel-b'])).toBe('channel-a');
+  });
+
+  it('does not substitute the only remaining channel for an unavailable saved channel', () => {
+    expect(resolveRestoredStudioChannelId('channel-a', ['channel-b'])).toBe('');
+  });
+
   it('currentProject ile global draft kimliği farklıysa alakasız draftı hydrate etmez', () => {
     const decision = resolveStudioDraftRestore({ currentProjectId: 'project-a', globalDraft: draft('project-b', 'B content'),
       projectDrafts: [], fallbackProjectId: 'fallback' });

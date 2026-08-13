@@ -4,15 +4,17 @@ import {
   CheckCircle2, Sparkles, Calendar, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { Video, ActivityLog, ScheduleItem, Channel } from '@/lib/types';
+import type { Video, ActivityLog, ScheduleItem } from '@/lib/types';
 import { formatNumber, timeAgo, timeUntil, classNames } from '@/lib/utils';
 import { StatusBadge, Card, Button, EmptyState } from '@/components/ui';
 import { statusConfig } from '@/lib/status';
 import { useI18n } from '@/lib/i18n';
 import { withTimeout } from '@/lib/async';
+import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
+import { resolveVideoCanonicalChannelId } from '@/services/videoChannelAttribution';
 
 interface DashboardProps {
-  channels: Channel[];
+  channels: CanonicalChannelIdentity[];
 }
 
 export function Dashboard({ channels }: DashboardProps) {
@@ -210,7 +212,7 @@ export function Dashboard({ channels }: DashboardProps) {
             {queue.length === 0 && <p className="text-sm text-slate-400">{t('dashboard.noScheduled')}</p>}
             {queue.map((q) => {
               const video = (q as { video?: Video }).video;
-              const ch = video ? channelMap.get(video.channel_id) : undefined;
+              const ch = video ? channelMap.get(resolveVideoCanonicalChannelId(video) ?? '') : undefined;
               return (
                 <div key={q.id} className="flex items-start gap-3 rounded-lg border border-slate-100 p-3">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
@@ -263,7 +265,7 @@ export function Dashboard({ channels }: DashboardProps) {
               .sort((a, b) => b.views - a.views)
               .slice(0, 5)
               .map((v) => {
-                const ch = channelMap.get(v.channel_id);
+                const ch = channelMap.get(resolveVideoCanonicalChannelId(v) ?? '');
                 return (
                   <div key={v.id} className="flex items-center gap-3">
                     <div

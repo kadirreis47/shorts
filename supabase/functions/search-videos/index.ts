@@ -36,7 +36,7 @@ Deno.serve(async (req: Request) => {
 
     if (!pexelsKey) {
       return new Response(
-        JSON.stringify({ error: "Pexels API key not configured. Add it in Settings to enable video search." }),
+        JSON.stringify({ error: "Video search is not configured. Contact an administrator." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }

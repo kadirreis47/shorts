@@ -1,7 +1,9 @@
 import type { Scene, VisualMode } from './types';
 import type { CaptionStyle, MotionStyle, TransitionStyle } from './videoRenderer';
+import type { AudioNarrationMode } from '@/core/media';
 
 export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'publish';
+export type StudioVoiceoverMode = 'elevenlabs' | 'browser' | 'none';
 
 export interface StudioDraft {
   version: 1;
@@ -36,7 +38,7 @@ export interface StudioDraft {
   captionTextColor: string;
   captionHighlightColor: string;
   beatSync: boolean;
-  voiceoverMode: 'elevenlabs' | 'browser' | 'none';
+  voiceoverMode: StudioVoiceoverMode;
   selectedVoice: string;
   targetLanguage: string;
 }
@@ -61,4 +63,10 @@ export function saveStudioDraft(draft: StudioDraft): void {
 
 export function clearStudioDraft(): void {
   window.localStorage.removeItem(STORAGE_KEY);
+}
+
+export function resolveStudioAudioNarrationMode(
+  voiceoverMode: StudioVoiceoverMode,
+): AudioNarrationMode {
+  return voiceoverMode === 'none' ? 'silent' : 'required';
 }

@@ -60,9 +60,26 @@ export function AIPublishingStudio() {
     if (!isVerifiedExportJob(completed)) return;
     const publishing = usePublishingStore.getState();
     publishing.linkVideoExport(handoff.sourceVideoId, completed.id);
-    publishing.setHandoff({ kind: 'verified-export', exportJobId: completed.id, sourceVideoId: handoff.sourceVideoId });
+    publishing.setHandoff({ kind: 'verified-export', exportJobId: completed.id, sourceVideoId: handoff.sourceVideoId, target: handoff.target });
   }, [exportJobs, handoff]);
-  useEffect(() => { if (!accountId && usableAccounts[0]) setAccountId(usableAccounts[0].id); }, [accountId, usableAccounts]);
+
+  const handoffAccount = handoff?.target
+    ? usableAccounts.find((account) => account.id === handoff.target?.publishingAccountId
+      && account.platform === handoff.target?.platform
+      && account.channelRef === handoff.target?.channelRef) ?? null
+    : null;
+  const handoffTargetUnavailable = Boolean(handoff?.target && !handoffAccount);
+  useEffect(() => {
+    if (handoff?.target) {
+      setAccountId(handoffAccount?.id ?? '');
+      return;
+    }
+    if (accountId && !usableAccounts.some((account) => account.id === accountId)) {
+      setAccountId('');
+      return;
+    }
+    if (!accountId && usableAccounts.length === 1) setAccountId(usableAccounts[0].id);
+  }, [accountId, handoff, handoffAccount, usableAccounts]);
 
   const selectedExport = artifacts.find((job) => job.id === artifactId) ?? null;
   const selectedAccount = usableAccounts.find((account) => account.id === accountId) ?? null;
@@ -122,13 +139,14 @@ export function AIPublishingStudio() {
     <header><p className="text-xs font-semibold uppercase tracking-wider text-emerald-600">Modern publishing</p><h1 className="mt-1 text-2xl font-bold text-slate-900">AI Publishing Studio</h1><p className="mt-2 text-sm text-slate-500">Publish only verified exports through approval, the durable queue, and YouTube processing reconciliation.</p></header>
     <div className="rounded-xl border bg-white p-4 text-sm"><p className="font-medium capitalize">{capability.platform}</p><p className="mt-1 text-slate-600">Adapter: {capability.adapterStatus} · Account: {capability.authenticated ? 'authenticated' : 'connect a channel in Settings'}</p></div>
     {message && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{message}</div>}
+    {handoffTargetUnavailable && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">The YouTube channel selected in Studio is no longer connected or usable. Reconnect that exact channel in Settings before publishing; ShortsFlow will not substitute another account.</div>}
     {handoff?.kind === 'video-needs-verification' && <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-medium">{handoff.title} must be exported and verified before publishing.</p><p className="mt-1">{handoff.exportJobId ? 'The exact linked export is not yet publishable. Continue its progress or recovery in Export Studio.' : 'No canonical verified artifact is linked to this rendered video.'} ShortsFlow will not substitute an unrelated export.</p><button type="button" onClick={() => navigate('export-studio')} className="mt-3 rounded-lg border border-amber-400 px-3 py-2 font-medium">{handoff.exportJobId ? 'View export progress' : 'Verify this video in Export Studio'}</button></div>}
     {handoff?.kind === 'verified-export' && !selectedExport && <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">The selected export is still rendering/verifying or is no longer publishable. This handoff remains bound to export {handoff.exportJobId}; no other artifact will be selected.</div>}
     <article className="rounded-xl border bg-white p-4" aria-label="Create YouTube publish job">
       <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold">Verified export to YouTube</h2><p className="mt-1 text-sm text-slate-500">The selected artifact retains its verified digest, size, project, and manifest binding.</p></div>{usableAccounts.length === 0 && <button type="button" onClick={() => navigate('settings')} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium">Connect YouTube in Settings</button>}</div>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <label className="text-sm font-medium">Verified export<select aria-label="Verified export" value={artifactId} onChange={(event) => { invalidatePreview(); setHandoff(null); setArtifactId(event.target.value); }} disabled={handoff !== null} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:bg-slate-100"><option value="">Select a verified export</option>{selectableArtifacts.map((job) => <option key={job.id} value={job.id}>{job.plan.preset.name} · {Math.round((job.artifact?.sizeBytes ?? 0) / 1024 / 1024)} MB</option>)}</select></label>
-        <label className="text-sm font-medium">YouTube channel<select aria-label="YouTube channel" value={accountId} onChange={(event) => { invalidatePreview(); setAccountId(event.target.value); }} disabled={usableAccounts.length === 0} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:bg-slate-100"><option value="">Select an authenticated channel</option>{usableAccounts.map((account) => <option key={account.id} value={account.id}>{account.displayName}{account.channelRef ? ` · ${account.channelRef}` : ''}</option>)}</select></label>
+        <label className="text-sm font-medium">YouTube channel<select aria-label="YouTube channel" value={accountId} onChange={(event) => { invalidatePreview(); setAccountId(event.target.value); }} disabled={usableAccounts.length === 0 || Boolean(handoff?.target)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:bg-slate-100"><option value="">Select an authenticated channel</option>{usableAccounts.map((account) => <option key={account.id} value={account.id}>{account.displayName}{account.channelRef ? ` · ${account.channelRef}` : ''}</option>)}</select></label>
         <label className="text-sm font-medium md:col-span-2">Title<input aria-label="Title" value={metadata.title} onChange={(event) => updateMetadata('title', event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
         <label className="text-sm font-medium md:col-span-2">Description<textarea aria-label="Description" value={metadata.description} onChange={(event) => updateMetadata('description', event.target.value)} rows={3} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
         <label className="text-sm font-medium">Caption<textarea aria-label="Caption" value={metadata.caption} onChange={(event) => updateMetadata('caption', event.target.value)} rows={2} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>

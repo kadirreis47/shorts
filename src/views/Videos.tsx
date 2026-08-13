@@ -4,7 +4,7 @@ import {
   Share2, Clock, X, Calendar, Tag, FileText, Play, Trash2, Download, Clapperboard, Youtube, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { Video, Channel } from '@/lib/types';
+import type { Video } from '@/lib/types';
 import { formatNumber, formatDuration, timeAgo, timeUntil, classNames } from '@/lib/utils';
 import { StatusBadge, Card, Button, Modal, EmptyState } from '@/components/ui';
 import { VIDEO_STATUSES, statusConfig } from '@/lib/status';
@@ -13,9 +13,11 @@ import { withTimeout } from '@/lib/async';
 import { resolveVideoPublishingHandoff, usePublishingStore } from '@/store/publishingStore';
 import { useExportIntelligenceStore } from '@/store/exportIntelligenceStore';
 import { useUIStore } from '@/store/uiStore';
+import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
+import { createVideoChannelAttribution, resolveVideoCanonicalChannelId } from '@/services/videoChannelAttribution';
 
 interface VideosProps {
-  channels: Channel[];
+  channels: CanonicalChannelIdentity[];
   onNavigateStudio?: () => void;
 }
 
@@ -70,7 +72,7 @@ export function Videos({ channels, onNavigateStudio }: VideosProps) {
 
   const filtered = useMemo(() => videos
     .filter((v) => statusFilter === 'all' || v.status === statusFilter)
-    .filter((v) => channelFilter === 'all' || v.channel_id === channelFilter)
+    .filter((v) => channelFilter === 'all' || resolveVideoCanonicalChannelId(v) === channelFilter)
     .filter((v) => !search || v.title.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => {
       if (sortBy === 'views') return b.views - a.views;
@@ -207,7 +209,7 @@ export function Videos({ channels, onNavigateStudio }: VideosProps) {
       ) : view === 'grid' ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filtered.map((v) => {
-            const ch = channelMap.get(v.channel_id);
+            const ch = channelMap.get(resolveVideoCanonicalChannelId(v) ?? '');
             return (
               <Card key={v.id} className="group cursor-pointer overflow-hidden transition-shadow hover:shadow-md" >
                 <div onClick={() => setSelected(v)}>
@@ -254,7 +256,7 @@ export function Videos({ channels, onNavigateStudio }: VideosProps) {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {filtered.map((v) => {
-                const ch = channelMap.get(v.channel_id);
+                const ch = channelMap.get(resolveVideoCanonicalChannelId(v) ?? '');
                 return (
                   <tr key={v.id} className="cursor-pointer hover:bg-slate-50" onClick={() => setSelected(v)}>
                     <td className="max-w-xs px-4 py-3">
@@ -292,7 +294,7 @@ export function Videos({ channels, onNavigateStudio }: VideosProps) {
       {selected && (
         <VideoDrawer
           video={selected}
-          channel={channelMap.get(selected.channel_id)}
+          channel={channelMap.get(resolveVideoCanonicalChannelId(selected) ?? '')}
           onClose={() => setSelected(null)}
           onUpdateStatus={updateStatus}
           onDelete={deleteVideo}
@@ -310,7 +312,7 @@ function VideoDrawer({
   video, channel, onClose, onUpdateStatus, onDelete, onOpenPublishing,
 }: {
   video: Video;
-  channel?: Channel;
+  channel?: CanonicalChannelIdentity;
   onClose: () => void;
   onUpdateStatus: (v: Video, s: string) => void;
   onDelete: (v: Video) => void;
@@ -522,20 +524,22 @@ function VideoDrawer({
 function NewVideoModal({ open, onClose, channels, onCreated }: {
   open: boolean;
   onClose: () => void;
-  channels: Channel[];
+  channels: CanonicalChannelIdentity[];
   onCreated: () => void;
 }) {
   const { t } = useI18n();
   const [title, setTitle] = useState('');
-  const [channelId, setChannelId] = useState(channels[0]?.id ?? '');
+  const [channelId, setChannelId] = useState(channels.length === 1 ? channels[0].id : '');
   const [hook, setHook] = useState('');
   const [cta, setCta] = useState('');
 
   async function create() {
     if (!title.trim() || !channelId) return;
+    const selectedChannel = channels.find((channel) => channel.id === channelId);
+    if (!selectedChannel) return;
     await supabase.from('videos').insert({
       title,
-      channel_id: channelId,
+      ...createVideoChannelAttribution(selectedChannel),
       hook: hook || null,
       cta: cta || null,
       status: 'idea',
@@ -565,6 +569,7 @@ function NewVideoModal({ open, onClose, channels, onCreated }: {
             onChange={(e) => setChannelId(e.target.value)}
             className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
           >
+            <option value="">{t('videos.allChannels')}</option>
             {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
@@ -588,7 +593,7 @@ function NewVideoModal({ open, onClose, channels, onCreated }: {
         </div>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="secondary" onClick={onClose}>{t('videos.cancel')}</Button>
-          <Button onClick={create} disabled={!title.trim()}>{t('videos.create')}</Button>
+          <Button onClick={create} disabled={!title.trim() || !channelId}>{t('videos.create')}</Button>
         </div>
       </div>
     </Modal>

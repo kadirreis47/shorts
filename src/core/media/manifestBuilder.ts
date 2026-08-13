@@ -1,4 +1,5 @@
 import type { MediaProject, RenderManifest } from './types';
+import { resolveAudioNarrationMode } from './audioTypes';
 
 export function buildRenderManifest(project: MediaProject): RenderManifest {
   return {
@@ -22,6 +23,8 @@ export function buildRenderManifest(project: MediaProject): RenderManifest {
 }
 
 export function isRenderManifestReady(manifest: RenderManifest): boolean {
+  const voiceRequirementSatisfied = resolveAudioNarrationMode(manifest.audio) === 'silent'
+    || manifest.audio.voice.length > 0;
   return (
     manifest.timeline.scenes.length > 0 &&
     manifest.durationMs > 0 &&
@@ -29,7 +32,7 @@ export function isRenderManifestReady(manifest: RenderManifest): boolean {
     manifest.render.width > 0 &&
     manifest.render.height > 0 &&
     manifest.subtitles.cues.length > 0 &&
-    manifest.audio.voice.length > 0 &&
+    voiceRequirementSatisfied &&
     manifest.validation?.renderReady === true
   );
 }

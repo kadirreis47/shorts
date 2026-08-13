@@ -1,5 +1,6 @@
 export type AudioLayerType = 'voice' | 'music' | 'sfx';
 export type AudioAutomationType = 'gain' | 'ducking';
+export type AudioNarrationMode = 'required' | 'silent';
 
 export interface AudioMixSettings {
   masterGain: number;
@@ -48,6 +49,8 @@ export interface AudioMixMetrics {
 }
 
 export interface AudioTimeline {
+  /** Missing on legacy manifests means narration is required. */
+  narrationMode?: AudioNarrationMode;
   durationMs: number;
   settings: AudioMixSettings;
   voice: AudioSegment[];
@@ -58,7 +61,14 @@ export interface AudioTimeline {
 }
 
 export interface AudioBuildOptions {
+  narrationMode?: AudioNarrationMode;
   settings?: Partial<AudioMixSettings>;
   musicAssetId?: string;
   voiceAssetIdsByScene?: Readonly<Record<string, string>>;
+}
+
+export function resolveAudioNarrationMode(
+  audio: Pick<AudioTimeline, 'narrationMode'>,
+): AudioNarrationMode {
+  return audio.narrationMode === 'silent' ? 'silent' : 'required';
 }

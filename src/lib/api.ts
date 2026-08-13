@@ -54,6 +54,12 @@ import type {
   Storyboard,
 } from '@/lib/types';
 
+export interface ProviderStatus {
+  openai: { configured: boolean };
+  elevenlabs: { configured: boolean };
+  pexels: { configured: boolean };
+}
+
 export interface GeneratedScript {
   title: string;
   hook: string;
@@ -211,57 +217,8 @@ export async function uploadMedia(
     .data.publicUrl;
 }
 
-export async function saveApiKey(
-  key: string,
-  value: string,
-): Promise<void> {
-  const { error } = await supabase
-    .from('api_keys')
-    .upsert({
-      key,
-      value,
-      updated_at: new Date().toISOString(),
-    });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-}
-
-export async function getApiKey(
-  key: string,
-): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('api_keys')
-    .select('value')
-    .eq('key', key)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return data?.value ?? null;
-}
-
-export async function getApiKeyKeys(): Promise<
-  Record<string, boolean>
-> {
-  const { data, error } = await supabase
-    .from('api_keys')
-    .select('key');
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  const result: Record<string, boolean> = {};
-
-  data?.forEach((row: { key: string }) => {
-    result[row.key] = true;
-  });
-
-  return result;
+export async function getProviderStatus(): Promise<ProviderStatus> {
+  return apiClient.get<ProviderStatus>('provider-status', { retryCount: 0, timeoutMs: 10_000 });
 }
 
 export async function searchImages(

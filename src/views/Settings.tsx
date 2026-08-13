@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bell, Palette, Plug, Zap, Clock, Save, Check, Key, Youtube, Eye, EyeOff, ExternalLink, Loader2 } from 'lucide-react';
+import { Bell, Palette, Plug, Zap, Clock, Save, Check, Key, Youtube, Loader2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import type { AppSetting, Channel } from '@/lib/types';
 import { Card, Button, Toggle } from '@/components/ui';
-import { saveApiKey } from '@/lib/api';
 import { useI18n } from '@/lib/i18n';
 import { usePublishingStore } from '@/store/publishingStore';
 import { canRebindPublishJobCredential, type PublishAccount } from '@/core/publishing';
@@ -27,15 +26,6 @@ export function Settings(_props: { channels?: Channel[] }) {
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
 
-  // API keys
-  const [apiKeyStatus, setApiKeyStatus] = useState<Record<string, boolean>>({});
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [elevenlabsKey, setElevenlabsKey] = useState('');
-  const [pexelsKey, setPexelsKey] = useState('');
-  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
-  const [savingKey, setSavingKey] = useState('');
-  const [keySaved, setKeySaved] = useState('');
-
   // YouTube connections
   const [connecting, setConnecting] = useState('');
   const [youtubeConnectionError, setYoutubeConnectionError] = useState<string | null>(null);
@@ -49,16 +39,10 @@ export function Settings(_props: { channels?: Channel[] }) {
 
   useEffect(() => {
     (async () => {
-      const [{ data: s }, { data: keys }] = await Promise.all([
-        supabase.from('app_settings').select('*'),
-        supabase.from('api_keys').select('key'),
-      ]);
+      const { data: s } = await supabase.from('app_settings').select('*');
       const map: Record<string, AppSetting> = {};
       s?.forEach((row) => { map[row.key] = row; });
       setSettings(map);
-      const keyMap: Record<string, boolean> = {};
-      keys?.forEach((row: { key: string }) => { keyMap[row.key] = true; });
-      setApiKeyStatus(keyMap);
       setLoading(false);
     })();
   }, []);
@@ -97,20 +81,6 @@ export function Settings(_props: { channels?: Channel[] }) {
     setSettings((prev) => ({ ...prev, [key]: { ...prev[key], value } }));
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-  }
-
-  async function handleSaveKey(key: string, value: string) {
-    setSavingKey(key);
-    try {
-      await saveApiKey(key, value);
-      setApiKeyStatus((prev) => ({ ...prev, [key]: true }));
-      setKeySaved(key);
-      setTimeout(() => setKeySaved(''), 2000);
-      if (key === 'openai') setOpenaiKey('');
-      if (key === 'elevenlabs') setElevenlabsKey('');
-    } finally {
-      setSavingKey('');
-    }
   }
 
   async function persistYouTubeAccount(result: YouTubeConnectionResult) {
@@ -236,62 +206,14 @@ export function Settings(_props: { channels?: Channel[] }) {
         )}
       </div>
 
-      {/* API Keys */}
       <Card className="p-5">
         <div className="mb-4 flex items-center gap-2">
           <Key size={18} className="text-slate-500" />
-          <h3 className="font-semibold text-slate-900">{t('settings.apiKeys')}</h3>
+          <h3 className="font-semibold text-slate-900">Provider credentials</h3>
         </div>
         <p className="mb-4 text-sm text-slate-500">
-          {t('settings.apiKeysDesc')}
+          Provider credentials are managed securely on the server and cannot be viewed or changed from this desktop app. Contact an administrator if a provider is unavailable.
         </p>
-        <div className="space-y-4">
-          {/* OpenAI */}
-          <ApiKeyRow
-            label={t('settings.openaiKey')}
-            desc={t('settings.openaiDesc')}
-            placeholder="sk-..."
-            value={openaiKey}
-            onChange={setOpenaiKey}
-            show={showKeys.openai}
-            onToggleShow={() => setShowKeys((p) => ({ ...p, openai: !p.openai }))}
-            configured={apiKeyStatus.openai}
-            saving={savingKey === 'openai'}
-            saved={keySaved === 'openai'}
-            onSave={() => handleSaveKey('openai', openaiKey)}
-            docsUrl="https://platform.openai.com/api-keys"
-          />
-          {/* ElevenLABS */}
-          <ApiKeyRow
-            label={t('settings.elevenlabsKey')}
-            desc={t('settings.elevenlabsDesc')}
-            placeholder="el-..."
-            value={elevenlabsKey}
-            onChange={setElevenlabsKey}
-            show={showKeys.elevenlabs}
-            onToggleShow={() => setShowKeys((p) => ({ ...p, elevenlabs: !p.elevenlabs }))}
-            configured={apiKeyStatus.elevenlabs}
-            saving={savingKey === 'elevenlabs'}
-            saved={keySaved === 'elevenlabs'}
-            onSave={() => handleSaveKey('elevenlabs', elevenlabsKey)}
-            docsUrl="https://elevenlabs.io/app/settings/api-keys"
-          />
-          {/* Pexels */}
-          <ApiKeyRow
-            label={t('settings.pexelsKey')}
-            desc={t('settings.pexelsDesc')}
-            placeholder="Pexels API key..."
-            value={pexelsKey}
-            onChange={setPexelsKey}
-            show={showKeys.pexels}
-            onToggleShow={() => setShowKeys((p) => ({ ...p, pexels: !p.pexels }))}
-            configured={apiKeyStatus.pexels}
-            saving={savingKey === 'pexels'}
-            saved={keySaved === 'pexels'}
-            onSave={() => handleSaveKey('pexels', pexelsKey)}
-            docsUrl="https://www.pexels.com/api/"
-          />
-        </div>
       </Card>
 
       {/* YouTube OAuth */}
@@ -459,63 +381,6 @@ export function Settings(_props: { channels?: Channel[] }) {
           </div>
         </div>
       </Card>
-    </div>
-  );
-}
-
-function ApiKeyRow({ label, desc, placeholder, value, onChange, show, onToggleShow, configured, saving, saved, onSave, docsUrl }: {
-  label: string;
-  desc: string;
-  placeholder: string;
-  value: string;
-  onChange: (v: string) => void;
-  show: boolean;
-  onToggleShow: () => void;
-  configured: boolean;
-  saving: boolean;
-  saved: boolean;
-  onSave: () => void;
-  docsUrl?: string;
-}) {
-  const { t } = useI18n();
-
-  return (
-    <div className="rounded-lg border border-slate-100 p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <div>
-          <p className="text-sm font-medium text-slate-800">{label}</p>
-          <p className="text-xs text-slate-500">{desc}</p>
-        </div>
-        {configured && (
-          <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
-            <Check size={10} /> {t('settings.configured')}
-          </span>
-        )}
-      </div>
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <input
-            type={show ? 'text' : 'password'}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={configured ? '•••••••• (enter new key to replace)' : placeholder}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 text-sm outline-none focus:border-slate-400"
-          />
-          <button onClick={onToggleShow} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-            {show ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
-        </div>
-        <Button size="sm" onClick={onSave} disabled={!value.trim() || saving}>
-          {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
-          {saved ? t('settings.saved') : t('settings.getApiKey').split(' ')[0]}
-        </Button>
-      </div>
-      {docsUrl && (
-        <a href={docsUrl} target="_blank" rel="noopener noreferrer"
-          className="mt-1.5 inline-flex items-center gap-1 text-xs text-blue-600 hover:underline">
-          {t('settings.getApiKey')} <ExternalLink size={10} />
-        </a>
-      )}
     </div>
   );
 }

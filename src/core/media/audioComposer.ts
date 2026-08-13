@@ -29,12 +29,16 @@ export function buildAudioTimeline(
   options: AudioBuildOptions = {},
 ): AudioTimeline {
   const settings = normalizeAudioSettings(options.settings);
-  const voice = buildVoiceSegments(scenes, settings, options.voiceAssetIdsByScene);
+  const narrationMode = options.narrationMode === 'silent' ? 'silent' : 'required';
+  const voice = narrationMode === 'silent'
+    ? []
+    : buildVoiceSegments(scenes, settings, options.voiceAssetIdsByScene);
   const music = buildMusicSegments(durationMs, settings, options.musicAssetId);
   const sfx = buildSfxSegments(scenes, markers, settings);
   const automation = buildDuckingAutomation(voice, settings);
 
   return {
+    narrationMode,
     durationMs,
     settings,
     voice,

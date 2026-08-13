@@ -12,6 +12,33 @@ describe('audio plan compiler', () => {
   it('detects silence removal conflict', async () => { const { plan } = await setup(); const base = plan.operations[0]; const operations = [{ ...base, id: 'trim', type: 'trim-silence' as const }, { ...base, id: 'extend', type: 'extend-silence' as const }]; expect(detectAudioConflicts(operations, 10000)[0].severity).toBe('critical'); });
   it('detects out-of-bounds placement', async () => { const { plan } = await setup(); const item = { ...plan.operations[0], parameters: { startMs: 999999 } }; expect(detectAudioConflicts([item], 1000).some((conflict) => conflict.type === 'segment-out-of-bounds')).toBe(true); });
   it('supports abort', async () => { const fixture = await setup(); const controller = new AbortController(); controller.abort(); expect(() => compileAudioProductionPlan(fixture.input, {}, controller.signal)).toThrow(/aborted/); });
+  it('treats explicit silent narration as intentional while retaining music and SFX planning', async () => {
+    const fixture = await setup();
+    const manifest = structuredClone(fixture.manifest);
+    manifest.audio.narrationMode = 'silent'; manifest.audio.voice = []; manifest.audio.automation = [];
+    const fingerprint = createManifestRevisionId(manifest);
+    const plan = compileAudioProductionPlan({
+      ...fixture.input,
+      manifest,
+      directorReport: { ...fixture.input.directorReport, analyzedManifestFingerprint: fingerprint },
+    });
+
+    expect(plan.voiceAnalysis).toEqual([]);
+    expect(plan.silenceRegions).toEqual([]);
+    expect(plan.recommendations.some((item) => /voice|speech|narration/i.test(item.description))).toBe(false);
+    expect(plan.operations.some((item) => item.type === 'trim-silence' || item.type === 'add-ducking' || item.type === 'adjust-ducking')).toBe(false);
+    expect(plan.ducking).toEqual([]);
+    expect(plan.music.intent).not.toMatch(/narration/i);
+    expect(plan.music.entryMs).toBe(0);
+    expect(plan.sfx.length).toBeGreaterThan(0);
+    expect(plan.sfx.every((item) => item.avoidOverlapWithVoice === false)).toBe(true);
+  });
+  it('keeps narration analysis and ducking for required narration', async () => {
+    const fixture = await setup();
+    expect(fixture.plan.voiceAnalysis.length).toBeGreaterThan(0);
+    expect(fixture.plan.ducking.length).toBeGreaterThan(0);
+    expect(fixture.plan.operations.some((item) => item.type === 'add-ducking' || item.type === 'adjust-ducking')).toBe(true);
+  });
 });
 
 describe('audio preview and immutable manifest transform', () => {

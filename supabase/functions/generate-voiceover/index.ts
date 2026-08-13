@@ -26,7 +26,7 @@ Deno.serve(async (req: Request) => {
     const elevenlabsKey = apiKeyRow?.value;
     if (!elevenlabsKey) {
       return new Response(
-        JSON.stringify({ error: "ElevenLabs API key not configured. Add it in Settings." }),
+        JSON.stringify({ error: "Voice generation is not configured. Contact an administrator." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
