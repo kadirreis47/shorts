@@ -3,7 +3,7 @@ import {
   Sparkles, Mic, Film, Youtube, ArrowRight, ArrowLeft, Check, Loader2,
   Wand2, RefreshCw, AlertCircle, Volume2, X, Palette, Music, Video,
   ImagePlus, Headphones, Type, Zap, Move, User, Search, Download, Tag, Globe,
-  Activity, Languages, Eye, EyeOff, ZoomIn, ZoomOut, Save, RotateCcw,
+  Activity, Languages, Eye, EyeOff, ZoomIn, ZoomOut, Save, RotateCcw, FolderOpen, ExternalLink,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import type { MediaStorageObject, Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
@@ -27,6 +27,7 @@ import { applicationContainer, dependencyTokens } from '@/core/di';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
 import { enqueueActiveExport, loadExportCapabilities, planActiveExport, waitForActiveExport } from '@/services/exportIntelligenceController';
+import { isVerifiedExportJob, type ExportJob } from '@/core/export-intelligence';
 import { useMediaStore, useProjectStore, usePublishingStore, useUIStore } from '@/store';
 import { createStudioProjectDraft, resolveRestoredStudioChannelId, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
 import { createVideoChannelAttribution, toSafePublishingTarget } from '@/services/videoChannelAttribution';
@@ -64,6 +65,17 @@ function narrationRevision(text: string): string {
   for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
   return `${text.length}-${(hash >>> 0).toString(16)}`;
 }
+
+function exportFilename(outputPath: string): string {
+  return outputPath.split(/[\\/]/).filter(Boolean).at(-1) || 'export.mp4';
+}
+
+function formatFileSize(sizeBytes: number): string {
+  if (sizeBytes < 1_024 * 1_024) return `${Math.max(1, Math.round(sizeBytes / 1_024))} KB`;
+  return `${(sizeBytes / (1_024 * 1_024)).toFixed(1)} MB`;
+}
+
+class StalePostRenderActionError extends Error {}
 
 function canonicalMediaValidationError(build: {
   project: { scenes: Array<{ id: string }> };
@@ -209,6 +221,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [videoUrl, setVideoUrl] = useState('');
   const [studioVideoId, setStudioVideoId] = useState<string | null>(null);
   const [preparingPublish, setPreparingPublish] = useState(false);
+  const [completedExport, setCompletedExport] = useState<{ job: ExportJob; revision: string } | null>(null);
+  const [postRenderAction, setPostRenderAction] = useState<'open' | 'reveal' | 'save-as' | 'publish' | null>(null);
+  const [postRenderNotice, setPostRenderNotice] = useState<string | null>(null);
 
   const navigate = useUIStore((state) => state.navigate);
   const [draftStatus, setDraftStatus] = useState<'loading' | 'saved' | 'saving' | 'empty'>('loading');
@@ -231,10 +246,31 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     && narration.scriptRevision === narrationRevision(script),
   );
 
+  const canonicalStudioRevision = useMemo(() => JSON.stringify({
+    title, hook, script, cta, scenes: toDurableScenes(scenes), captionStyle, transitionStyle,
+    motionStyle, useBroll, musicId, musicVolume, visualMode, selectedStyleId, characterName,
+    characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
+    showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice,
+    narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : null,
+  }), [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
+
+  const currentCompletedExport = completedExport?.revision === canonicalStudioRevision && isVerifiedExportJob(completedExport.job)
+    ? completedExport.job
+    : null;
+  const canonicalStudioRevisionRef = useRef(canonicalStudioRevision);
+  canonicalStudioRevisionRef.current = canonicalStudioRevision;
+
   useEffect(() => {
     invalidateNarration();
-  // Owner-scoped state must never cross an authenticated owner transition.
+    setCompletedExport(null);
+    setPostRenderNotice(null);
+    setPostRenderAction(null);
+    // Owner-scoped state must never cross an authenticated owner transition.
   }, [authenticatedUserId]);
+
+  useEffect(() => {
+    if (completedExport && completedExport.revision !== canonicalStudioRevision) setPostRenderNotice(t('studio.exportOutdated'));
+  }, [canonicalStudioRevision, completedExport, t]);
 
   useEffect(() => {
     let cancelled = false;
@@ -951,7 +987,87 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
   }
 
-  async function prepareModernPublish(navigateToPublishing = true) {
+  function publishingHandoffFor(job: ExportJob) {
+    if (!channel || !isVerifiedExportJob(job)) throw new Error('Verified export is unavailable for publishing.');
+    return studioVideoId
+      ? { kind: 'video-needs-verification' as const, sourceVideoId: studioVideoId, title: title || topic || 'Studio video', exportJobId: job.id, target: toSafePublishingTarget(channel) }
+      : { kind: 'verified-export' as const, exportJobId: job.id, sourceVideoId: null, target: toSafePublishingTarget(channel) };
+  }
+
+  async function withCurrentVerifiedExport<T>(action: 'open' | 'reveal' | 'save-as' | 'publish', operation: (job: ExportJob & { artifact: NonNullable<ExportJob['artifact']> }, assertCurrent: () => void) => Promise<T>): Promise<T> {
+    const job = currentCompletedExport;
+    if (!job || !isVerifiedExportJob(job)) throw new Error(t('studio.exportUnavailable'));
+    const bridge = window.electronAPI?.ffmpeg;
+    if (!bridge?.revalidateArtifact) throw new Error(t('studio.exportUnavailable'));
+    const ownerContext = captureValidatedMediaOwnerContext();
+    const revision = canonicalStudioRevision;
+    const assertCurrent = () => {
+      try {
+        assertCurrentMediaOwnerContext(ownerContext);
+      } catch {
+        throw new StalePostRenderActionError();
+      }
+      if (canonicalStudioRevisionRef.current !== revision) throw new StalePostRenderActionError();
+    };
+    setPostRenderAction(action);
+    setPostRenderNotice(null);
+    try {
+      const result = await bridge.revalidateArtifact({ artifactPath: job.artifact.path, sizeBytes: job.artifact.sizeBytes, contentDigest: job.artifact.contentDigest! });
+      assertCurrent();
+      if (!result.ok) throw new Error(t('studio.exportUnavailable'));
+      const value = await operation(job, assertCurrent);
+      assertCurrent();
+      return value;
+    } finally {
+      setPostRenderAction(null);
+    }
+  }
+
+  async function handleOpenCompletedExport() {
+    try {
+      await withCurrentVerifiedExport('open', async (job) => {
+        const result = await window.electronAPI?.ffmpeg.openVerifiedExport?.({ artifactPath: job.artifact.path, sizeBytes: job.artifact.sizeBytes, contentDigest: job.artifact.contentDigest! });
+        if (!result?.ok) throw new Error(t('studio.openExportFailed'));
+      });
+    } catch (actionError) { if (!(actionError instanceof StalePostRenderActionError)) setPostRenderNotice(actionError instanceof Error ? actionError.message : t('studio.openExportFailed')); }
+  }
+
+  async function handleRevealCompletedExport() {
+    try {
+      await withCurrentVerifiedExport('reveal', async (job) => {
+        const result = await window.electronAPI?.ffmpeg.revealVerifiedExport?.({ artifactPath: job.artifact.path, sizeBytes: job.artifact.sizeBytes, contentDigest: job.artifact.contentDigest! });
+        if (!result?.ok) throw new Error(t('studio.revealExportFailed'));
+      });
+    } catch (actionError) { if (!(actionError instanceof StalePostRenderActionError)) setPostRenderNotice(actionError instanceof Error ? actionError.message : t('studio.revealExportFailed')); }
+  }
+
+  async function handleSaveAsCompletedExport() {
+    try {
+      const destination = await withCurrentVerifiedExport('save-as', async (job, assertCurrent) => {
+        const bridge = window.electronAPI?.ffmpeg;
+        const selectedDestination = await bridge?.pickOutputPath?.({ defaultPath: exportFilename(job.artifact.path) });
+        assertCurrent();
+        if (!selectedDestination) return null;
+        if (!bridge?.saveVerifiedExportAs) throw new Error(t('studio.saveAsFailed'));
+        const copied = await bridge.saveVerifiedExportAs({ artifactPath: job.artifact.path, sizeBytes: job.artifact.sizeBytes, contentDigest: job.artifact.contentDigest! }, selectedDestination);
+        assertCurrent();
+        if (!copied.ok || !copied.sizeBytes) throw new Error(t('studio.saveAsFailed'));
+        return selectedDestination;
+      });
+      if (destination) setPostRenderNotice(t('studio.saveAsComplete', { filename: exportFilename(destination) }));
+    } catch (actionError) { if (!(actionError instanceof StalePostRenderActionError)) setPostRenderNotice(actionError instanceof Error ? actionError.message : t('studio.saveAsFailed')); }
+  }
+
+  async function handlePublishCompletedExport() {
+    try {
+      await withCurrentVerifiedExport('publish', async (job) => {
+        usePublishingStore.getState().setHandoff(publishingHandoffFor(job));
+        navigate('publishing-studio');
+      });
+    } catch (actionError) { if (!(actionError instanceof StalePostRenderActionError)) setPostRenderNotice(actionError instanceof Error ? actionError.message : t('studio.exportUnavailable')); }
+  }
+
+  async function prepareModernPublish() {
     if (!channel) {
       setError('Select an available channel before preparing this video for publishing.');
       setStep('topic');
@@ -984,15 +1100,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       const outputPath = await window.electronAPI?.ffmpeg.pickOutputPath?.({ defaultPath: `studio-${directorProjectId}.mp4` });
       if (!outputPath) return;
       const exportJob = await enqueueActiveExport(plan, outputPath);
-      await waitForActiveExport(exportJob.id);
-      if (navigateToPublishing) {
-        const publishing = usePublishingStore.getState();
-        const target = toSafePublishingTarget(channel);
-        publishing.setHandoff(studioVideoId
-          ? { kind: 'video-needs-verification', sourceVideoId: studioVideoId, title: title || topic || 'Studio video', exportJobId: exportJob.id, target }
-          : { kind: 'verified-export', exportJobId: exportJob.id, sourceVideoId: null, target });
-        navigate('publishing-studio');
-      }
+      const completed = await waitForActiveExport(exportJob.id);
+      setCompletedExport({ job: completed, revision: canonicalStudioRevision });
+      setPostRenderNotice(null);
     } catch (publishError) {
       setError(publishError instanceof Error ? publishError.message : 'Verified export could not be prepared.');
     } finally {
@@ -1847,16 +1957,47 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             </div>
           ) : (
             <div className="space-y-4">
-              {audioUrl && (
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">{t('studio.voiceoverPreview')}</p>
-                  <audio src={audioUrl} controls className="w-full" />
+              {currentCompletedExport ? (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white"><Check size={20} /></div>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-emerald-950">{t('studio.videoReady')}</p>
+                      <p className="mt-1 text-sm text-emerald-800">{t('studio.exportComplete')}</p>
+                      <p className="mt-3 truncate text-sm font-medium text-slate-900">{exportFilename(currentCompletedExport.artifact.path)}</p>
+                      <p className="mt-1 text-xs text-slate-600">{t('studio.verifiedExport')} · {Math.round(currentCompletedExport.artifact.durationMs / 1_000)}s · {formatFileSize(currentCompletedExport.artifact.sizeBytes)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button onClick={() => void handlePublishCompletedExport()} disabled={postRenderAction !== null}><Youtube size={16} /> {postRenderAction === 'publish' ? t('studio.processing') : t('studio.publishToYouTube')}</Button>
+                    <Button variant="secondary" onClick={() => void handleOpenCompletedExport()} disabled={postRenderAction !== null}><ExternalLink size={16} /> {t('studio.openVideo')}</Button>
+                    <Button variant="secondary" onClick={() => void handleRevealCompletedExport()} disabled={postRenderAction !== null}><FolderOpen size={16} /> {t('studio.showInFolder')}</Button>
+                    <Button variant="secondary" onClick={() => void handleSaveAsCompletedExport()} disabled={postRenderAction !== null}><Save size={16} /> {t('studio.saveAs')}</Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {audioUrl && (
+                    <div className="rounded-lg bg-slate-50 p-3">
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">{t('studio.voiceoverPreview')}</p>
+                      <audio src={audioUrl} controls className="w-full" />
+                    </div>
+                  )}
+                  <div className="flex justify-between gap-2">
+                    <Button variant="secondary" onClick={() => setStep('voice')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
+                    <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes, audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode, hasCanonicalNarration) }, narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : undefined } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={() => void prepareModernPublish()} disabled={!channel || preparingPublish}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
+                  </div>
+                </>
+              )}
+              {postRenderNotice && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{postRenderNotice}</p>
+              )}
+              {currentCompletedExport && (
+                <div className="flex justify-between gap-2">
+                  <Button variant="secondary" onClick={() => setStep('voice')} disabled={postRenderAction !== null}><ArrowLeft size={16} /> {t('studio.back')}</Button>
+                  <Button variant="secondary" onClick={() => setCompletedExport(null)} disabled={postRenderAction !== null}><Film size={16} /> {t('studio.renderVideo')}</Button>
                 </div>
               )}
-              <div className="flex justify-between gap-2">
-                <Button variant="secondary" onClick={() => setStep('voice')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
-                <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes, audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode, hasCanonicalNarration) }, narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : undefined } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={() => void prepareModernPublish(false)} disabled={!channel || preparingPublish}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
-              </div>
             </div>
           )}
         </Card>
@@ -1869,7 +2010,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           <div className="space-y-4">
             {videoUrl && <div className="overflow-hidden rounded-lg bg-slate-900"><video src={videoUrl} controls className="mx-auto max-h-96" /></div>}
             <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-700"><p className="flex items-center gap-2"><Youtube size={16} /> Create a canonical local export for publishing.</p><p className="mt-1">ShortsFlow will render through the existing export queue, verify the exact bytes with FFprobe and SHA-256, then keep the publishing handoff bound to that export.</p></div>
-            <div className="flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep('render')}><ArrowLeft size={16} /> {t('studio.back')}</Button><Button onClick={() => void prepareModernPublish()} disabled={preparingPublish || !channel}>{preparingPublish ? <><Loader2 size={16} className="animate-spin" /> Preparing verified export…</> : <><Youtube size={16} /> Export &amp; publish safely</>}</Button></div>
+            <div className="flex justify-between gap-2"><Button variant="secondary" onClick={() => setStep('render')}><ArrowLeft size={16} /> {t('studio.back')}</Button>{currentCompletedExport ? <Button onClick={() => void handlePublishCompletedExport()} disabled={postRenderAction !== null}><Youtube size={16} /> {t('studio.publishToYouTube')}</Button> : <Button onClick={() => setStep('render')}><Film size={16} /> {t('studio.renderVideo')}</Button>}</div>
           </div>
         </Card>
       )}

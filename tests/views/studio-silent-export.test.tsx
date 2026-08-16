@@ -9,6 +9,7 @@ import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalo
 import { useMediaStore, useProjectStore, usePublishingStore, useUIStore } from '@/store';
 import { Studio } from '@/views/Studio';
 import { editingFixture } from '../editing/fixtures';
+import type { ExportJob } from '@/core/export-intelligence';
 
 const mocks = vi.hoisted(() => ({
   buildProject: vi.fn(),
@@ -76,23 +77,23 @@ describe('Studio canonical silent export', () => {
     mocks.buildProject.mockResolvedValue(validBuild);
     mocks.loadExportCapabilities.mockResolvedValue(undefined);
     mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
-    mocks.enqueueActiveExport.mockResolvedValue({ id: 'export' });
-    mocks.waitForActiveExport.mockResolvedValue({ id: 'export' });
+    mocks.enqueueActiveExport.mockResolvedValue(verifiedExportJob());
+    mocks.waitForActiveExport.mockResolvedValue(verifiedExportJob());
     window.electronAPI = {
       ...window.electronAPI,
       ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/silent.mp4') },
     } as typeof window.electronAPI;
-    saveStudioDraft(silentDraft());
+    saveStudioDraft({ ...silentDraft(), step: 'render' });
 
     container = document.createElement('div');
     document.body.append(container);
     const root = createRoot(container);
     await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
 
-    const publish = Array.from(container.querySelectorAll('button'))
-      .find((button) => button.textContent?.includes('Export & publish safely'));
-    expect(publish).toBeDefined();
-    await act(async () => { publish?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const render = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Render Video'));
+    expect(render).toBeDefined();
+    await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
 
     expect(mocks.buildProject).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'silent-project',
@@ -100,7 +101,7 @@ describe('Studio canonical silent export', () => {
     }));
     expect(mocks.planActiveExport).toHaveBeenCalledWith('youtube-shorts');
     expect(mocks.enqueueActiveExport).toHaveBeenCalledWith(expect.anything(), 'C:/exports/silent.mp4');
-    expect(mocks.waitForActiveExport).toHaveBeenCalledWith('export');
+    expect(mocks.waitForActiveExport).toHaveBeenCalledWith('verified-export');
     await act(async () => { root.unmount(); });
   });
 
@@ -116,16 +117,16 @@ describe('Studio canonical silent export', () => {
         issues: [{ code: 'SCENE_ASSET_UNRESOLVED', sceneId: fixture.project.scenes[0].id }],
       },
     });
-    saveStudioDraft(silentDraft());
+    saveStudioDraft({ ...silentDraft(), step: 'render' });
 
     container = document.createElement('div');
     document.body.append(container);
     const root = createRoot(container);
     await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
 
-    const publish = Array.from(container.querySelectorAll('button'))
-      .find((button) => button.textContent?.includes('Export & publish safely'));
-    await act(async () => { publish?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const render = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Render Video'));
+    await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
 
     expect(container.textContent).toContain('Export requires supported canonical media for scene 1.');
     expect(mocks.planActiveExport).not.toHaveBeenCalled();
@@ -159,7 +160,96 @@ describe('Studio canonical silent export', () => {
     expect(insert).not.toHaveBeenCalled();
     await act(async () => { root.unmount(); });
   });
+
+  it('shows Video Ready after verified render and reuses the same artifact for explicit actions', async () => {
+    const fixture = await editingFixture();
+    const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };
+    const exportJob = verifiedExportJob();
+    mocks.buildProject.mockResolvedValue(validBuild);
+    mocks.loadExportCapabilities.mockResolvedValue(undefined);
+    mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
+    mocks.enqueueActiveExport.mockResolvedValue(exportJob);
+    mocks.waitForActiveExport.mockResolvedValue(exportJob);
+    const pickOutputPath = vi.fn().mockResolvedValueOnce('C:/exports/silent.mp4').mockResolvedValueOnce('C:/exports/silent-copy.mp4');
+    const saveVerifiedExportAs = vi.fn(async (_artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }, destination: string) => ({ ok: true, path: destination, sizeBytes: 1_024 }));
+    const revalidateArtifact = vi.fn(async (artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }) => ({ ok: true as const, artifact }));
+    const openVerifiedExport = vi.fn(async () => ({ ok: true }));
+    const revealVerifiedExport = vi.fn(async () => ({ ok: true }));
+    window.electronAPI = { ...window.electronAPI, ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath, revalidateArtifact, openVerifiedExport, revealVerifiedExport, saveVerifiedExportAs } } as typeof window.electronAPI;
+    saveStudioDraft({ ...silentDraft(), step: 'render' });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const render = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Render Video'));
+    await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    expect(container.textContent).toContain('Video Ready');
+    expect(useUIStore.getState().currentView).toBe('dashboard');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    const click = async (label: string) => {
+      const button = Array.from(container!.querySelectorAll('button')).find((candidate) => candidate.textContent?.includes(label));
+      await act(async () => { button?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    };
+    await click('Open Video'); await click('Show in Folder'); await click('Save As');
+    expect(openVerifiedExport).toHaveBeenCalledWith(expect.objectContaining({ artifactPath: 'C:/exports/silent.mp4' }));
+    expect(revealVerifiedExport).toHaveBeenCalledWith(expect.objectContaining({ contentDigest: 'a'.repeat(64) }));
+    expect(saveVerifiedExportAs).toHaveBeenCalledWith(expect.objectContaining({ contentDigest: 'a'.repeat(64) }), 'C:/exports/silent-copy.mp4');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    await click('Publish to YouTube');
+    expect(usePublishingStore.getState().handoff).toMatchObject({ kind: 'verified-export', exportJobId: exportJob.id });
+    expect(useUIStore.getState().currentView).toBe('publishing-studio');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('drops a late post-render action when the authenticated owner changes', async () => {
+    const fixture = await editingFixture();
+    const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };
+    const exportJob = verifiedExportJob();
+    let resolveRevalidation: ((value: { ok: true; artifact: { artifactPath: string; sizeBytes: number; contentDigest: string } }) => void) | undefined;
+    mocks.buildProject.mockResolvedValue(validBuild);
+    mocks.loadExportCapabilities.mockResolvedValue(undefined);
+    mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
+    mocks.enqueueActiveExport.mockResolvedValue(exportJob);
+    mocks.waitForActiveExport.mockResolvedValue(exportJob);
+    window.electronAPI = { ...window.electronAPI, ffmpeg: {
+      ...window.electronAPI?.ffmpeg,
+      pickOutputPath: vi.fn().mockResolvedValue('C:/exports/silent.mp4'),
+      revalidateArtifact: vi.fn(() => new Promise((resolve) => { resolveRevalidation = resolve as typeof resolveRevalidation; })),
+      openVerifiedExport: vi.fn(async () => ({ ok: true })),
+    } } as typeof window.electronAPI;
+    saveStudioDraft({ ...silentDraft(), step: 'render' });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+    const render = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Render Video'));
+    await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const open = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Open Video'));
+    await act(async () => { open?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    expect(resolveRevalidation).toBeDefined();
+    setValidatedOwnerId('studio-user-b');
+    await act(async () => {
+      useAuthSessionStore.setState({ status: 'authenticated', user: { id: 'studio-user-b' } as never, session: { access_token: 'token-b' } as never, error: null });
+      await Promise.resolve();
+    });
+    await act(async () => { resolveRevalidation?.({ ok: true, artifact: { artifactPath: 'C:/exports/silent.mp4', sizeBytes: 1_024, contentDigest: 'a'.repeat(64) } }); });
+    expect(container.textContent).not.toContain('Video Ready');
+    expect(container.textContent).not.toContain('Saved video could not be opened.');
+    await act(async () => { root.unmount(); });
+  });
 });
+
+function verifiedExportJob(): ExportJob {
+  return {
+    id: 'verified-export', projectId: 'silent-project', platformId: 'youtube-shorts', sourceManifestFingerprint: 'manifest-revision', sourceManifestFingerprintVersion: 1,
+    outputPath: 'C:/exports/silent.mp4', state: 'completed', stage: 'completed', attempts: 1, maxAttempts: 3,
+    plan: {}, manifest: {}, progress: {}, failure: null, queuedAt: 'now', startedAt: 'now', completedAt: 'now',
+    artifact: { path: 'C:/exports/silent.mp4', sizeBytes: 1_024, durationMs: 3_000, verified: true, contentDigest: 'a'.repeat(64), diagnostics: {}, createdAt: 'now' },
+  } as unknown as ExportJob;
+}
 
 function channel(): CanonicalChannelIdentity {
   return {

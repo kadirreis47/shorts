@@ -256,7 +256,8 @@ describe('modern export to publish handoff', () => {
     }
     const studio = readFileSync('src/views/Studio.tsx', 'utf8');
     expect(studio).toContain("planActiveExport('youtube-shorts')");
-    expect(studio).toContain("kind: 'verified-export', exportJobId: exportJob.id");
+    expect(studio).toContain('function publishingHandoffFor(job: ExportJob)');
+    expect(studio).toContain("kind: 'verified-export' as const, exportJobId: job.id");
     const videos = readFileSync('src/views/Videos.tsx', 'utf8');
     expect(videos).toContain('publishing.videoExportLinks[video.id]');
     expect(videos).toContain('resolveVideoPublishingHandoff(video, linkedJob)');

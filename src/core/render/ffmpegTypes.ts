@@ -45,6 +45,11 @@ export interface FFmpegRunResult {
   stderrTail: string[];
 }
 
+export interface VerifiedExportActionResult {
+  ok: boolean;
+  message?: string;
+}
+
 export interface FFmpegBridge {
   getCapabilities(forceRefresh?: boolean): Promise<FFmpegCapabilities>;
   run(request: FFmpegRunRequest): Promise<FFmpegRunResult>;
@@ -59,6 +64,9 @@ export interface FFmpegBridge {
   artifactDigest?(path: string): Promise<{ artifactPath: string; sizeBytes: number; contentDigest: string }>;
   verifyArtifactSnapshot?(path: string): Promise<{ diagnostics: import('./renderDiagnosticsTypes').RenderDiagnostics; integrity: { artifactPath: string; sizeBytes: number; contentDigest: string } }>;
   revalidateArtifact?(artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }): Promise<{ ok: true; artifact: { artifactPath: string; sizeBytes: number; contentDigest: string } } | { ok: false; error: { code: string; message: string } }>;
+  openVerifiedExport?(artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }): Promise<VerifiedExportActionResult>;
+  revealVerifiedExport?(artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }): Promise<VerifiedExportActionResult>;
+  saveVerifiedExportAs?(artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }, destinationPath: string): Promise<VerifiedExportActionResult & { path?: string; sizeBytes?: number }>;
   onProgress(listener: (payload: FFmpegProgressPayload) => void): () => void;
   pickOutputPath?(options?: { defaultPath?: string }): Promise<string | null>;
 }

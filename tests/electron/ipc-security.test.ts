@@ -54,9 +54,22 @@ describe('Electron FFmpeg IPC güvenliği', () => {
 
   it('bridge yalnızca sabit kanal adlarına invoke yapar', async () => {
     const ipc: ElectronIpcMock = { invoke: vi.fn().mockResolvedValue(true), on: vi.fn(), removeListener: vi.fn() };
-    const bridge = createFFmpegBridge(ipc) as { cancel: (id: string) => Promise<boolean> };
+    const bridge = createFFmpegBridge(ipc) as {
+      cancel: (id: string) => Promise<boolean>;
+      openVerifiedExport: (artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }) => Promise<unknown>;
+      revealVerifiedExport: (artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }) => Promise<unknown>;
+      saveVerifiedExportAs: (artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }, destinationPath: string) => Promise<unknown>;
+    };
+    const artifact = { artifactPath: path.resolve('output.mp4'), sizeBytes: 1, contentDigest: 'a'.repeat(64) };
     await bridge.cancel('job-1');
     expect(ipc.invoke).toHaveBeenCalledWith('ffmpeg:cancel', 'job-1');
+    await bridge.openVerifiedExport(artifact);
+    expect(ipc.invoke).toHaveBeenCalledWith('ffmpeg:open-verified-export', artifact);
+    await bridge.revealVerifiedExport(artifact);
+    expect(ipc.invoke).toHaveBeenCalledWith('ffmpeg:reveal-verified-export', artifact);
+    await bridge.saveVerifiedExportAs(artifact, path.resolve('copy.mp4'));
+    expect(ipc.invoke).toHaveBeenCalledWith('ffmpeg:save-verified-export-as', { artifact, destinationPath: path.resolve('copy.mp4') });
+    await expect(bridge.openVerifiedExport({ ...artifact, contentDigest: 'invalid' })).rejects.toThrow('Invalid verified export artifact');
   });
 
   it('run request şekli, jobId ve argümanları doğrular', () => {

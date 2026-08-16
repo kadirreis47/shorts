@@ -1,4 +1,4 @@
-const { app, ipcMain, dialog, BrowserWindow } = require('electron');
+const { app, ipcMain, dialog, BrowserWindow, shell } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -10,13 +10,17 @@ const { isPackagedRuntime, resolveFFmpegRuntime } = require('./ffmpeg-runtime.cj
 
 const active = new Map();
 const materializationLocks = new Map();
+const approvedExportDestinations = new Map();
+const verifiedExportArtifacts = new Map();
 let cachedCapabilities = null;
 
 function registerFFmpegHandlers() {
   ipcMain.handle('ffmpeg:pick-output-path', async (event, options = {}) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showSaveDialog(window, { title: 'Export destination', defaultPath: typeof options.defaultPath === 'string' ? options.defaultPath : 'export.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
-    return resolveSelectedOutputPath(result);
+    const selectedPath = resolveSelectedOutputPath(result);
+    if (selectedPath) rememberApprovedExportDestination(event.sender.id, selectedPath);
+    return selectedPath;
   });
   ipcMain.handle('ffmpeg:capabilities', async (_event, forceRefresh = false) => {
     if (cachedCapabilities && !forceRefresh) return cachedCapabilities;
@@ -32,10 +36,12 @@ function registerFFmpegHandlers() {
   ipcMain.handle('ffmpeg:artifact-digest', async (_event, targetPath) =>
     hashFileSha256(validateTargetPath(targetPath)),
   );
-  ipcMain.handle('ffmpeg:verify-artifact-snapshot', async (_event, targetPath) => {
+  ipcMain.handle('ffmpeg:verify-artifact-snapshot', async (event, targetPath) => {
     const trustedPath = validateTargetPath(targetPath);
     const snapshots = createArtifactSnapshotStore({ directory: path.join(app.getPath('temp'), 'shortsflow-artifact-verification') });
-    return verifyArtifactSnapshot(trustedPath, { snapshots });
+    const snapshot = await verifyArtifactSnapshot(trustedPath, { snapshots });
+    if (hasApprovedExportDestination(event.sender.id, trustedPath)) rememberVerifiedExportArtifact(event.sender.id, snapshot.integrity);
+    return snapshot;
   });
   ipcMain.handle('ffmpeg:revalidate-artifact', async (_event, artifact) => {
     try {
@@ -45,6 +51,15 @@ function registerFFmpegHandlers() {
       return { ok: false, error: { code: 'artifact-unreadable', message: 'Verified export could not be read safely.' } };
     }
   });
+  ipcMain.handle('ffmpeg:open-verified-export', async (event, artifact) =>
+    openVerifiedExport(event.sender.id, artifact),
+  );
+  ipcMain.handle('ffmpeg:reveal-verified-export', async (event, artifact) =>
+    revealVerifiedExport(event.sender.id, artifact),
+  );
+  ipcMain.handle('ffmpeg:save-verified-export-as', async (event, request) =>
+    saveVerifiedExportAs(event.sender.id, request),
+  );
   ipcMain.handle('ffmpeg:segment-path', async (_event, fingerprint) =>
     getSegmentPath(fingerprint),
   );
@@ -105,6 +120,88 @@ function registerFFmpegHandlers() {
     setTimeout(() => { if (!child.killed) child.kill('SIGKILL'); }, 1500).unref();
     return true;
   });
+}
+
+async function openVerifiedExport(webContentsId, artifact) {
+  const verified = await resolveVerifiedExportForShell(webContentsId, artifact);
+  if (!verified) return { ok: false, message: 'Saved video is no longer available.' };
+  const error = await shell.openPath(verified.artifactPath);
+  return error ? { ok: false, message: 'Saved video could not be opened.' } : { ok: true };
+}
+
+async function revealVerifiedExport(webContentsId, artifact) {
+  const verified = await resolveVerifiedExportForShell(webContentsId, artifact);
+  if (!verified) return { ok: false, message: 'Saved video is no longer available.' };
+  shell.showItemInFolder(verified.artifactPath);
+  return { ok: true };
+}
+
+async function saveVerifiedExportAs(webContentsId, request) {
+  try {
+    const artifact = validateArtifactIntegrityRequest(request?.artifact);
+    const destinationPath = validateTargetPath(request?.destinationPath);
+    if (!isKnownVerifiedExportArtifact(webContentsId, artifact)) return { ok: false, message: 'Verified export is unavailable.' };
+    if (!consumeApprovedExportDestination(webContentsId, destinationPath)) {
+      return { ok: false, message: 'Choose an export destination before saving.' };
+    }
+    const verified = await revalidateVerifiedArtifact(artifact);
+    const samePath = process.platform === 'win32'
+      ? verified.artifactPath.toLowerCase() === destinationPath.toLowerCase()
+      : verified.artifactPath === destinationPath;
+    const sizeBytes = samePath
+      ? await verifiedExportFileSize(destinationPath)
+      : (await materializeFile(verified.artifactPath, destinationPath)).sizeBytes;
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) throw new Error('Saved export is empty.');
+    return { ok: true, path: destinationPath, sizeBytes };
+  } catch {
+    return { ok: false, message: 'The video could not be saved to that location.' };
+  }
+}
+
+async function verifiedExportFileSize(targetPath) {
+  const stat = await fs.promises.stat(targetPath);
+  if (!stat.isFile()) throw new Error('Saved export is not a file.');
+  return stat.size;
+}
+
+function rememberApprovedExportDestination(webContentsId, destinationPath) {
+  const destinations = approvedExportDestinations.get(webContentsId) || new Set();
+  destinations.add(destinationPath);
+  approvedExportDestinations.set(webContentsId, destinations);
+}
+
+function hasApprovedExportDestination(webContentsId, destinationPath) {
+  return approvedExportDestinations.get(webContentsId)?.has(destinationPath) ?? false;
+}
+
+function rememberVerifiedExportArtifact(webContentsId, artifact) {
+  const artifacts = verifiedExportArtifacts.get(webContentsId) || new Map();
+  artifacts.set(artifactRegistryKey(artifact.artifactPath), { artifactPath: artifact.artifactPath, sizeBytes: artifact.sizeBytes, contentDigest: artifact.contentDigest });
+  verifiedExportArtifacts.set(webContentsId, artifacts);
+}
+
+function isKnownVerifiedExportArtifact(webContentsId, artifact) {
+  const known = verifiedExportArtifacts.get(webContentsId)?.get(artifactRegistryKey(artifact.artifactPath));
+  return Boolean(known && known.sizeBytes === artifact.sizeBytes && known.contentDigest === artifact.contentDigest);
+}
+
+function artifactRegistryKey(artifactPath) {
+  return process.platform === 'win32' ? artifactPath.toLowerCase() : artifactPath;
+}
+
+function consumeApprovedExportDestination(webContentsId, destinationPath) {
+  const destinations = approvedExportDestinations.get(webContentsId);
+  if (!destinations?.delete(destinationPath)) return false;
+  if (destinations.size === 0) approvedExportDestinations.delete(webContentsId);
+  return true;
+}
+
+async function resolveVerifiedExportForShell(webContentsId, artifact) {
+  try {
+    const validated = validateArtifactIntegrityRequest(artifact);
+    if (!isKnownVerifiedExportArtifact(webContentsId, validated)) return null;
+    return await revalidateVerifiedArtifact(validated);
+  } catch { return null; }
 }
 
 async function materializeFile(sourcePath, destinationPath) {
@@ -413,4 +510,4 @@ function capture(executable, args) {
     child.on('error', reject); child.on('close', code => code === 0 ? resolve(out || err) : reject(new Error(err || `Exit ${code}`)));
   });
 }
-module.exports = { registerFFmpegHandlers, materializeFile, resolveSelectedOutputPath, verifyArtifactSnapshot, detectCapabilities, parseEncoderRows, sanitizeFFmpegDiagnostic, serializeSubtitleFilterFilename, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };
+module.exports = { registerFFmpegHandlers, materializeFile, resolveSelectedOutputPath, saveVerifiedExportAs, rememberApprovedExportDestination, rememberVerifiedExportArtifact, verifyArtifactSnapshot, detectCapabilities, parseEncoderRows, sanitizeFFmpegDiagnostic, serializeSubtitleFilterFilename, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };

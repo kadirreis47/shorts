@@ -4,7 +4,7 @@ const ALLOWED_FFMPEG_API_KEYS = Object.freeze([
   'getCapabilities', 'run', 'cancel', 'fileExists', 'copyFile', 'getSegmentPath',
   'segmentExists', 'getSegmentCacheStats', 'clearSegmentCache', 'analyzeOutput',
   'artifactDigest', 'verifyArtifactSnapshot', 'revalidateArtifact', 'onProgress',
-  'pickOutputPath',
+  'pickOutputPath', 'openVerifiedExport', 'revealVerifiedExport', 'saveVerifiedExportAs',
 ]);
 
 const ALLOWED_YOUTUBE_API_KEYS = Object.freeze([
@@ -103,6 +103,15 @@ function createFFmpegBridge(ipcRenderer) {
     verifyArtifactSnapshot: (targetPath) => ipcRenderer.invoke('ffmpeg:verify-artifact-snapshot', targetPath),
     revalidateArtifact: (artifact) => validArtifactIntegrityRequest(artifact) ? ipcRenderer.invoke('ffmpeg:revalidate-artifact', artifact) : Promise.reject(new TypeError('Invalid artifact integrity request.')),
     pickOutputPath: (options) => ipcRenderer.invoke('ffmpeg:pick-output-path', options),
+    openVerifiedExport: (artifact) => validArtifactIntegrityRequest(artifact)
+      ? ipcRenderer.invoke('ffmpeg:open-verified-export', artifact)
+      : Promise.reject(new TypeError('Invalid verified export artifact.')),
+    revealVerifiedExport: (artifact) => validArtifactIntegrityRequest(artifact)
+      ? ipcRenderer.invoke('ffmpeg:reveal-verified-export', artifact)
+      : Promise.reject(new TypeError('Invalid verified export artifact.')),
+    saveVerifiedExportAs: (artifact, destinationPath) => validArtifactIntegrityRequest(artifact) && typeof destinationPath === 'string'
+      ? ipcRenderer.invoke('ffmpeg:save-verified-export-as', { artifact, destinationPath })
+      : Promise.reject(new TypeError('Invalid verified export save request.')),
     onProgress: (listener) => {
       if (typeof listener !== 'function') throw new TypeError('Progress listener must be a function.');
       const handler = (_event, payload) => listener(payload);
