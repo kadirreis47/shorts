@@ -22,7 +22,7 @@ describe('native YouTube analytics collector', () => {
   it('does not fabricate unsupported hourly windows', async () => {
     const credential = auth(); const fetchImpl = vi.fn(); const service = createYouTubeAnalyticsService({ auth: credential, fetchImpl });
     const result = await service.collect({ ...request, window: '1h' });
-    expect(result.metrics.every((metric: any) => metric.availability === 'unsupported')).toBe(true); expect(result.diagnostics[0].code).toBe('incomplete-window'); expect(credential.resolveExecutionCredential).not.toHaveBeenCalled(); expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result.metrics.every((metric: any) => metric.availability === 'unsupported')).toBe(true); expect(result.diagnostics[0].code).toBe('incomplete-window'); expect(credential.resolveExecutionCredential).toHaveBeenCalledWith(ref, undefined); expect(fetchImpl).not.toHaveBeenCalled();
   });
   it('returns not-ready rather than zero when a recent report has no rows', async () => {
     const service = createYouTubeAnalyticsService({ auth: auth(), fetchImpl: async () => json({ columnHeaders: report.columnHeaders }), now: () => new Date('2026-08-10T12:00:00.000Z') });

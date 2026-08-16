@@ -8,12 +8,16 @@ const ALLOWED_FFMPEG_API_KEYS = Object.freeze([
 ]);
 
 const ALLOWED_YOUTUBE_API_KEYS = Object.freeze([
-  'connect', 'disconnect', 'status', 'finalizeSelection', 'cancelSelection', 'publish',
+  'establishOwnerContext', 'clearOwnerContext', 'connect', 'disconnect', 'status', 'finalizeSelection', 'cancelSelection', 'publish',
   'reconcilePublish', 'cancelPublish', 'acknowledgeReceipt', 'collectAnalytics',
 ]);
 
 function validCredentialRef(value) {
   return typeof value === 'string' && /^youtube_[0-9a-f-]{36}$/i.test(value);
+}
+
+function validAccessToken(value) {
+  return typeof value === 'string' && value.length >= 20 && value.length <= 16_384 && !/\s/.test(value);
 }
 
 function validSelectionRef(value) {
@@ -58,6 +62,10 @@ function validAnalyticsRequest(value) {
 
 function createYouTubeBridge(ipcRenderer) {
   return Object.freeze({
+    establishOwnerContext: (accessToken) => validAccessToken(accessToken)
+      ? ipcRenderer.invoke('youtube:owner-context', { accessToken })
+      : Promise.reject(new TypeError('Invalid authenticated owner token.')),
+    clearOwnerContext: () => ipcRenderer.invoke('youtube:clear-owner-context'),
     connect: () => ipcRenderer.invoke('youtube:connect'),
     disconnect: (credentialRef) => validCredentialRef(credentialRef)
       ? ipcRenderer.invoke('youtube:disconnect', { credentialRef })
@@ -127,4 +135,5 @@ module.exports = {
   createYouTubeBridge,
   installPreloadBridge,
   validAnalyticsRequest,
+  validAccessToken,
 };

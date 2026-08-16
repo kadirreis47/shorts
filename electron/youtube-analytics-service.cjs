@@ -1,4 +1,5 @@
 const { YouTubeCredentialError } = require('./youtube-credentials.cjs');
+const { YouTubeOwnerError } = require('./youtube-owner-context.cjs');
 
 const ANALYTICS_URL = 'https://youtubeanalytics.googleapis.com/v2/reports';
 const ANALYTICS_SCOPE = 'https://www.googleapis.com/auth/yt-analytics.readonly';
@@ -45,17 +46,17 @@ function providerError(response, body, now) {
 function createYouTubeAnalyticsService({ auth, fetchImpl = fetch, now = () => new Date() } = {}) {
   if (!auth?.resolveExecutionCredential) throw new TypeError('YouTube analytics requires the trusted credential resolver.');
   return {
-    async collect(input) {
+    async collect(input, owner) {
       if (!validRequest(input)) throw new YouTubeAnalyticsError('invalid-request', 'Invalid YouTube analytics request.', { status: 400 });
       const observedAt = now().toISOString();
+      const credential = await auth.resolveExecutionCredential(input.credentialRef, owner);
       if (HOURLY_WINDOWS.has(input.window)) return { metrics: unavailableMetrics('unsupported', observedAt), diagnostics: [diagnostic('incomplete-window', 'info', `YouTube Analytics reports cannot provide an exact ${input.window} window. Choose a daily window instead.`)] };
-      const credential = await auth.resolveExecutionCredential(input.credentialRef);
       if (credential.channelId !== input.channelRef) throw new YouTubeAnalyticsError('youtube-channel-mismatch', 'The connected YouTube account does not match this publication channel.', { status: 403 });
       if (!Array.isArray(credential.scopes) || !credential.scopes.includes(ANALYTICS_SCOPE)) throw new YouTubeCredentialError('insufficient-scope', 'The connected YouTube account needs analytics permission. Reconnect the account and approve analytics access.');
       const { startDate, endDate, incomplete = false } = reportDates(input.window, input.publishedAt, now());
       if (startDate > endDate) return { metrics: unavailableMetrics('not-ready', observedAt), diagnostics: [diagnostic('incomplete-window', 'info', 'YouTube analytics has not completed a daily reporting window for this publication yet.')] };
       const url = new URL(ANALYTICS_URL); url.searchParams.set('ids', `channel==${input.channelRef}`); url.searchParams.set('startDate', startDate); url.searchParams.set('endDate', endDate); url.searchParams.set('filters', `video==${input.remotePublicationId}`); url.searchParams.set('metrics', RAW_METRICS.join(','));
-      let response; try { response = await fetchImpl(url.toString(), { headers: { Authorization: `${credential.tokenType || 'Bearer'} ${credential.accessToken}` } }); } catch { throw new YouTubeAnalyticsError('youtube-analytics-network-failure', 'Unable to reach YouTube analytics. Please try again.', { status: 503, retryable: true }); }
+      let response; try { response = await fetchImpl(url.toString(), { signal: owner?.signal, headers: { Authorization: `${credential.tokenType || 'Bearer'} ${credential.accessToken}` } }); } catch { if (owner?.signal?.aborted) throw new YouTubeOwnerError(); throw new YouTubeAnalyticsError('youtube-analytics-network-failure', 'Unable to reach YouTube analytics. Please try again.', { status: 503, retryable: true }); }
       let body = {}; try { body = await response.json(); } catch { if (!response.ok) throw providerError(response, body, now().getTime()); throw new YouTubeAnalyticsError('youtube-analytics-provider-response-invalid', 'YouTube analytics returned an invalid response.'); }
       if (!response.ok) throw providerError(response, body, now().getTime());
       const headers = Array.isArray(body.columnHeaders) ? body.columnHeaders : null;

@@ -17,9 +17,10 @@ function interruptedJob(): PublishJob {
 describe('publishing credential recovery after restart', () => {
   it('reconstructs an active replacement from persisted account and job bindings, then cleans it up idempotently', async () => {
     vi.resetModules();
-    const [{ applicationContainer, dependencyTokens }, { createPublishQueue }, controller, { usePublishingStore }] = await Promise.all([
-      import('@/core/di'), import('@/core/publishing'), import('@/services/publishingController'), import('@/store/publishingStore'),
+    const [{ applicationContainer, dependencyTokens }, { createPublishQueue }, controller, { usePublishingStore }, { setValidatedOwnerId }] = await Promise.all([
+      import('@/core/di'), import('@/core/publishing'), import('@/services/publishingController'), import('@/store/publishingStore'), import('@/auth/identity'),
     ]);
+    setValidatedOwnerId('publishing-restart-user');
     applicationContainer.reset();
     applicationContainer.registerValue(dependencyTokens.publishingApplicationService, { createQueue: (_executor: unknown, update: (job: PublishJob) => void) => createPublishQueue({ run: async () => { throw new Error('not called'); }, reconcile: async (job) => job, cancel: async () => false }, update) } as never);
     const disconnect = vi.fn(async () => ({ disconnected: true }));

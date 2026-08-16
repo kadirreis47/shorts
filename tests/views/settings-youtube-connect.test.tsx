@@ -1,10 +1,12 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '@/lib/i18n';
 import { usePublishingStore } from '@/store/publishingStore';
 import { Settings } from '@/views/Settings';
 import type { PublishJob, PublishState } from '@/core/publishing';
+import { setValidatedOwnerId } from '@/auth/identity';
+import { transitionPrivateOwner } from '@/app/ownerTransition';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -38,14 +40,38 @@ function publishingJob(id: string, state: PublishState, account: typeof persiste
 }
 
 let container: HTMLDivElement | undefined;
+beforeEach(() => {
+  setValidatedOwnerId('settings-test-user');
+  transitionPrivateOwner('settings-test-user');
+});
 afterEach(() => {
   container?.remove();
   container = undefined;
   usePublishingStore.setState({ accounts: [], queue: { jobs: [], activeJobId: null, paused: false }, selectedJobId: null, lastError: null, rebindAccountCredential: originalRebindAccountCredential });
   delete window.electronAPI;
+  setValidatedOwnerId(null);
+  transitionPrivateOwner(null);
 });
 
 describe('Settings native YouTube connection', () => {
+  it('does not expose deferred integrations, automation, notifications, or posting controls', async () => {
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Settings /></I18nProvider>); });
+    await act(async () => {});
+    const switches = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="switch"]'));
+    expect(switches).toHaveLength(0);
+    for (const unsupportedLabel of [
+      'Auto-Generate Videos', 'Auto-Publish', 'Auto-Thumbnail', 'Auto-Reply Comments',
+      'Email Alerts', 'Push Notifications', 'Canva', 'RSS Feeds', 'Posting Schedule',
+    ]) expect(container.textContent).not.toContain(unsupportedLabel);
+    expect(container.textContent).toContain('Provider credentials');
+    expect(container.textContent).toContain('YouTube Connection');
+    expect(container.textContent).toContain('YouTube Shorts Studio');
+    await act(async () => { root.unmount(); });
+  });
+
   it('accepts the packaged preload connection shape and invokes only native connect', async () => {
     const connect = vi.fn(async () => connection);
     const nativeBridge = { connect, disconnect: vi.fn(), status: vi.fn(async () => ({ ok: true as const, status: { credentialRef: connection.credentialRef, authenticated: true } })), finalizeSelection: vi.fn(), cancelSelection: vi.fn() };

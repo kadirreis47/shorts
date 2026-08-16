@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -23,19 +24,26 @@ const LANGUAGES: Record<string, string> = {
   pl: "Polish",
 };
 
+interface TranslationRequest { srt?: unknown; targetLanguage?: unknown }
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
 
   try {
-    const { srt, targetLanguage } = await req.json();
+    const authorization = await authorizeProtectedFunction(req, "translate-subtitles");
+    if ("response" in authorization) return authorization.response;
 
-    if (!srt || !targetLanguage) {
-      return new Response(
-        JSON.stringify({ error: "Missing srt or targetLanguage" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+    const parsedBody = await readBoundedJson<TranslationRequest>(req, 65_536);
+    if ("response" in parsedBody) return parsedBody.response;
+    const { srt, targetLanguage } = parsedBody.value;
+
+    if (!isBoundedString(srt, 50_000, true)
+      || !isBoundedString(targetLanguage, 10, true)
+      || !(targetLanguage in LANGUAGES)) {
+      return safeFailure("Invalid subtitle translation request.", 400);
     }
 
     const langName = LANGUAGES[targetLanguage] ?? targetLanguage;
@@ -108,10 +116,7 @@ Deno.serve(async (req: Request) => {
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("Subtitle translation could not be completed.", 500);
   }
 });

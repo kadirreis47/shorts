@@ -11,4 +11,12 @@ function loadLocalYouTubeOAuthConfig({ cwd = process.cwd(), env = process.env, f
   } catch { return { clientId: null, clientSecret: null }; }
 }
 function loadLocalYouTubeClientId(options) { return loadLocalYouTubeOAuthConfig(options).clientId; }
-module.exports = { loadLocalYouTubeClientId, loadLocalYouTubeOAuthConfig };
+function loadLocalSupabaseConfig({ cwd = process.cwd(), env = process.env, fsApi = fs } = {}) {
+  const environment = { url: clean(env.VITE_SUPABASE_URL), anonKey: clean(env.VITE_SUPABASE_ANON_KEY) };
+  if (environment.url || environment.anonKey) return environment;
+  try {
+    const contents = fsApi.readFileSync(path.join(cwd, '.env'), 'utf8');
+    return { url: dotenvValue(contents, 'VITE_SUPABASE_URL'), anonKey: dotenvValue(contents, 'VITE_SUPABASE_ANON_KEY') };
+  } catch { return { url: null, anonKey: null }; }
+}
+module.exports = { loadLocalSupabaseConfig, loadLocalYouTubeClientId, loadLocalYouTubeOAuthConfig };

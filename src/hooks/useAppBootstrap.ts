@@ -6,7 +6,7 @@ import {
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { useAppStore } from '@/store';
 
-export function useAppBootstrap() {
+export function useAppBootstrap(userId: string) {
   const lifecycle = useAppStore((state) => state.lifecycle);
   const initialized = useAppStore((state) => state.initialized);
   const offline = useAppStore((state) => state.offline);
@@ -14,8 +14,8 @@ export function useAppBootstrap() {
   const setOffline = useAppStore((state) => state.setOffline);
 
   useEffect(() => {
-    void bootstrapApplication();
-  }, []);
+    void bootstrapApplication(userId);
+  }, [userId]);
 
   useEffect(() => {
     const syncConnectionState = () => {
@@ -39,6 +39,6 @@ export function useAppBootstrap() {
     booting: lifecycle === 'idle' || lifecycle === 'booting',
     offline,
     error,
-    retry: retryApplicationBootstrap,
+    retry: () => retryApplicationBootstrap(userId),
   };
 }

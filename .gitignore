@@ -27,6 +27,11 @@ out/
 release/
 .vite/
 coverage/
+test-results/
+playwright-report/
+screenshots/
+*.tmp
+*.sql.tmp
 .shortsflow-build/
 supabase/.temp/
 .env

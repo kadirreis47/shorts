@@ -1,5 +1,6 @@
 import type { AssetProvider } from '../assetProviderTypes';
 import type { MediaScene } from '../types';
+import { privateStorageSource } from '../storageIdentity';
 
 export function createSourceSceneProvider(sceneMap: ReadonlyMap<string, MediaScene>): AssetProvider {
   return {
@@ -12,9 +13,12 @@ export function createSourceSceneProvider(sceneMap: ReadonlyMap<string, MediaSce
     async search(query) {
       const scene = sceneMap.get(query.sceneId);
       if (!scene) return [];
-      const source = scene.sourceScene.videoUrl || scene.sourceScene.imageUrl;
+      const isVideo = Boolean(scene.sourceScene.videoUrl || scene.sourceScene.videoStorage);
+      const storageIdentity = isVideo ? scene.sourceScene.videoStorage : scene.sourceScene.imageStorage;
+      const source = storageIdentity
+        ? privateStorageSource(storageIdentity)
+        : scene.sourceScene.videoUrl || scene.sourceScene.imageUrl;
       if (!source) return [];
-      const isVideo = Boolean(scene.sourceScene.videoUrl);
       return [{
         id: `${query.sceneId}-source`,
         providerId: 'source-scene',
@@ -24,7 +28,14 @@ export function createSourceSceneProvider(sceneMap: ReadonlyMap<string, MediaSce
         title: scene.visualPrompt,
         relevance: 1,
         license: 'user-provided-or-upstream',
-        metadata: { sceneId: scene.id, visualMode: scene.sourceScene.visualMode ?? null },
+        metadata: {
+          sceneId: scene.id,
+          visualMode: scene.sourceScene.visualMode ?? null,
+          ...(storageIdentity ? {
+            storageBucket: storageIdentity.bucket,
+            storageObjectPath: storageIdentity.objectPath,
+          } : {}),
+        },
       }];
     },
   };

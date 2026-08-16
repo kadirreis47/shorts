@@ -1,4 +1,5 @@
 import type { RenderOutput } from './types';
+import { readUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 
 export interface RenderCacheEntry {
   fingerprint: string;
@@ -115,12 +116,8 @@ export function createRenderCache(): RenderCache {
 }
 
 function loadState(): PersistedRenderCache {
-  if (typeof localStorage === 'undefined') {
-    return { entries: [], stats: createEmptyStats() };
-  }
-
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readUserScopedLocalStorage(STORAGE_KEY);
     if (!raw) return { entries: [], stats: createEmptyStats() };
     const parsed = JSON.parse(raw) as Partial<PersistedRenderCache>;
     const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
@@ -138,9 +135,8 @@ function loadState(): PersistedRenderCache {
 }
 
 function persist(state: PersistedRenderCache): void {
-  if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    writeUserScopedLocalStorage(STORAGE_KEY, JSON.stringify(state));
   } catch {
     // Cache persistence failure must never stop rendering.
   }

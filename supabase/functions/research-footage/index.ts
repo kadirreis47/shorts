@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,13 +15,35 @@ interface SceneRequest {
   duration?: number;
 }
 
+interface ResearchRequest { topic?: unknown; scenes?: unknown; mode?: unknown }
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
 
   try {
-    const { topic, scenes, mode } = await req.json();
+    const authorization = await authorizeProtectedFunction(req, "research-footage");
+    if ("response" in authorization) return authorization.response;
+
+    const parsedBody = await readBoundedJson<ResearchRequest>(req, 65_536);
+    if ("response" in parsedBody) return parsedBody.response;
+    const { topic, scenes, mode } = parsedBody.value;
+    if (!isBoundedString(topic, 500, true)
+      || !Array.isArray(scenes) || scenes.length < 1 || scenes.length > 12
+      || !scenes.every((scene: unknown) => {
+        if (!scene || typeof scene !== "object") return false;
+        const value = scene as Record<string, unknown>;
+        return isBoundedString(value.text, 2_000)
+          && isBoundedString(value.visual, 500)
+          && (typeof value.duration === "undefined" || (typeof value.duration === "number" && value.duration >= 0 && value.duration <= 300))
+          && (typeof value.keywords === "undefined" || (Array.isArray(value.keywords) && value.keywords.length <= 10
+            && value.keywords.every((keyword) => isBoundedString(keyword, 100, true))));
+      })
+      || (typeof mode !== "undefined" && !isBoundedString(mode, 50))) {
+      return safeFailure("Invalid footage research request.", 400);
+    }
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -34,7 +57,7 @@ serve(async (req: Request) => {
     if (!pexelsKey) {
       return new Response(
         JSON.stringify({ error: "Footage research is not configured. Contact an administrator." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
@@ -85,10 +108,7 @@ serve(async (req: Request) => {
       JSON.stringify({ results }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("Footage research could not be completed.", 500);
   }
 });

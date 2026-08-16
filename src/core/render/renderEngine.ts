@@ -43,6 +43,8 @@ export function createRenderEngine(
     options.circuitBreaker ?? createRenderCircuitBreaker();
   const metricsCollector =
     options.metricsCollector ?? createRenderMetricsCollector();
+  const materializeManifestForExecution =
+    options.materializeManifestForExecution ?? (async (manifest) => manifest);
   let activeCount = 0;
   let queuePaused = false;
   let disposed = false;
@@ -412,9 +414,17 @@ export function createRenderEngine(
 
       while (output === null) {
         try {
+          // Keep job.request canonical for fingerprints and recovery. Private
+          // Storage URLs are materialized only for this adapter invocation.
+          const executionManifest = await materializeManifestForExecution(
+            job.request.manifest,
+          );
+          if (job.controller.signal.aborted) {
+            throw new DOMException('Render iÅŸlemi iptal edildi', 'AbortError');
+          }
           output = await adapter.render({
             jobId: job.snapshot.id,
-            manifest: job.request.manifest,
+            manifest: executionManifest,
             preset: job.snapshot.preset,
             outputPath: job.request.outputPath,
             signal: job.controller.signal,

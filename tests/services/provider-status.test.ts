@@ -24,6 +24,8 @@ describe('provider-status', () => {
 
   it('uses a service-role client and returns a safe unavailable response on lookup failure', () => {
     const source = readFileSync('supabase/functions/provider-status/index.ts', 'utf8');
+    expect(source).toContain('await authorizeProtectedFunction(req, "provider-status")');
+    expect(source.indexOf('await authorizeProtectedFunction(req, "provider-status")')).toBeLessThan(source.indexOf('createClient(url, serviceRoleKey)'));
     expect(source).toContain('Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")');
     expect(source).toContain('.from("api_keys")');
     expect(source).toContain('.select("key,value")');

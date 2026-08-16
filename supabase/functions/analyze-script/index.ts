@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -6,13 +7,26 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+interface AnalyzeRequest { script?: unknown; hook?: unknown; niche?: unknown }
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
 
   try {
-    const { script, hook, niche } = await req.json();
+    const authorization = await authorizeProtectedFunction(req, "analyze-script");
+    if ("response" in authorization) return authorization.response;
+
+    const parsedBody = await readBoundedJson<AnalyzeRequest>(req, 32_768);
+    if ("response" in parsedBody) return parsedBody.response;
+    const { script, hook, niche } = parsedBody.value;
+    if (!isBoundedString(script, 20_000, true)
+      || (typeof hook !== "undefined" && !isBoundedString(hook, 1_000))
+      || (typeof niche !== "undefined" && !isBoundedString(niche, 100))) {
+      return safeFailure("Invalid script analysis request.", 400);
+    }
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -92,10 +106,7 @@ Deno.serve(async (req: Request) => {
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("Script analysis could not be completed.", 500);
   }
 });

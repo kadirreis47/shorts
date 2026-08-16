@@ -2,6 +2,8 @@ const { app, ipcMain } = require('electron');
 const { createCredentialVault, publicError } = require('./youtube-credentials.cjs');
 const { createYouTubeAuthService } = require('./youtube-auth-service.cjs');
 const { resolveYouTubeOAuthConfig } = require('./youtube-runtime-config.cjs');
+const { resolveSupabaseAuthConfig } = require('./supabase-runtime-config.cjs');
+const { createSupabaseOwnerValidator, createYouTubeOwnerContext } = require('./youtube-owner-context.cjs');
 const { createYouTubeUploadCheckpointStore, YouTubeCheckpointError } = require('./youtube-upload-checkpoints.cjs');
 const { createYouTubePublishService, YouTubePublishError } = require('./youtube-publish-service.cjs');
 const { createYouTubeAnalyticsService, YouTubeAnalyticsError, validRequest: validAnalyticsRequest } = require('./youtube-analytics-service.cjs');
@@ -36,8 +38,9 @@ function validPublishRequest(value) {
     && (value.metadata.language === null || typeof value.metadata.language === 'string') && (value.metadata.category === null || typeof value.metadata.category === 'string');
 }
 function safeAnalyticsError(error) {
+  if (error?.name === 'YouTubeOwnerError') return { code: String(error.code), message: String(error.message), retryable: false, status: 401, retryAfterMs: null };
   if (error?.name === 'YouTubeCredentialError') {
-    const authentication = ['credential-reconnect-required', 'credential-missing', 'insufficient-scope', 'credential-storage-failed'].includes(error.code);
+    const authentication = ['credential-unavailable', 'credential-reconnect-required', 'credential-missing', 'insufficient-scope', 'credential-storage-failed'].includes(error.code);
     const retryable = ['secure-storage-unavailable', 'credential-refresh-failed', 'youtube-network-failure'].includes(error.code);
     return { code: String(error.code), message: String(error.message), retryable, status: authentication ? 401 : 503, retryAfterMs: null };
   }
@@ -51,51 +54,65 @@ function safeAnalyticsResult(result) {
   };
 }
 function safePublishError(error) {
+  if (error?.name === 'YouTubeOwnerError') return { code: String(error.code), message: String(error.message), retryable: false, status: 401, retryAfterUtc: null };
   if (error?.name === 'YouTubeCredentialError') {
-    const authentication = ['credential-reconnect-required', 'credential-missing', 'insufficient-scope', 'credential-storage-failed'].includes(error.code);
+    const authentication = ['credential-unavailable', 'credential-reconnect-required', 'credential-missing', 'insufficient-scope', 'credential-storage-failed'].includes(error.code);
     const retryable = ['secure-storage-unavailable', 'credential-refresh-failed', 'youtube-network-failure'].includes(error.code);
     return { code: String(error.code), message: String(error.message), retryable, status: authentication ? 401 : 503, retryAfterUtc: null };
   }
   if (error instanceof YouTubePublishError || error instanceof YouTubeCheckpointError || error instanceof ArtifactIntegrityError || error instanceof ArtifactSnapshotError) return { code: String(error.code), message: String(error.message), retryable: Boolean(error.retryable), status: Number(error.status || 500), retryAfterUtc: error.retryAfterUtc ?? null };
   return { code: 'youtube-publish-failed', message: 'YouTube publishing failed safely.', retryable: false, status: 500, retryAfterUtc: null };
 }
-function registerYouTubeHandlers({ electron = require('electron'), service, publishService, analyticsService } = {}) {
+function registerYouTubeHandlers({ electron = require('electron'), service, publishService, analyticsService, ownerContext: ownerContextOverride, validateAccessToken } = {}) {
   const runtime = electron;
   const userDataPath = runtime.app.getPath('userData');
-  const auth = service || createYouTubeAuthService({ vault: createCredentialVault({ userDataPath, safeStorage: runtime.safeStorage }), oauthConfig: () => resolveYouTubeOAuthConfig({ userDataPath }) });
-  const publisher = publishService || createYouTubePublishService({ auth, checkpoints: createYouTubeUploadCheckpointStore({ userDataPath, safeStorage: runtime.safeStorage }), snapshots: createArtifactSnapshotStore({ directory: path.resolve(userDataPath, 'youtube-upload-snapshots') }) });
+  const ownerContext = ownerContextOverride || createYouTubeOwnerContext({ validateAccessToken: validateAccessToken || createSupabaseOwnerValidator({ resolveConfig: () => resolveSupabaseAuthConfig({ isPackaged: runtime.app.isPackaged }) }) });
+  const auth = service || createYouTubeAuthService({ vault: createCredentialVault({ userDataPath, safeStorage: runtime.safeStorage, ownerContext }), oauthConfig: () => resolveYouTubeOAuthConfig({ userDataPath }) });
+  const publisher = publishService || createYouTubePublishService({ auth, ownerContext, checkpoints: createYouTubeUploadCheckpointStore({ userDataPath, safeStorage: runtime.safeStorage }), snapshots: createArtifactSnapshotStore({ directory: path.resolve(userDataPath, 'youtube-upload-snapshots') }) });
   let analytics = analyticsService;
   if (typeof publisher.initialize === 'function') void publisher.initialize().catch(() => undefined);
   const handle = (operation) => async (_event, input = {}) => {
     try {
+      const owner = ownerContext.capture();
       if ((operation === 'disconnect' || operation === 'status') && !validCredentialRef(input.credentialRef)) throw Object.assign(new Error('Invalid YouTube credential reference.'), { code: 'invalid-request' });
       if ((operation === 'finalize' || operation === 'cancel-selection') && !validSelectionRef(input.selectionRef)) throw Object.assign(new Error('Invalid YouTube channel selection.'), { code: 'invalid-request' });
       if (operation === 'finalize' && !validChannelRef(input.channelRef)) throw Object.assign(new Error('Invalid YouTube channel selection.'), { code: 'invalid-request' });
-      if (operation === 'connect') return await auth.connect();
-      if (operation === 'disconnect') return { credentialRef: input.credentialRef, disconnected: await auth.disconnect(input.credentialRef) };
-      if (operation === 'finalize') return await auth.finalizeSelection(input.selectionRef, input.channelRef);
-      if (operation === 'cancel-selection') return { selectionRef: input.selectionRef, cancelled: auth.cancelSelection(input.selectionRef) };
-      return await auth.status(input.credentialRef);
+      let result;
+      if (operation === 'connect') result = await auth.connect(owner);
+      else if (operation === 'disconnect') result = { credentialRef: input.credentialRef, disconnected: await auth.disconnect(input.credentialRef, owner) };
+      else if (operation === 'finalize') result = await auth.finalizeSelection(input.selectionRef, input.channelRef, owner);
+      else if (operation === 'cancel-selection') result = { selectionRef: input.selectionRef, cancelled: auth.cancelSelection(input.selectionRef, owner) };
+      else result = await auth.status(input.credentialRef, owner);
+      ownerContext.assertCurrent(owner);
+      return result;
     } catch (error) { const safe = publicError(error); const failure = new Error(safe.message); failure.code = safe.code; throw failure; }
   };
   const status = async (_event, input = {}) => {
     try {
+      const owner = ownerContext.capture();
       if (!validCredentialRef(input.credentialRef)) throw Object.assign(new Error('Invalid YouTube credential reference.'), { code: 'invalid-request' });
-      return { ok: true, status: await auth.status(input.credentialRef) };
+      const result = await auth.status(input.credentialRef, owner);
+      ownerContext.assertCurrent(owner);
+      return { ok: true, status: result };
     } catch (error) {
       return { ok: false, error: publicError(error) };
     }
   };
+  runtime.ipcMain.handle('youtube:owner-context', async (_event, input = {}) => {
+    try { return { ok: true, result: await ownerContext.establish(input.accessToken) }; }
+    catch (error) { return { ok: false, error: publicError(error) }; }
+  });
+  runtime.ipcMain.handle('youtube:clear-owner-context', async () => ({ ok: true, result: await ownerContext.clear() }));
   runtime.ipcMain.handle('youtube:connect', handle('connect'));
   runtime.ipcMain.handle('youtube:disconnect', handle('disconnect'));
   runtime.ipcMain.handle('youtube:status', status);
   runtime.ipcMain.handle('youtube:finalize-selection', handle('finalize'));
   runtime.ipcMain.handle('youtube:cancel-selection', handle('cancel-selection'));
-  runtime.ipcMain.handle('youtube:publish', async (_event, input) => { try { if (!validPublishRequest(input)) throw new YouTubePublishError('invalid-request', 'Invalid YouTube publish request.', { status: 400 }); const result = await publisher.publish(input); return { ok: true, result: { remotePublishId: result.remotePublishId, remoteUrl: result.remoteUrl, state: result.state, retryAfterUtc: result.retryAfterUtc ?? null } }; } catch (error) { return { ok: false, error: safePublishError(error) }; } });
-  runtime.ipcMain.handle('youtube:reconcile-publish', async (_event, input) => { try { if (!validPublishRequest(input)) throw new YouTubePublishError('invalid-request', 'Invalid YouTube reconciliation request.', { status: 400 }); const result = await publisher.reconcile(input); return { ok: true, result: { found: result.found !== false, remotePublishId: result.remotePublishId, remoteUrl: result.remoteUrl, state: result.state, retryAfterUtc: result.retryAfterUtc ?? null, restartRequired: result.restartRequired === true, approvalMismatch: result.approvalMismatch === true } }; } catch (error) { return { ok: false, error: safePublishError(error) }; } });
-  runtime.ipcMain.handle('youtube:cancel-publish', async (_event, input) => ({ cancelled: typeof input?.jobId === 'string' ? publisher.cancel(input.jobId) : false }));
-  runtime.ipcMain.handle('youtube:acknowledge-receipt', async (_event, input) => { try { if (!validPublishRequest(input) || typeof input.remotePublishId !== 'string') return { acknowledged: false }; return { acknowledged: await publisher.acknowledgeReceipt(input) }; } catch { return { acknowledged: false }; } });
-  runtime.ipcMain.handle('youtube:collect-analytics', async (_event, input) => { try { if (!validAnalyticsRequest(input)) throw new YouTubeAnalyticsError('invalid-request', 'Invalid YouTube analytics request.', { status: 400 }); analytics ??= createYouTubeAnalyticsService({ auth }); return { ok: true, result: safeAnalyticsResult(await analytics.collect(input)) }; } catch (error) { return { ok: false, error: safeAnalyticsError(error) }; } });
-  return () => ['youtube:connect', 'youtube:disconnect', 'youtube:status', 'youtube:finalize-selection', 'youtube:cancel-selection', 'youtube:publish', 'youtube:reconcile-publish', 'youtube:cancel-publish', 'youtube:acknowledge-receipt', 'youtube:collect-analytics'].forEach((channel) => runtime.ipcMain.removeHandler(channel));
+  runtime.ipcMain.handle('youtube:publish', async (_event, input) => { try { const owner = ownerContext.capture(); if (!validPublishRequest(input)) throw new YouTubePublishError('invalid-request', 'Invalid YouTube publish request.', { status: 400 }); const result = await publisher.publish(input, owner); ownerContext.assertCurrent(owner); return { ok: true, result: { remotePublishId: result.remotePublishId, remoteUrl: result.remoteUrl, state: result.state, retryAfterUtc: result.retryAfterUtc ?? null } }; } catch (error) { return { ok: false, error: safePublishError(error) }; } });
+  runtime.ipcMain.handle('youtube:reconcile-publish', async (_event, input) => { try { const owner = ownerContext.capture(); if (!validPublishRequest(input)) throw new YouTubePublishError('invalid-request', 'Invalid YouTube reconciliation request.', { status: 400 }); const result = await publisher.reconcile(input, owner); ownerContext.assertCurrent(owner); return { ok: true, result: { found: result.found !== false, remotePublishId: result.remotePublishId, remoteUrl: result.remoteUrl, state: result.state, retryAfterUtc: result.retryAfterUtc ?? null, restartRequired: result.restartRequired === true, approvalMismatch: result.approvalMismatch === true } }; } catch (error) { return { ok: false, error: safePublishError(error) }; } });
+  runtime.ipcMain.handle('youtube:cancel-publish', async (_event, input) => { try { const owner = ownerContext.capture(); const cancelled = typeof input?.jobId === 'string' ? publisher.cancel(input.jobId, owner) : false; ownerContext.assertCurrent(owner); return { cancelled }; } catch { return { cancelled: false }; } });
+  runtime.ipcMain.handle('youtube:acknowledge-receipt', async (_event, input) => { try { const owner = ownerContext.capture(); if (!validPublishRequest(input) || typeof input.remotePublishId !== 'string') return { acknowledged: false }; const acknowledged = await publisher.acknowledgeReceipt(input, owner); ownerContext.assertCurrent(owner); return { acknowledged }; } catch { return { acknowledged: false }; } });
+  runtime.ipcMain.handle('youtube:collect-analytics', async (_event, input) => { try { const owner = ownerContext.capture(); if (!validAnalyticsRequest(input)) throw new YouTubeAnalyticsError('invalid-request', 'Invalid YouTube analytics request.', { status: 400 }); analytics ??= createYouTubeAnalyticsService({ auth }); const result = await analytics.collect(input, owner); ownerContext.assertCurrent(owner); return { ok: true, result: safeAnalyticsResult(result) }; } catch (error) { return { ok: false, error: safeAnalyticsError(error) }; } });
+  return () => ['youtube:owner-context', 'youtube:clear-owner-context', 'youtube:connect', 'youtube:disconnect', 'youtube:status', 'youtube:finalize-selection', 'youtube:cancel-selection', 'youtube:publish', 'youtube:reconcile-publish', 'youtube:cancel-publish', 'youtube:acknowledge-receipt', 'youtube:collect-analytics'].forEach((channel) => runtime.ipcMain.removeHandler(channel));
 }
 module.exports = { registerYouTubeHandlers, safePublishError, safeAnalyticsError, safeAnalyticsResult, validCredentialRef, validSelectionRef, validChannelRef, validPublishRequest, validAnalyticsRequest };

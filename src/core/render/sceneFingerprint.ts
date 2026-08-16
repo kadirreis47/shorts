@@ -1,6 +1,7 @@
 import type { MediaAsset, MediaScene, RenderManifest } from '@/core/media';
 import { getSceneVisualOperations } from '@/core/visual-production/visualState';
 import type { RenderPreset } from './types';
+import { canonicalMediaAssetSource } from '@/core/media/storageIdentity';
 
 export async function createSceneFingerprint(
   scene: MediaScene,
@@ -13,7 +14,7 @@ export async function createSceneFingerprint(
     .map((asset) => ({
       id: asset.id,
       type: asset.type,
-      source: asset.source,
+      source: canonicalMediaAssetSource(asset),
       durationMs: asset.durationMs ?? null,
       mimeType: asset.mimeType ?? null,
       metadata: asset.metadata,

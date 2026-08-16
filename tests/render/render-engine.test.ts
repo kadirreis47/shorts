@@ -72,7 +72,7 @@ describe('RenderEngine', () => {
   });
 
   it('pause/resume ile sıradaki işi kontrol eder', async () => {
-    const render = vi.fn(async () => output());
+    const render = vi.fn<RenderAdapter['render']>(async () => output());
     const { engine } = setup(adapter(render));
     engine.pauseQueue();
     const job = await engine.submit({ manifest: manifest() });
@@ -157,5 +157,116 @@ describe('RenderEngine', () => {
     expect(recovery.checkpoint).toHaveBeenCalledWith(expect.objectContaining({ status: 'queued' }), expect.anything());
     expect(recovery.checkpoint).toHaveBeenCalledWith(expect.objectContaining({ progress: 25 }), expect.anything());
     expect(recovery.checkpoint).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }), expect.anything());
+  });
+
+  it('checkpoints canonical Storage identity while the adapter receives a fresh signed URL', async () => {
+    const stableSource = 'shortsflow-storage://media/render-user/generated-images/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png';
+    const canonicalManifest = {
+      ...manifest(),
+      assets: [{
+        id: 'asset-1', type: 'image', source: stableSource,
+        metadata: {
+          storageBucket: 'media',
+          storageObjectPath: 'render-user/generated-images/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png',
+        },
+      }],
+    } as RenderManifest;
+    const recovery: RenderRecoveryStore = {
+      restore: vi.fn(() => ({ records: [], interrupted: [] })),
+      checkpoint: vi.fn(), markInterrupted: vi.fn(), remove: vi.fn(), clearTerminal: vi.fn(),
+      getReplayRequest: vi.fn(() => null), markReplayed: vi.fn(), list: vi.fn(() => []),
+    };
+    const executionSource = 'https://example.supabase.co/storage/v1/object/sign/media/render-user/generated-images/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png?token=fresh';
+    const render = vi.fn<RenderAdapter['render']>(async () => output());
+    const { engine } = setup(adapter(render), {
+      recoveryStore: recovery,
+      materializeManifestForExecution: async (value) => ({
+        ...value,
+        assets: value.assets.map((asset) => ({ ...asset, source: executionSource })),
+      }),
+    });
+
+    const job = await engine.submit({ manifest: canonicalManifest });
+    await waitFor(() => engine.getJob(job.id)?.status === 'completed');
+
+    expect(render.mock.calls[0]?.[0].manifest.assets[0]?.source).toBe(executionSource);
+    const checkpointRequests = (recovery.checkpoint as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1]);
+    expect(checkpointRequests).not.toHaveLength(0);
+    expect(checkpointRequests.every((request) => request.manifest.assets[0]?.source === stableSource)).toBe(true);
+    expect(JSON.stringify(checkpointRequests)).not.toContain('token=fresh');
+  });
+
+  it('keeps canonical recovery state when execution materialization fails', async () => {
+    const stableSource = 'shortsflow-storage://media/render-user/videos/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.webm';
+    const canonicalManifest = {
+      ...manifest(),
+      assets: [{
+        id: 'asset-1', type: 'video', source: stableSource,
+        metadata: {
+          storageBucket: 'media',
+          storageObjectPath: 'render-user/videos/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.webm',
+        },
+      }],
+    } as RenderManifest;
+    const recovery: RenderRecoveryStore = {
+      restore: vi.fn(() => ({ records: [], interrupted: [] })),
+      checkpoint: vi.fn(), markInterrupted: vi.fn(), remove: vi.fn(), clearTerminal: vi.fn(),
+      getReplayRequest: vi.fn(() => null), markReplayed: vi.fn(), list: vi.fn(() => []),
+    };
+    const { engine } = setup(adapter(vi.fn(async () => output())), {
+      recoveryStore: recovery,
+      materializeManifestForExecution: async () => { throw new Error('Private media could not be opened.'); },
+    });
+
+    const job = await engine.submit({ manifest: canonicalManifest });
+    await waitFor(() => engine.getJob(job.id)?.status === 'failed');
+    const checkpointRequests = (recovery.checkpoint as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1]);
+    expect(checkpointRequests.every((request) => request.manifest.assets[0]?.source === stableSource)).toBe(true);
+    expect(JSON.stringify(checkpointRequests)).not.toContain('https://');
+  });
+
+  it('re-materializes private media for each render retry while retaining one canonical request', async () => {
+    const stableSource = 'shortsflow-storage://media/render-user/generated-images/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png';
+    const canonicalManifest = {
+      ...manifest(),
+      assets: [{
+        id: 'asset-1', type: 'image', source: stableSource,
+        metadata: {
+          storageBucket: 'media',
+          storageObjectPath: 'render-user/generated-images/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png',
+        },
+      }],
+    } as RenderManifest;
+    const sources = [
+      'https://example.supabase.co/storage/v1/object/sign/media/render-user/generated-images/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png?token=first',
+      'https://example.supabase.co/storage/v1/object/sign/media/render-user/generated-images/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.png?token=second',
+    ];
+    const materialize = vi.fn(async (value: RenderManifest) => ({
+      ...value,
+      assets: value.assets.map((asset) => ({ ...asset, source: sources.shift()! })),
+    }));
+    const render = vi.fn<RenderAdapter['render']>()
+      .mockRejectedValueOnce(new Error('timeout'))
+      .mockResolvedValueOnce(output());
+    const recovery: RenderRecoveryStore = {
+      restore: vi.fn(() => ({ records: [], interrupted: [] })),
+      checkpoint: vi.fn(), markInterrupted: vi.fn(), remove: vi.fn(), clearTerminal: vi.fn(),
+      getReplayRequest: vi.fn(() => null), markReplayed: vi.fn(), list: vi.fn(() => []),
+    };
+    const { engine } = setup(adapter(render), {
+      recoveryStore: recovery,
+      materializeManifestForExecution: materialize,
+      retryPolicy: { baseDelayMs: 1, maxDelayMs: 1 },
+    });
+
+    const job = await engine.submit({ manifest: canonicalManifest });
+    await waitFor(() => engine.getJob(job.id)?.status === 'completed');
+    expect(materialize).toHaveBeenCalledTimes(2);
+    expect(render.mock.calls.map((call) => call[0].manifest.assets[0]?.source)).toEqual([
+      expect.stringContaining('token=first'),
+      expect.stringContaining('token=second'),
+    ]);
+    const checkpointRequests = (recovery.checkpoint as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[1]);
+    expect(checkpointRequests.every((request) => request.manifest.assets[0]?.source === stableSource)).toBe(true);
   });
 });

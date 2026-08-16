@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,13 +8,32 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+interface SeoRequest {
+  title?: string;
+  script?: string;
+  hook?: string;
+  niche?: string;
+  topic?: string;
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
 
   try {
-    const { title, script, hook, niche, topic } = await req.json();
+    const authorization = await authorizeProtectedFunction(req, "generate-seo");
+    if ("response" in authorization) return authorization.response;
+
+    const parsedBody = await readBoundedJson<SeoRequest>(req, 32_768);
+    if ("response" in parsedBody) return parsedBody.response;
+    const { title, script, hook, niche, topic } = parsedBody.value;
+    if (![title, hook, niche, topic].every((value) => typeof value === "undefined" || isBoundedString(value, 500))
+      || (typeof script !== "undefined" && !isBoundedString(script, 20_000))
+      || ![title, topic].some((value) => isBoundedString(value, 500, true))) {
+      return safeFailure("Invalid SEO request.", 400);
+    }
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -83,10 +103,7 @@ Return ONLY a JSON object with these fields:
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("SEO generation could not be completed.", 500);
   }
 });

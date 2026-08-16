@@ -65,7 +65,8 @@ export function CalendarView({ channels }: CalendarViewProps) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Content Calendar</h1>
-          <p className="text-sm text-slate-500">Schedule and visualize your posting pipeline</p>
+          <p className="text-sm text-slate-500">Review scheduled and published videos.</p>
+          <p className="mt-1 text-xs text-amber-800">ShortsFlow must be running at the scheduled time. If the app is closed, overdue publications resume the next time ShortsFlow starts.</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1">

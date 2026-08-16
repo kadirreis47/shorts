@@ -1,4 +1,5 @@
-import { supabase } from '@/lib/supabase';
+import { getAuthenticatedSession } from '@/auth/session';
+import { isV1EdgeFunction } from '@/app/v1Features';
 
 const FUNCTION_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
@@ -80,21 +81,15 @@ function shouldRetry(status?: number): boolean {
 }
 
 async function getAuthorizationHeader(): Promise<string> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const session = getAuthenticatedSession();
 
-  const token =
-    session?.access_token ??
-    import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
-
-  if (!token) {
+  if (!session?.access_token) {
     throw new ApiError('Supabase yetkilendirme anahtarı bulunamadı.', {
       code: 'UNAUTHORIZED',
     });
   }
 
-  return `Bearer ${token}`;
+  return `Bearer ${session.access_token}`;
 }
 
 async function parseErrorResponse(response: Response): Promise<ErrorPayload> {
@@ -137,6 +132,12 @@ async function executeRequest<T>(
   endpoint: string,
   options: ApiRequestOptions,
 ): Promise<T> {
+  if (!isV1EdgeFunction(endpoint)) {
+    throw new ApiError('This feature is not available in ShortsFlow V1.', {
+      code: 'NOT_FOUND',
+    });
+  }
+
   const {
     body,
     timeoutMs = DEFAULT_TIMEOUT_MS,

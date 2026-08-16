@@ -18,6 +18,7 @@ import {
   createRenderRecoveryStore,
   createRenderPlanAdapter,
 } from '@/core/render';
+import { materializePrivateManifestMedia } from '@/lib/mediaStorage';
 import { persistenceManager } from '@/persistence';
 import {
   createAIApplicationService,
@@ -159,6 +160,7 @@ export function registerApplicationDependencies() {
           recoveryStore: container.resolve(
             dependencyTokens.renderRecoveryStore,
           ),
+          materializeManifestForExecution: materializePrivateManifestMedia,
           outputExists: async (uri) => {
             const bridge = window.electronAPI?.ffmpeg;
             if (!bridge || uri.startsWith('render-plan://')) return true;

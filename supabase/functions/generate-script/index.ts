@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -97,27 +98,27 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
 
   try {
+    const authorization = await authorizeProtectedFunction(req, "generate-script");
+    if ("response" in authorization) return authorization.response;
+
+    const parsedBody = await readBoundedJson<ScriptRequest>(req, 16_384);
+    if ("response" in parsedBody) return parsedBody.response;
+    const body = parsedBody.value;
+    const { topic, niche = "", tone = "engaging", duration = 30 } = body;
+    if (!isBoundedString(topic, 500, true)
+      || !isBoundedString(niche, 100)
+      || !isBoundedString(tone, 100)
+      || !Number.isFinite(duration) || duration < 5 || duration > 180) {
+      return safeFailure("Invalid script request.", 400);
+    }
+
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
-
-    const body: ScriptRequest = await req.json();
-    const {
-      topic,
-      niche = "",
-      tone = "engaging",
-      duration = 30,
-    } = body;
-
-    if (!topic?.trim()) {
-      return new Response(
-        JSON.stringify({ error: "Topic is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
 
     // Check if OpenAI key exists — if so, use it for better quality
     const { data: apiKeyRow } = await supabase
@@ -217,10 +218,7 @@ The "cta" is the final call to action line.`;
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("Script generation could not be completed.", 500);
   }
 });

@@ -16,6 +16,7 @@ import { grokProvider } from '@/lib/ai/providers/grok';
 import { openAIProvider } from '@/lib/ai/providers/openai';
 import { openRouterProvider } from '@/lib/ai/providers/openrouter';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
+import { readUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 
 const STORAGE_KEY = 'shortsflow.ai.provider';
 const DEFAULT_PROVIDER: AIProviderId = 'openai';
@@ -56,9 +57,7 @@ class AIProviderManager {
     this.getProvider(providerId);
     this.activeProviderId = providerId;
 
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY, providerId);
-    }
+    writeUserScopedLocalStorage(STORAGE_KEY, providerId);
   }
 
   getProvider(providerId: AIProviderId): AIProvider {
@@ -102,11 +101,7 @@ class AIProviderManager {
   }
 
   private readStoredProvider(): AIProviderId {
-    if (typeof window === 'undefined') {
-      return DEFAULT_PROVIDER;
-    }
-
-    const stored = window.localStorage.getItem(STORAGE_KEY) as AIProviderId | null;
+    const stored = readUserScopedLocalStorage(STORAGE_KEY) as AIProviderId | null;
     return stored && this.providers.has(stored) ? stored : DEFAULT_PROVIDER;
   }
 }

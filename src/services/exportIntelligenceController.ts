@@ -3,6 +3,7 @@ import { getFFmpegBridge, type RenderEngine, type RenderJobSnapshot } from '@/co
 import { useMediaStore } from '@/store/mediaStore';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { useExportIntelligenceStore } from '@/store/exportIntelligenceStore';
+import { getValidatedOwnerId } from '@/auth/identity';
 import type { ExportIntelligenceApplicationService } from './exportIntelligenceApplicationService';
 function service(): ExportIntelligenceApplicationService { return applicationContainer.resolve(dependencyTokens.exportIntelligenceApplicationService); }
 export async function loadExportCapabilities(): Promise<void> { useExportIntelligenceStore.getState().setCapability(await service().capabilities(true)); }
@@ -28,11 +29,14 @@ export async function retryExportJob(jobId: string): Promise<ExportJob | null> {
 
 let sharedQueue: ExportQueue | null = null;
 let queueReady: Promise<ExportQueue> | null = null;
+let queueOwnerId: string | null = null;
 async function ensureExportQueue(): Promise<ExportQueue> {
-  if (!queueReady) queueReady = (async () => { await useExportIntelligenceStore.persist.rehydrate(); const queue = getExportQueue(); queue.hydrate(useExportIntelligenceStore.getState().queue); useExportIntelligenceStore.getState().setQueue(queue.snapshot()); return queue; })();
+  const ownerId = getValidatedOwnerId();
+  if (!ownerId) throw new Error('A validated user is required for export.');
+  if (!queueReady || queueOwnerId !== ownerId) { queueOwnerId = ownerId; sharedQueue = null; queueReady = (async () => { await useExportIntelligenceStore.persist.rehydrate(); if (getValidatedOwnerId() !== ownerId) throw new Error('Export owner changed during recovery.'); const queue = getExportQueue(ownerId); queue.hydrate(useExportIntelligenceStore.getState().queue); useExportIntelligenceStore.getState().setQueue(queue.snapshot()); return queue; })(); }
   return queueReady;
 }
-function getExportQueue(): ExportQueue {
+function getExportQueue(ownerId: string): ExportQueue {
   if (sharedQueue) return sharedQueue;
   const renderEngine = applicationContainer.resolve<RenderEngine>(dependencyTokens.renderEngine);
   const renderJobIds = new Map<string, string>();
@@ -69,6 +73,7 @@ function getExportQueue(): ExportQueue {
         colorSpace: job.plan.preset.colorSpace,
         profile: job.plan.preset.profile,
       } as const;
+      if (getValidatedOwnerId() !== ownerId) throw new Error('Export owner changed while private media was being prepared.');
       const submitted = await renderEngine.submit({ manifest: job.manifest, preset: renderPreset, outputPath: job.outputPath });
       renderJobIds.set(job.id, submitted.id);
       let snapshot: RenderJobSnapshot = submitted;
@@ -95,9 +100,10 @@ function getExportQueue(): ExportQueue {
       return renderJobId ? renderEngine.cancel(renderJobId) : false;
     },
   };
-  sharedQueue = service().createQueue(executor, useExportIntelligenceStore.getState().updateJob, async (job, artifact) => {
+  sharedQueue = service().createQueue(executor, (job) => { if (getValidatedOwnerId() === ownerId) useExportIntelligenceStore.getState().updateJob(job); }, async (job, artifact) => {
     const verificationJob = { ...job, artifact };
     return service().verify(verificationJob);
   });
   return sharedQueue;
 }
+export function resetExportRuntimeForOwnerTransition() { sharedQueue = null; queueReady = null; queueOwnerId = null; }

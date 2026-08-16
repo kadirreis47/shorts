@@ -30,6 +30,15 @@ import { enqueueActiveExport, loadExportCapabilities, planActiveExport } from '@
 import { useMediaStore, useProjectStore, usePublishingStore, useUIStore } from '@/store';
 import { createStudioProjectDraft, resolveRestoredStudioChannelId, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
 import { createVideoChannelAttribution, toSafePublishingTarget } from '@/services/videoChannelAttribution';
+import { reconcileCharacterProfileSelection } from '@/services/characterProfileSelection';
+import {
+  assertCurrentMediaOwnerContext,
+  captureValidatedMediaOwnerContext,
+  resolvePrivateSceneMedia,
+  toDurableScenes,
+} from '@/lib/mediaStorage';
+import { isCurrentValidatedOwnerContext } from '@/auth/identity';
+import { useAuthSessionStore } from '@/auth/session';
 
 interface StudioProps {
   channels: CanonicalChannelIdentity[];
@@ -94,6 +103,7 @@ const MUSIC_TRACKS: { id: string; name: string; url: string; mood: string }[] = 
 
 export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: StudioProps) {
   const { t } = useI18n();
+  const authenticatedUserId = useAuthSessionStore((state) => state.user?.id ?? null);
   const aiService = useMemo(
     () => applicationContainer.resolve(dependencyTokens.aiApplicationService),
     [],
@@ -183,6 +193,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const channel = channels.find((c) => c.id === channelId);
 
   useEffect(() => {
+    let cancelled = false;
     const decision = resolveStudioDraftRestore({
       currentProjectId: currentProject?.id,
       globalDraft: loadStudioDraft(),
@@ -207,7 +218,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setHook(draft.hook);
       setScript(draft.script);
       setCta(draft.cta);
-      setScenes(draft.scenes ?? []);
+      const restoredScenes = toDurableScenes(draft.scenes ?? []);
+      setScenes(restoredScenes);
+      if (restoredScenes.some((scene) => scene.imageStorage || scene.videoStorage)) {
+        void resolvePrivateSceneMedia(restoredScenes)
+          .then((resolvedScenes) => { if (!cancelled) setScenes(resolvedScenes); })
+          .catch(() => { /* Stable identity remains available for a later signed-URL retry. */ });
+      }
       setCaptionStyle(draft.captionStyle);
       setTransitionStyle(draft.transitionStyle);
       setMotionStyle(draft.motionStyle);
@@ -245,6 +262,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setDraftStatus('empty');
     }
     draftHydratedRef.current = true;
+    return () => { cancelled = true; };
   }, [channels, currentProject?.id]);
 
   const draft = useMemo<StudioDraft>(() => ({
@@ -261,7 +279,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     hook,
     script,
     cta,
-    scenes,
+    scenes: toDurableScenes(scenes),
     captionStyle,
     transitionStyle,
     motionStyle,
@@ -339,28 +357,57 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }, [channelId, channels]);
 
   useEffect(() => {
-    (async () => {
+    let active = true;
+    const ownerContext = authenticatedUserId ? captureValidatedMediaOwnerContext() : null;
+
+    void (async () => {
+      try {
       // Load visual styles
       const { data: styles } = await supabase.from('visual_styles').select('*');
+      if (!active) return;
       setVisualStyles(styles ?? []);
       // Load character profiles
-      const { data: chars } = await supabase.from('character_profiles').select('*');
-      setCharacterProfiles(chars ?? []);
+      if (ownerContext) {
+        const { data: chars, error: profileError } = await supabase
+          .from('character_profiles')
+          .select('*')
+          .eq('user_id', ownerContext.ownerId);
+        assertCurrentMediaOwnerContext(ownerContext);
+        if (!active) return;
+        const profiles = profileError ? [] : chars ?? [];
+        setCharacterProfiles(profiles);
+        setCharacterProfileId((current) => reconcileCharacterProfileSelection(current, profiles));
+      } else {
+        setCharacterProfiles([]);
+        setCharacterProfileId('');
+      }
       try {
         const status = await getProviderStatus();
+        if (!active) return;
         setHasOpenAI(status.openai.configured);
         setHasPexels(status.pexels.configured);
         setHasElevenLabs(status.elevenlabs.configured);
         setProviderStatusError('');
       } catch {
+        if (!active) return;
         // Fail closed: provider-backed controls remain unavailable until server status is known.
         setHasOpenAI(false);
         setHasPexels(false);
         setHasElevenLabs(false);
         setProviderStatusError('Provider availability could not be checked. Provider-backed tools are unavailable right now.');
       }
+      } catch {
+        // A stale owner query is deliberately ignored. A current query failure
+        // fails closed for the private profile selector without surfacing data.
+        if (!active) return;
+        if (!ownerContext || isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+          setCharacterProfiles([]);
+          setCharacterProfileId('');
+        }
+      }
     })();
-  }, []);
+    return () => { active = false; };
+  }, [authenticatedUserId]);
 
   const steps: { key: Step; label: string; icon: typeof Sparkles }[] = [
     { key: 'topic', label: t('studio.topic'), icon: Wand2 },
@@ -422,6 +469,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleLoadVoices() {
+    if (!hasElevenLabs) return;
     try {
       const v = await listVoices();
       setVoices(v);
@@ -437,6 +485,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     if (!hasOpenAI) { setError('OpenAI image generation is not configured. Contact an administrator.'); return; }
     setGeneratingVisuals(true);
     setError('');
+    const ownerContext = captureValidatedMediaOwnerContext();
     try {
       const charDesc = characterName.trim()
         ? `${characterName.trim()}, ${characterAppearance.trim()}`
@@ -446,6 +495,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       let failed = 0;
       let firstFailure: unknown;
       for (let i = 0; i < updatedScenes.length; i++) {
+        assertCurrentMediaOwnerContext(ownerContext);
         const scene = updatedScenes[i];
         const prompt = scene.imagePrompt || scene.visual || scene.text;
         const mode = scene.visualMode || visualMode;
@@ -456,13 +506,23 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             characterDesc: charDesc,
             sceneContext: scene.text,
           });
-          updatedScenes[i] = { ...scene, imageUrl: result.imageUrl, imagePrompt: result.revisedPrompt || prompt };
+          assertCurrentMediaOwnerContext(ownerContext);
+          updatedScenes[i] = {
+            ...scene,
+            imageUrl: result.imageUrl,
+            imageStorage: result.media,
+            videoUrl: undefined,
+            videoStorage: undefined,
+            imagePrompt: result.revisedPrompt || prompt,
+          };
           succeeded += 1;
         } catch (sceneError) {
+          assertCurrentMediaOwnerContext(ownerContext);
           failed += 1;
           firstFailure ??= sceneError;
         }
       }
+      assertCurrentMediaOwnerContext(ownerContext);
       setScenes(updatedScenes);
       if (failed) setError(succeeded ? `${succeeded} scene visuals were generated; ${failed} could not be generated.` : providerActionError('scene visuals', firstFailure));
     } catch (generationError) {
@@ -488,6 +548,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             ...updatedScenes[result.sceneIndex],
             imageUrl: result.imageUrl ?? updatedScenes[result.sceneIndex].imageUrl,
             videoUrl: result.videoUrl ?? updatedScenes[result.sceneIndex].videoUrl,
+            ...(result.imageUrl ? { imageStorage: undefined } : {}),
+            ...(result.videoUrl ? { videoStorage: undefined } : {}),
           };
         }
       }
@@ -501,8 +563,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleGenerateSEO() {
-    if (!script.trim()) return;
+    if (!script.trim() || generatingSEOState) return;
     setGeneratingSEOState(true);
+    setError('');
     try {
       const result = await aiService.generateSEO({
         title: title || 'Untitled',
@@ -514,8 +577,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         metadata: { source: 'studio', action: 'generate-seo' },
       });
       setSeoResult(result);
-    } catch { /* ignore */ }
-    setGeneratingSEOState(false);
+    } catch {
+      setError('SEO metadata could not be generated. Try again.');
+    } finally {
+      setGeneratingSEOState(false);
+    }
   }
 
   function handleExportSRT() {
@@ -531,34 +597,43 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleGenerateHooks() {
-    if (!topic.trim()) return;
+    if (!topic.trim() || generatingHooks) return;
     setGeneratingHooks(true);
+    setError('');
     try {
       const hooks = await aiService.generateHooks(
         { topic, niche, tone },
         { metadata: { source: 'studio', action: 'generate-hooks' } },
       );
       setHookVariations(hooks);
-    } catch { /* ignore */ }
-    setGeneratingHooks(false);
+    } catch {
+      setError('Hook generation could not be completed. Try again.');
+    } finally {
+      setGeneratingHooks(false);
+    }
   }
 
   async function handleAnalyzeScript() {
-    if (!script.trim()) return;
+    if (!script.trim() || analyzingScript) return;
     setAnalyzingScript(true);
+    setError('');
     try {
       const result = await aiService.analyzeScript(
         { script, hook, niche },
         { metadata: { source: 'studio', action: 'analyze-script' } },
       );
       setScriptAnalysis(result);
-    } catch { /* ignore */ }
-    setAnalyzingScript(false);
+    } catch {
+      setError('Script analysis could not be completed. Try again.');
+    } finally {
+      setAnalyzingScript(false);
+    }
   }
 
   async function handleTranslateSubtitles() {
-    if (scenes.length === 0) return;
+    if (scenes.length === 0 || translating) return;
     setTranslating(true);
+    setError('');
     try {
       const srt = generateSRT(scenes);
       const result = await translateSubtitles({ srt, targetLanguage });
@@ -570,8 +645,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
-    } catch { /* ignore */ }
-    setTranslating(false);
+    } catch {
+      setError('Subtitle translation could not be completed. Try again.');
+    } finally {
+      setTranslating(false);
+    }
   }
 
   async function handleGenerateSceneImage(sceneIndex: number) {
@@ -579,6 +657,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     if (!scene) return;
     if (!hasOpenAI) { setError('OpenAI image generation is not configured. Contact an administrator.'); return; }
     setGeneratingSceneImage(sceneIndex);
+    const ownerContext = captureValidatedMediaOwnerContext();
     try {
       const charDesc = characterName.trim()
         ? `${characterName.trim()}, ${characterAppearance.trim()}`
@@ -590,7 +669,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         characterDesc: charDesc,
         sceneContext: scene.text,
       });
-      setScenes(prev => prev.map((s, i) => i === sceneIndex ? { ...s, imageUrl: result.imageUrl, imagePrompt: result.revisedPrompt || s.imagePrompt } : s));
+      assertCurrentMediaOwnerContext(ownerContext);
+      setScenes(prev => prev.map((s, i) => i === sceneIndex ? {
+        ...s,
+        imageUrl: result.imageUrl,
+        imageStorage: result.media,
+        videoUrl: undefined,
+        videoStorage: undefined,
+        imagePrompt: result.revisedPrompt || s.imagePrompt,
+      } : s));
     } catch (generationError) {
       setError(providerActionError('this scene image', generationError));
     } finally {
@@ -663,7 +750,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         try {
           const images = await searchImages(query, 1);
           if (images.length > 0) {
-            updatedScenes[i] = { ...scene, imageUrl: images[0].url, videoUrl: undefined };
+            updatedScenes[i] = { ...scene, imageUrl: images[0].url, imageStorage: undefined, videoUrl: undefined, videoStorage: undefined };
             succeeded += 1;
           } else unresolved += 1;
         } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
@@ -693,7 +780,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         try {
           const videos = await searchVideos(query, 1);
           if (videos.length > 0 && videos[0].fileUrl) {
-            updatedScenes[i] = { ...scene, videoUrl: videos[0].fileUrl, imageUrl: videos[0].preview };
+            updatedScenes[i] = { ...scene, videoUrl: videos[0].fileUrl, videoStorage: undefined, imageUrl: videos[0].preview, imageStorage: undefined };
             succeeded += 1;
           } else unresolved += 1;
         } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
@@ -738,8 +825,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setRendering(true);
     setRenderProgress(0);
     setError('');
+    const ownerContext = captureValidatedMediaOwnerContext();
     try {
-      const { videoBlob, duration: renderedDuration } = await renderVideo(scenes, audioBlob, {
+      const renderScenes = scenes.some((scene) => scene.imageStorage || scene.videoStorage)
+        ? await resolvePrivateSceneMedia(toDurableScenes(scenes))
+        : scenes;
+      assertCurrentMediaOwnerContext(ownerContext);
+      const { videoBlob, duration: renderedDuration } = await renderVideo(renderScenes, audioBlob, {
         accentColor: channel?.avatar_color ?? '#10b981',
         captionStyle,
         transitionStyle,
@@ -755,11 +847,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         onProgress: setRenderProgress,
       });
 
-      const fileName = `videos/${channelId}/${Date.now()}.webm`;
-      const url = await uploadMedia(videoBlob, fileName);
-      setVideoUrl(url);
+      assertCurrentMediaOwnerContext(ownerContext);
+      const upload = await uploadMedia(videoBlob, 'videos');
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (!upload.videoUrl) throw new Error('Rendered video could not be opened after upload.');
+      setVideoUrl(upload.videoUrl);
 
-      const { data } = await supabase.from('videos').insert({
+      const { data, error: saveError } = await supabase.from('videos').insert({
         title,
         ...createVideoChannelAttribution(channel),
         narration_mode: resolveStudioAudioNarrationMode(voiceoverMode),
@@ -767,10 +861,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         script,
         hook,
         cta,
-        scenes,
+        scenes: toDurableScenes(scenes),
         duration_seconds: Math.round(renderedDuration),
         status: 'rendered',
-        video_url: url,
+        video_url: null,
+        video_storage_bucket: upload.media.bucket,
+        video_storage_path: upload.media.objectPath,
         voice_id: selectedVoice || null,
         tags: [],
         visual_mode: visualMode,
@@ -783,6 +879,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         caption_highlight_color: captionHighlightColor || null,
         beat_sync: beatSync,
       }).select().single();
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (saveError || !data) throw new Error('Rendered video metadata could not be saved.');
       setStudioVideoId(data?.id ?? null);
       setStep('publish');
     } catch (e) {
@@ -800,17 +898,23 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
     setPreparingPublish(true);
     setError('');
+    const ownerContext = captureValidatedMediaOwnerContext();
     try {
+      const exportScenes = scenes.some((scene) => scene.imageStorage || scene.videoStorage)
+        ? await resolvePrivateSceneMedia(toDurableScenes(scenes))
+        : scenes;
+      assertCurrentMediaOwnerContext(ownerContext);
       const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
       const build = await mediaEngine.buildProject({
         projectId: directorProjectId,
         title: title || topic || 'Studio video',
-        scenes,
+        scenes: exportScenes,
         audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode) },
       });
       if (!build.renderReady || build.validation.renderReady !== true) {
         throw new Error('Studio content must pass canonical media validation before export.');
       }
+      assertCurrentMediaOwnerContext(ownerContext);
       useMediaStore.getState().setBuildResult(build.project, build.manifest, build.renderReady, build.assetResolution, build.validation);
       await loadExportCapabilities();
       const plan = await planActiveExport('youtube-shorts');
@@ -1362,11 +1466,25 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400" />
                   {characterName.trim() && (
                     <button onClick={async () => {
-                      const { data } = await supabase.from('character_profiles').insert({
-                        name: characterName.trim(), appearance: characterAppearance.trim(),
-                        art_style: visualMode === 'ai_cartoon' ? 'cartoon' : visualMode === 'ai_anime' ? 'anime' : 'realistic',
-                      }).select().single();
-                      if (data) { setCharacterProfileId(data.id); setCharacterProfiles([...characterProfiles, data]); }
+                      const ownerContext = captureValidatedMediaOwnerContext();
+                      try {
+                        const { data, error: profileError } = await supabase.from('character_profiles').insert({
+                          user_id: ownerContext.ownerId,
+                          name: characterName.trim(), appearance: characterAppearance.trim(),
+                          art_style: visualMode === 'ai_cartoon' ? 'cartoon' : visualMode === 'ai_anime' ? 'anime' : 'realistic',
+                        }).select().single();
+                        assertCurrentMediaOwnerContext(ownerContext);
+                        if (profileError || !data) {
+                          setError('Character profile could not be saved. Please try again.');
+                          return;
+                        }
+                        setCharacterProfileId(data.id);
+                        setCharacterProfiles((current) => current.some((profile) => profile.id === data.id) ? current : [...current, data]);
+                      } catch {
+                        if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+                          setError('Character profile could not be saved. Please try again.');
+                        }
+                      }
                     }} className="text-xs font-medium text-blue-600 hover:underline">
                       {t('studio.characterProfile')} →
                     </button>

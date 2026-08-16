@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { PROVIDER_KEYS, providerStatusFromRows } from "./status.ts";
+import { authorizeProtectedFunction } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,6 +18,9 @@ function response(body: unknown, status = 200): Response {
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: corsHeaders });
   if (req.method !== "GET") return response({ error: "Method not allowed." }, 405);
+
+  const authorization = await authorizeProtectedFunction(req, "provider-status");
+  if ("response" in authorization) return authorization.response;
 
   const url = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");

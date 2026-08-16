@@ -18,6 +18,8 @@ const { validateFFmpegRunRequest, validateTargetPath, validateArtifactIntegrityR
 };
 const { registerYouTubeHandlers, safePublishError } = require('../../electron/youtube-ipc.cjs') as { registerYouTubeHandlers: (input: any) => () => void; safePublishError: (error: Error) => { code: string; retryable: boolean; status: number } };
 const { YouTubeCredentialError } = require('../../electron/youtube-credentials.cjs') as { YouTubeCredentialError: new (code: string, message: string) => Error };
+const owner = { ownerId: '11111111-1111-4111-8111-111111111111', generation: 1, signal: new AbortController().signal };
+const readyOwnerContext = { capture: () => owner, assertCurrent: vi.fn(), isCurrent: () => true, establish: vi.fn(), clear: vi.fn() };
 
 interface ElectronIpcMock {
   invoke: ReturnType<typeof vi.fn>;
@@ -78,18 +80,20 @@ describe('Electron FFmpeg IPC güvenliği', () => {
   });
   it('exposes only semantic YouTube account operations and never a credential resolver', async () => {
     const ipc: ElectronIpcMock = { invoke: vi.fn().mockResolvedValue(true), on: vi.fn(), removeListener: vi.fn() };
-    const bridge = createYouTubeBridge(ipc) as { connect: () => Promise<unknown>; disconnect: (ref: string) => Promise<unknown>; finalizeSelection: (selection: string, channel: string) => Promise<unknown>; resolve?: unknown };
+    const bridge = createYouTubeBridge(ipc) as { establishOwnerContext: (token: string) => Promise<unknown>; connect: () => Promise<unknown>; disconnect: (ref: string) => Promise<unknown>; finalizeSelection: (selection: string, channel: string) => Promise<unknown>; resolve?: unknown };
     expect(Object.keys(bridge).sort()).toEqual([...ALLOWED_YOUTUBE_API_KEYS].sort());
     expect(bridge.resolve).toBeUndefined();
     await bridge.connect();
     expect(ipc.invoke).toHaveBeenCalledWith('youtube:connect');
+    await bridge.establishOwnerContext('header.payload.signature');
+    expect(ipc.invoke).toHaveBeenCalledWith('youtube:owner-context', { accessToken: 'header.payload.signature' });
     await expect(bridge.disconnect('token-value')).rejects.toThrow('Invalid YouTube credential reference');
     await expect(bridge.finalizeSelection('invalid', 'UC-A')).rejects.toThrow('Invalid YouTube channel selection');
   });
   it('returns sanitized structured status failures with stable codes', async () => {
     const handlers = new Map<string, (event: unknown, input: unknown) => Promise<unknown>>();
     const electron = { app: { getPath: () => 'unused' }, ipcMain: { handle: (channel: string, handler: (event: unknown, input: unknown) => Promise<unknown>) => handlers.set(channel, handler), removeHandler: vi.fn() }, safeStorage: {} };
-    registerYouTubeHandlers({ electron, service: { status: async () => { throw new YouTubeCredentialError('secure-storage-unavailable', 'Secure credential storage is unavailable on this system.'); } } });
+    registerYouTubeHandlers({ electron, ownerContext: readyOwnerContext, service: { status: async () => { throw new YouTubeCredentialError('secure-storage-unavailable', 'Secure credential storage is unavailable on this system.'); } } });
     const result = await handlers.get('youtube:status')!({}, { credentialRef: 'youtube_11111111-1111-1111-1111-111111111111' });
     expect(result).toEqual({ ok: false, error: { code: 'secure-storage-unavailable', message: 'Secure credential storage is unavailable on this system.' } });
     expect(JSON.stringify(result)).not.toContain('token');
@@ -111,7 +115,7 @@ describe('Electron FFmpeg IPC güvenliği', () => {
   it('sanitizes analytics IPC responses and never returns credential material', async () => {
     const handlers = new Map<string, (event: unknown, input: unknown) => Promise<unknown>>();
     const electron = { app: { getPath: () => 'unused' }, ipcMain: { handle: (channel: string, handler: (event: unknown, input: unknown) => Promise<unknown>) => handlers.set(channel, handler), removeHandler: vi.fn() }, safeStorage: {} };
-    registerYouTubeHandlers({ electron, service: { status: vi.fn() }, analyticsService: { collect: async () => ({ metrics: [{ rawMetricId: 'views', value: 1, accessToken: 'access-secret', refreshToken: 'refresh-secret' }], diagnostics: [] }) } });
+    registerYouTubeHandlers({ electron, ownerContext: readyOwnerContext, service: { status: vi.fn() }, analyticsService: { collect: async () => ({ metrics: [{ rawMetricId: 'views', value: 1, accessToken: 'access-secret', refreshToken: 'refresh-secret' }], diagnostics: [] }) } });
     const result = await handlers.get('youtube:collect-analytics')!({}, { credentialRef: 'youtube_11111111-1111-1111-1111-111111111111', channelRef: 'UC-channel', remotePublicationId: 'video-1', publishedAt: '2026-08-01T00:00:00.000Z', window: '24h' });
     expect(result).toEqual({ ok: true, result: { metrics: [{ rawMetricId: 'views', value: 1, availability: undefined, observedAt: null }], diagnostics: [] } });
     expect(JSON.stringify(result)).not.toContain('secret');

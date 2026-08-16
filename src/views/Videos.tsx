@@ -15,6 +15,7 @@ import { useExportIntelligenceStore } from '@/store/exportIntelligenceStore';
 import { useUIStore } from '@/store/uiStore';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import { createVideoChannelAttribution, resolveVideoCanonicalChannelId } from '@/services/videoChannelAttribution';
+import { createPrivateMediaSignedUrl } from '@/lib/mediaStorage';
 
 interface VideosProps {
   channels: CanonicalChannelIdentity[];
@@ -321,6 +322,27 @@ function VideoDrawer({
   const { t } = useI18n();
   const [tab, setTab] = useState<'overview' | 'script' | 'analytics'>('overview');
   const [script, setScript] = useState(video.script ?? '');
+  const [playbackUrl, setPlaybackUrl] = useState<string | null>(video.video_url);
+  const [previewUnavailable, setPreviewUnavailable] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreviewUnavailable(false);
+    if (!video.video_storage_bucket || !video.video_storage_path) {
+      setPlaybackUrl(video.video_url);
+      return () => { cancelled = true; };
+    }
+    setPlaybackUrl(null);
+    void createPrivateMediaSignedUrl({
+      bucket: video.video_storage_bucket,
+      objectPath: video.video_storage_path,
+    }).then((signedUrl) => {
+      if (!cancelled) setPlaybackUrl(signedUrl);
+    }).catch(() => {
+      if (!cancelled) setPreviewUnavailable(true);
+    });
+    return () => { cancelled = true; };
+  }, [video.id, video.video_storage_bucket, video.video_storage_path, video.video_url]);
 
   async function saveScript() {
     await supabase.from('videos').update({ script, updated_at: new Date().toISOString() }).eq('id', video.id);
@@ -342,8 +364,8 @@ function VideoDrawer({
         </div>
 
         {/* Thumbnail */}
-        {video.video_url ? (
-          <video src={video.video_url} controls className="aspect-[9/16] max-h-64 w-full bg-black object-contain" />
+        {playbackUrl ? (
+          <video src={playbackUrl} controls className="aspect-[9/16] max-h-64 w-full bg-black object-contain" />
         ) : (
           <div
             className="flex aspect-[9/16] max-h-64 items-center justify-center text-white"
@@ -352,6 +374,7 @@ function VideoDrawer({
             <Play size={40} className="opacity-70" />
           </div>
         )}
+        {previewUnavailable && <p className="bg-amber-50 px-5 py-2 text-xs text-amber-800">This private video preview could not be opened. Try reopening the video.</p>}
 
         <div className="p-5">
           <h2 className="text-lg font-bold text-slate-900">{video.title}</h2>

@@ -6,6 +6,7 @@ import type {
 } from './incrementalTypes';
 import { createSceneFingerprint } from './sceneFingerprint';
 import type { RenderPreset } from './types';
+import { readUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 
 export interface IncrementalRenderPlanner {
   createPlan(input: {
@@ -177,9 +178,8 @@ function applyTransitionDependencies(
 }
 
 function loadSnapshots(): IncrementalRenderSnapshot[] {
-  if (typeof localStorage === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readUserScopedLocalStorage(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -190,9 +190,8 @@ function loadSnapshots(): IncrementalRenderSnapshot[] {
 function persistSnapshots(
   snapshots: IncrementalRenderSnapshot[],
 ): void {
-  if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshots));
+    writeUserScopedLocalStorage(STORAGE_KEY, JSON.stringify(snapshots));
   } catch {
     // Planner persistence failure must not block rendering.
   }

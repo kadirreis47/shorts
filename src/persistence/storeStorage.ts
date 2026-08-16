@@ -1,6 +1,6 @@
 import { createJSONStorage } from 'zustand/middleware';
-import { indexedDBStorage } from '@/persistence/indexedDBStorage';
+import { userScopedStateStorage } from '@/persistence/userScopedStorage';
 
 export function createPersistentStorage<T>() {
-  return createJSONStorage<T>(() => indexedDBStorage);
+  return createJSONStorage<T>(() => userScopedStateStorage);
 }

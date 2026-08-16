@@ -190,22 +190,25 @@ interface ToggleProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label?: string;
+  disabled?: boolean;
 }
 
 export function Toggle({
   checked,
   onChange,
   label,
+  disabled = false,
 }: ToggleProps) {
   return (
-    <label className="flex cursor-pointer items-center gap-3">
+    <label className={classNames('flex items-center gap-3', disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer')}>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
         onClick={() => onChange(!checked)}
+        disabled={disabled}
         className={classNames(
-          'relative h-6 w-11 rounded-full transition-colors',
+          'relative h-6 w-11 rounded-full transition-colors disabled:cursor-not-allowed',
           checked ? 'bg-emerald-500' : 'bg-slate-300',
         )}
       >

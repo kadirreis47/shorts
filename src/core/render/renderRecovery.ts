@@ -3,6 +3,8 @@ import type {
   RenderJobSnapshot,
   RenderPreset,
 } from './types';
+import { readUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
+import { canonicalMediaAssetSource } from '@/core/media/storageIdentity';
 
 export type RecoveryRecordStatus =
   | 'queued'
@@ -176,9 +178,8 @@ function mapStatus(
 }
 
 function loadRecords(): RenderRecoveryRecord[] {
-  if (typeof localStorage === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readUserScopedLocalStorage(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed)
       ? parsed.map(normalizeStoredRecord).filter(isRecoveryRecord)
@@ -189,9 +190,8 @@ function loadRecords(): RenderRecoveryRecord[] {
 }
 
 function persist(records: RenderRecoveryRecord[]): void {
-  if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    writeUserScopedLocalStorage(STORAGE_KEY, JSON.stringify(records));
   } catch {
     // Recovery persistence must never block rendering.
   }
@@ -212,7 +212,11 @@ function clone(
 
 function createRequestSnapshot(request: RenderJobRequest): RenderJobRequest | null {
   try {
-    const serialized = JSON.stringify(request);
+    const canonicalRequest = canonicalizeRecoveryRequest(request);
+    const serialized = JSON.stringify(canonicalRequest);
+    // A caller that bypasses the execution boundary must not make an expiring
+    // private Storage URL durable. Leave the job non-replayable instead.
+    if (serialized.includes('/storage/v1/object/sign/media/')) return null;
     if (new TextEncoder().encode(serialized).byteLength > MAX_RECOVERY_REQUEST_BYTES) {
       return null;
     }
@@ -220,6 +224,19 @@ function createRequestSnapshot(request: RenderJobRequest): RenderJobRequest | nu
   } catch {
     return null;
   }
+}
+
+function canonicalizeRecoveryRequest(request: RenderJobRequest): RenderJobRequest {
+  return {
+    ...request,
+    manifest: {
+      ...request.manifest,
+      assets: (request.manifest.assets ?? []).map((asset) => ({
+        ...asset,
+        source: canonicalMediaAssetSource(asset),
+      })),
+    },
+  };
 }
 
 function cloneRequest(request: RenderJobRequest): RenderJobRequest {

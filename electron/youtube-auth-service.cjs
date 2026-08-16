@@ -64,6 +64,7 @@ function createYouTubeAuthService({ vault, fetchImpl = fetch, openExternal = she
     const context = selectionContexts.get(selectionRef);
     if (!context) return null;
     selectionContexts.delete(selectionRef);
+    if (context.ownerAbort) context.owner?.signal?.removeEventListener('abort', context.ownerAbort);
     if (context.timer !== null) selectionClearTimeout(context.timer);
     return context;
   }
@@ -74,11 +75,14 @@ function createYouTubeAuthService({ vault, fetchImpl = fetch, openExternal = she
     const token = sanitizeTokenResponse(result); if (!token.accessToken) throw new YouTubeCredentialError('oauth-exchange-failed', 'YouTube authorization returned no access token.'); assertPublishingScopes(token); lifecycle('token-exchange-complete'); lifecycle('scope-validation-complete'); return token;
   }
   async function identity(token, signal) { const channels = []; const seenChannelIds = new Set(); const seenPageTokens = new Set(); let pageToken = null; do { if (pageToken) { if (seenPageTokens.has(pageToken)) throw new YouTubeCredentialError('youtube-identity-failed', 'Unable to verify the YouTube channel identity.'); seenPageTokens.add(pageToken); } const url = new URL(CHANNEL_URL); url.searchParams.set('maxResults', '50'); if (pageToken) url.searchParams.set('pageToken', pageToken); const data = await jsonFetch(fetchImpl, url.toString(), { headers: { Authorization: `${token.tokenType} ${token.accessToken}` }, signal }, 'youtube-identity-failed', 'Unable to verify the YouTube channel identity.'); const items = Array.isArray(data.items) ? data.items : []; for (const channel of items) { if (typeof channel?.id !== 'string' || !channel.id || seenChannelIds.has(channel.id)) continue; seenChannelIds.add(channel.id); channels.push({ channelId: channel.id, displayName: String(channel?.snippet?.title || channel.id) }); } pageToken = typeof data.nextPageToken === 'string' && data.nextPageToken ? data.nextPageToken : null; } while (pageToken); if (!channels.length) throw new YouTubeCredentialError('youtube-channel-missing', 'No YouTube channel was found for this account.'); lifecycle('channel-discovery-complete'); return channels; }
-  async function bind(token, account) { assertPublishingScopes(token); const credentialRef = await vault.store({ ...token, channelId: account.channelId, displayName: account.displayName }); return { platform: 'youtube', credentialRef, accountRef: account.channelId, channelRef: account.channelId, displayName: account.displayName, authenticated: true, grantedScopes: token.scopes }; }
-  async function connect() {
+  async function bind(token, account, owner) { vault.assertOwnerContext(owner); assertPublishingScopes(token); const credentialRef = await vault.store({ ...token, channelId: account.channelId, displayName: account.displayName }, owner); vault.assertOwnerContext(owner); return { platform: 'youtube', credentialRef, accountRef: account.channelId, channelRef: account.channelId, displayName: account.displayName, authenticated: true, grantedScopes: token.scopes }; }
+  async function connect(owner = vault.captureOwnerContext()) {
+    vault.assertOwnerContext(owner);
     const { clientId: configuredClientId, clientSecret: configuredClientSecret } = config(oauthConfig, clientId, clientSecret); const { verifier, challenge } = createPkce(); const state = createState(); let server; let timer; const controller = new AbortController(); let rejectDeadline;
     const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
     const withinDeadline = (operation) => Promise.race([operation, deadline]);
+    const ownerChanged = () => { try { vault.assertOwnerContext(owner); } catch (error) { controller.abort(); rejectDeadline(error); } };
+    owner.signal?.addEventListener('abort', ownerChanged, { once: true });
     try {
       const callback = await withinDeadline(new Promise((resolve, reject) => {
         server = serverFactory((request, response) => {
@@ -93,34 +97,48 @@ function createYouTubeAuthService({ vault, fetchImpl = fetch, openExternal = she
         server.once('error', () => reject(new YouTubeCredentialError('oauth-callback-failed', 'YouTube authorization callback could not start.')));
         server.listen(0, '127.0.0.1', () => { const address = server.address(); if (!address || typeof address === 'string') return reject(new YouTubeCredentialError('oauth-callback-failed', 'YouTube authorization callback could not start.')); const redirectUri = `http://127.0.0.1:${address.port}`; const auth = new URL('https://accounts.google.com/o/oauth2/v2/auth'); auth.searchParams.set('client_id', configuredClientId); auth.searchParams.set('redirect_uri', redirectUri); auth.searchParams.set('response_type', 'code'); auth.searchParams.set('scope', SCOPES.join(' ')); auth.searchParams.set('access_type', 'offline'); auth.searchParams.set('prompt', 'consent'); auth.searchParams.set('code_challenge', challenge); auth.searchParams.set('code_challenge_method', 'S256'); auth.searchParams.set('state', state); timer = setTimeout(() => { controller.abort(); rejectDeadline(new YouTubeCredentialError('oauth-timeout', 'YouTube authorization timed out while completing the connection. Please try again.')); }, timeoutMs); Promise.resolve(openExternal?.(auth.toString())).catch(() => reject(new YouTubeCredentialError('oauth-browser-failed', 'Unable to open the browser for YouTube authorization.'))); server.redirectUri = redirectUri; });
       }));
-      const token = await withinDeadline(exchange(callback, verifier, server.redirectUri, configuredClientId, configuredClientSecret, controller.signal)); const channels = await withinDeadline(identity(token, controller.signal)); if (channels.length === 1) { const result = await withinDeadline(bind(token, channels[0])); lifecycle('credential-persisted'); lifecycle('resolved'); return result; } const selectionRef = `youtube_selection_${createState()}`; const context = { token, channels, expiresAt: Date.now() + selectionTimeoutMs, timer: null }; selectionContexts.set(selectionRef, context); context.timer = selectionSetTimeout(() => removeSelectionContext(selectionRef), selectionTimeoutMs); lifecycle('selection-required'); lifecycle('resolved'); return { platform: 'youtube', status: 'selection-required', selectionRef, channels };
-    } catch (error) { lifecycle(`rejected:${error?.code || 'unknown'}`); throw error;
-    } finally { if (timer) clearTimeout(timer); controller.abort(); if (server?.listening) { server.closeAllConnections?.(); server.close(() => undefined); } }
+      vault.assertOwnerContext(owner); const token = await withinDeadline(exchange(callback, verifier, server.redirectUri, configuredClientId, configuredClientSecret, controller.signal)); vault.assertOwnerContext(owner); const channels = await withinDeadline(identity(token, controller.signal)); vault.assertOwnerContext(owner); if (channels.length === 1) { const result = await withinDeadline(bind(token, channels[0], owner)); vault.assertOwnerContext(owner); lifecycle('credential-persisted'); lifecycle('resolved'); return result; } const selectionRef = `youtube_selection_${createState()}`; const context = { token, channels, owner, expiresAt: Date.now() + selectionTimeoutMs, timer: null, ownerAbort: null }; context.ownerAbort = () => removeSelectionContext(selectionRef); selectionContexts.set(selectionRef, context); owner.signal?.addEventListener('abort', context.ownerAbort, { once: true }); context.timer = selectionSetTimeout(() => removeSelectionContext(selectionRef), selectionTimeoutMs); vault.assertOwnerContext(owner); lifecycle('selection-required'); lifecycle('resolved'); return { platform: 'youtube', status: 'selection-required', selectionRef, channels };
+    } catch (error) { vault.assertOwnerContext(owner); lifecycle(`rejected:${error?.code || 'unknown'}`); throw error;
+    } finally { owner.signal?.removeEventListener('abort', ownerChanged); if (timer) clearTimeout(timer); controller.abort(); if (server?.listening) { server.closeAllConnections?.(); server.close(() => undefined); } }
   }
-  async function finalizeSelection(selectionRef, channelId) {
+  async function finalizeSelection(selectionRef, channelId, owner = vault.captureOwnerContext()) {
+    vault.assertOwnerContext(owner);
     const context = removeSelectionContext(selectionRef);
     if (!context || context.expiresAt <= Date.now()) throw new YouTubeCredentialError('youtube-channel-selection-expired', 'YouTube channel selection expired. Reconnect the account.');
+    vault.assertOwnerContext(context.owner);
+    if (context.owner.ownerId !== owner.ownerId || context.owner.generation !== owner.generation) vault.assertOwnerContext(context.owner);
     const account = context.channels.find((channel) => channel.channelId === channelId);
     if (!account) throw new YouTubeCredentialError('youtube-channel-selection-invalid', 'The selected YouTube channel could not be verified. Reconnect the account.');
-    return bind(context.token, account);
+    return bind(context.token, account, owner);
   }
-  function cancelSelection(selectionRef) { return Boolean(removeSelectionContext(selectionRef)); }
-  async function resolveExecutionCredential(credentialRef) {
-    const material = await vault.resolve(credentialRef); if (Date.parse(material.expiresAt) > Date.now() + 60000) return material;
-    if (refreshFlights.has(credentialRef)) return refreshFlights.get(credentialRef);
+  function cancelSelection(selectionRef, owner = vault.captureOwnerContext()) { vault.assertOwnerContext(owner); const selection = selectionContexts.get(selectionRef); if (!selection) return false; vault.assertOwnerContext(selection.owner); if (selection.owner.ownerId !== owner.ownerId || selection.owner.generation !== owner.generation) vault.assertOwnerContext(selection.owner); return Boolean(removeSelectionContext(selectionRef)); }
+  async function resolveExecutionCredential(credentialRef, owner = vault.captureOwnerContext()) {
+    vault.assertOwnerContext(owner);
+    const material = await vault.resolve(credentialRef, owner); vault.assertOwnerContext(owner); if (Date.parse(material.expiresAt) > Date.now() + 60000) return material;
+    const refreshKey = `${owner.ownerId}:${owner.generation}:${credentialRef}`;
+    if (refreshFlights.has(refreshKey)) return refreshFlights.get(refreshKey);
     const flight = (async () => {
       try {
+        vault.assertOwnerContext(owner);
         if (!material.refreshToken) throw new YouTubeCredentialError('credential-reconnect-required', 'YouTube authorization has expired. Reconnect the account.');
-        const { clientId: configuredClientId, clientSecret: configuredClientSecret } = config(oauthConfig, clientId, clientSecret); const body = new URLSearchParams({ client_id: configuredClientId, client_secret: configuredClientSecret, refresh_token: material.refreshToken, grant_type: 'refresh_token' }); const refreshed = sanitizeTokenResponse(await jsonFetch(fetchImpl, TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body }, 'credential-refresh-failed', 'YouTube authorization could not be refreshed.')); const next = { ...material, ...refreshed, scopes: refreshed.scopes.length ? refreshed.scopes : material.scopes, refreshToken: refreshed.refreshToken || material.refreshToken }; assertPublishingScopes(next); await vault.update(credentialRef, next); return next;
+        const { clientId: configuredClientId, clientSecret: configuredClientSecret } = config(oauthConfig, clientId, clientSecret); const body = new URLSearchParams({ client_id: configuredClientId, client_secret: configuredClientSecret, refresh_token: material.refreshToken, grant_type: 'refresh_token' }); const refreshed = sanitizeTokenResponse(await jsonFetch(fetchImpl, TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body, signal: owner.signal }, 'credential-refresh-failed', 'YouTube authorization could not be refreshed.')); vault.assertOwnerContext(owner); const next = { ...material, ...refreshed, scopes: refreshed.scopes.length ? refreshed.scopes : material.scopes, refreshToken: refreshed.refreshToken || material.refreshToken }; assertPublishingScopes(next); await vault.update(credentialRef, next, owner); vault.assertOwnerContext(owner); return next;
       } catch (error) {
         if (error?.code === 'credential-reconnect-required') {
-          try { await vault.remove(credentialRef); } catch { /* Preserve the terminal authentication result without exposing vault details. */ }
+          try { vault.assertOwnerContext(owner); await vault.remove(credentialRef, owner); } catch { /* Preserve the terminal authentication result without exposing vault details. */ }
         }
+        vault.assertOwnerContext(owner);
         throw error;
       }
-    })(); refreshFlights.set(credentialRef, flight); try { return await flight; } finally { refreshFlights.delete(credentialRef); }
+    })(); refreshFlights.set(refreshKey, flight); try { return await flight; } finally { refreshFlights.delete(refreshKey); }
   }
-  return { connect, finalizeSelection, cancelSelection, resolveExecutionCredential, disconnect: (ref) => vault.remove(ref), status: async (ref) => ({ credentialRef: ref, authenticated: await vault.exists(ref) }) };
+  return {
+    connect,
+    finalizeSelection,
+    cancelSelection,
+    resolveExecutionCredential,
+    disconnect: async (ref, owner = vault.captureOwnerContext()) => { vault.assertOwnerContext(owner); const removed = await vault.remove(ref, owner); vault.assertOwnerContext(owner); return removed; },
+    status: async (ref, owner = vault.captureOwnerContext()) => { vault.assertOwnerContext(owner); await vault.assertAccessible(ref, owner); vault.assertOwnerContext(owner); return { credentialRef: ref, authenticated: true }; },
+  };
 }
 
 module.exports = { ANALYTICS_SCOPE, PUBLISHING_SCOPES, SCOPES, TOKEN_URL, createTokenExchangeRequest, createYouTubeAuthService };

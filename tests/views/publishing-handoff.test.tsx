@@ -169,6 +169,8 @@ describe('modern export to publish handoff', () => {
     const scheduledAt = container!.querySelector<HTMLInputElement>('[aria-label="Scheduled publish date and time"]')!;
     await act(async () => { setInputValue(scheduledAt, '2099-04-05T14:30'); });
     expect(container!.textContent).toContain('Scheduled for');
+    expect(container!.textContent).toContain('ShortsFlow must be running at the scheduled time.');
+    expect(container!.textContent).toContain('overdue publications resume the next time ShortsFlow starts.');
     const preview = Array.from(container!.querySelectorAll('button')).find((button) => button.textContent?.includes('Preview readiness'))!;
     await act(async () => { preview.click(); });
     expect(controller.buildPublishJob).toHaveBeenLastCalledWith(expect.objectContaining({ schedule: expect.objectContaining({ mode: 'scheduled', scheduledAtUtc: new Date('2099-04-05T14:30').toISOString() }) }));

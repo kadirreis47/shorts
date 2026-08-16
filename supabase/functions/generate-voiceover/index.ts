@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -6,12 +7,26 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+interface VoiceoverRequest { text?: unknown; voiceId?: unknown }
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
 
   try {
+    const authorization = await authorizeProtectedFunction(req, "generate-voiceover");
+    if ("response" in authorization) return authorization.response;
+
+    const parsedBody = await readBoundedJson<VoiceoverRequest>(req, 16_384);
+    if ("response" in parsedBody) return parsedBody.response;
+    const { text, voiceId } = parsedBody.value;
+    if (!isBoundedString(text, 5_000, true)
+      || (typeof voiceId !== "undefined" && (!isBoundedString(voiceId, 128, true) || !/^[A-Za-z0-9_-]+$/.test(voiceId)))) {
+      return safeFailure("Invalid voice generation request.", 400);
+    }
+
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -27,15 +42,7 @@ Deno.serve(async (req: Request) => {
     if (!elevenlabsKey) {
       return new Response(
         JSON.stringify({ error: "Voice generation is not configured. Contact an administrator." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    const { text, voiceId } = await req.json();
-    if (!text?.trim()) {
-      return new Response(
-        JSON.stringify({ error: "Text is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
@@ -63,11 +70,8 @@ Deno.serve(async (req: Request) => {
     );
 
     if (!response.ok) {
-      const errText = await response.text();
-      return new Response(
-        JSON.stringify({ error: `ElevenLabs request failed: ${response.status}`, detail: errText }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      console.error(JSON.stringify({ event: "edge-function.provider-failure", functionName: "generate-voiceover", providerStatus: response.status }));
+      return safeFailure("Voice provider is temporarily unavailable.", 502);
     }
 
     const audioBuffer = await response.arrayBuffer();
@@ -79,10 +83,7 @@ Deno.serve(async (req: Request) => {
       JSON.stringify({ audio: base64Audio, format: "mp3" }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("Voice generation could not be completed.", 500);
   }
 });

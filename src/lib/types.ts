@@ -2,6 +2,11 @@ export type VideoStatus = 'idea' | 'script_ready' | 'rendering' | 'rendered' | '
 
 export type VisualMode = 'auto' | 'ai_cartoon' | 'ai_realistic' | 'ai_anime' | 'ai_horror' | 'real_footage' | 'mixed';
 
+export interface MediaStorageObject {
+  bucket: 'media';
+  objectPath: string;
+}
+
 export interface Scene {
   text: string;
   duration: number;
@@ -9,6 +14,8 @@ export interface Scene {
   keywords?: string[];
   imageUrl?: string;
   videoUrl?: string;
+  imageStorage?: MediaStorageObject;
+  videoStorage?: MediaStorageObject;
   imagePrompt?: string;
   visualMode?: VisualMode;
   overlayText?: string;
@@ -55,6 +62,7 @@ export interface Voice {
 
 export interface Channel {
   id: string;
+  user_id?: string | null;
   name: string;
   handle: string | null;
   niche: string | null;
@@ -70,6 +78,7 @@ export interface Channel {
 
 export interface Video {
   id: string;
+  user_id?: string | null;
   channel_id: string | null;
   /** Null is a legacy row; its established interpretation is required narration. */
   narration_mode?: 'required' | 'silent' | null;
@@ -97,6 +106,8 @@ export interface Video {
   automation_rule_id: string | null;
   audio_url: string | null;
   video_url: string | null;
+  video_storage_bucket?: 'media' | null;
+  video_storage_path?: string | null;
   voice_id: string | null;
   render_progress: number;
   youtube_video_id: string | null;
@@ -136,9 +147,12 @@ export interface Video {
 
 export interface Asset {
   id: string;
+  user_id?: string | null;
   name: string;
   type: string;
   url: string | null;
+  storage_bucket?: 'media' | null;
+  storage_path?: string | null;
   duration_seconds: number | null;
   tags: string[];
   size_bytes: number;
@@ -206,6 +220,7 @@ export interface ScheduleItem {
 
 export interface ActivityLog {
   id: string;
+  user_id?: string | null;
   type: string;
   message: string;
   channel_id: string | null;
@@ -228,6 +243,8 @@ export interface Comment {
 }
 
 export interface AppSetting {
+  id?: string;
+  user_id?: string | null;
   key: string;
   value: Record<string, unknown>;
   updated_at: string;
@@ -357,6 +374,8 @@ export interface VisualStyle {
 
 export interface CharacterProfile {
   id: string;
+  /** Nullable only for quarantined legacy rows during the ownership transition. */
+  user_id: string | null;
   name: string;
   description: string | null;
   appearance: string | null;

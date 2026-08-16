@@ -8,8 +8,8 @@ class YouTubePublishError extends Error {
   constructor(code, message, { status = 500, retryable = false, retryAfterUtc = null } = {}) { super(message); this.name = 'YouTubePublishError'; this.code = code; this.status = status; this.retryable = retryable; this.retryAfterUtc = retryAfterUtc; }
 }
 
-function checkpointKey(request) {
-  return crypto.createHash('sha256').update(JSON.stringify([request.jobId, request.idempotencyKey, request.account.accountId, request.account.accountRef, request.account.channelRef, request.target.accountId, request.target.channelRef, request.artifact.artifactFingerprint, request.artifact.contentDigest, request.artifact.sizeBytes])).digest('hex');
+function checkpointKey(request, ownerId = null) {
+  return crypto.createHash('sha256').update(JSON.stringify([ownerId, request.jobId, request.idempotencyKey, request.account.accountId, request.account.accountRef, request.account.channelRef, request.target.accountId, request.target.channelRef, request.artifact.artifactFingerprint, request.artifact.contentDigest, request.artifact.sizeBytes])).digest('hex');
 }
 function parseConfirmedOffset(range, totalBytes) {
   if (range === null || range === undefined || range === '') return 0;
@@ -100,10 +100,17 @@ function youtubeMetadata(metadata, outboundDescription) {
   if (Object.prototype.hasOwnProperty.call(metadata.audienceFlags, 'selfDeclaredMadeForKids')) status.selfDeclaredMadeForKids = Boolean(metadata.audienceFlags.selfDeclaredMadeForKids);
   return { snippet, status };
 }
-function createYouTubePublishService({ auth, checkpoints, snapshots, transport = createYouTubeTransport(), openArtifact = openVerifiedArtifact, now = () => new Date().toISOString() }) {
+function createYouTubePublishService({ auth, ownerContext, checkpoints, snapshots, transport = createYouTubeTransport(), openArtifact = openVerifiedArtifact, now = () => new Date().toISOString() }) {
   const flights = new Map(); const active = new Map();
   if (!snapshots) throw new TypeError('Trusted upload snapshot storage is required.');
   let initialization;
+  const assertOwner = (owner) => { if (ownerContext) ownerContext.assertCurrent(owner); };
+  const ownerIsCurrent = (owner) => !ownerContext || ownerContext.isCurrent(owner);
+  const owned = async (operation, owner) => {
+    assertOwner(owner);
+    try { const result = await operation(); assertOwner(owner); return result; }
+    catch (error) { assertOwner(owner); throw error; }
+  };
   const initialize = () => {
     if (!initialization) initialization = (async () => {
       if (typeof checkpoints.list !== 'function' || typeof snapshots.cleanupOrphans !== 'function') return { removed: 0, failed: 0 };
@@ -123,28 +130,33 @@ function createYouTubePublishService({ auth, checkpoints, snapshots, transport =
     }
   };
   const restartable = (key, reason) => ({ found: false, state: 'unknown', restartRequired: true, reason, retryAfterUtc: null, checkpointKey: key });
-  const execute = async (request, reconcileOnly = false) => {
+  const execute = async (request, reconcileOnly = false, owner = undefined) => {
+    assertOwner(owner);
     if (request.platform !== 'youtube' || request.account.platform !== 'youtube') throw new YouTubePublishError('account-platform-mismatch', 'The publishing account is not a YouTube account.', { status: 400 });
     if (request.target.accountId !== request.account.accountId || request.target.channelRef !== request.account.channelRef) throw new YouTubePublishError('account-target-mismatch', 'The YouTube publishing target does not match the authenticated account binding.', { status: 400 });
     if (!request.approvalFingerprint || !request.approvedAt) throw new YouTubePublishError('publish-approval-required', 'Publishing approval is required.', { status: 400 });
-    const key = checkpointKey(request);
-    if (flights.has(key)) return flights.get(key);
+    const key = checkpointKey(request, owner?.ownerId ?? null);
+    const flightKey = `${owner?.ownerId || 'unscoped'}:${owner?.generation || 0}:${key}`;
+    if (flights.has(flightKey)) return flights.get(flightKey);
     const flight = (async () => {
-      const controller = new AbortController(); active.set(request.jobId, controller);
+      const controller = new AbortController();
+      const ownerChanged = () => controller.abort();
+      owner?.signal?.addEventListener('abort', ownerChanged, { once: true });
+      active.set(request.jobId, { controller, owner });
       try {
-        await initialize();
-        const credential = await auth.resolveExecutionCredential(request.account.credentialRef);
+        await owned(() => initialize(), owner);
+        const credential = await owned(() => auth.resolveExecutionCredential(request.account.credentialRef, owner), owner);
         if (!credential.channelId || credential.channelId !== request.account.channelRef || credential.channelId !== request.account.accountRef) throw new YouTubePublishError('youtube-channel-mismatch', 'The connected credential does not own the selected YouTube channel.', { status: 401 });
-        let checkpoint = await checkpoints.get(key);
-        if (checkpoint && checkpoint.identity !== key) throw new YouTubePublishError('youtube-upload-checkpoint-mismatch', 'Stored YouTube upload recovery state does not match this publish job.', { status: 409 });
+        let checkpoint = await owned(() => checkpoints.get(key), owner);
+        if (checkpoint && (checkpoint.identity !== key || (ownerContext && checkpoint.ownerId !== owner.ownerId))) throw new YouTubePublishError('youtube-upload-checkpoint-mismatch', 'Stored YouTube upload recovery state does not match this publish job.', { status: 409 });
         const approvalMismatch = Boolean(checkpoint && checkpoint.approvalFingerprint !== request.approvalFingerprint);
         if (checkpoint?.status === 'complete' && checkpoint.videoId) {
-          const result = await verifyKnownVideo({ credential, videoId: checkpoint.videoId, signal: controller.signal, key });
+          const result = await owned(() => verifyKnownVideo({ credential, videoId: checkpoint.videoId, signal: controller.signal, key }), owner);
           if (!approvalMismatch) return result;
-          if (result.state === 'failed') { await checkpoints.remove(key); if (checkpoint.snapshotPath) await snapshots.remove(checkpoint.snapshotPath); return restartable(key, 'prior-approval-remote-failed'); }
+          if (result.state === 'failed') { await owned(() => checkpoints.remove(key), owner); if (checkpoint.snapshotPath) await owned(() => snapshots.remove(checkpoint.snapshotPath), owner); return restartable(key, 'prior-approval-remote-failed'); }
           return { ...result, approvalMismatch: true, reason: result.reason ?? 'approval-mismatch' };
         }
-        if (!checkpoint && request.remotePublishId) return verifyKnownVideo({ credential, videoId: request.remotePublishId, signal: controller.signal, key });
+        if (!checkpoint && request.remotePublishId) return owned(() => verifyKnownVideo({ credential, videoId: request.remotePublishId, signal: controller.signal, key }), owner);
         if (reconcileOnly && !checkpoint) {
           const ambiguousEvidence = request.recovery?.remoteState === 'processing'
             || request.recovery?.remoteState === 'unknown'
@@ -158,12 +170,12 @@ function createYouTubePublishService({ auth, checkpoints, snapshots, transport =
         try {
           let remote;
           if (checkpoint) {
-            try { remote = await transport.querySession({ sessionUri: checkpoint.sessionUri, accessToken: credential.accessToken, sizeBytes: checkpoint.sizeBytes, signal: controller.signal }); }
-            catch (error) { if (error?.code === 'youtube-upload-session-expired') { await checkpoints.remove(key); checkpointDurable = false; if (snapshotPath) await snapshots.remove(snapshotPath); return restartable(key, 'session-expired'); } throw error; }
+            try { remote = await owned(() => transport.querySession({ sessionUri: checkpoint.sessionUri, accessToken: credential.accessToken, sizeBytes: checkpoint.sizeBytes, signal: controller.signal }), owner); }
+            catch (error) { if (error?.code === 'youtube-upload-session-expired') { await owned(() => checkpoints.remove(key), owner); checkpointDurable = false; if (snapshotPath) await owned(() => snapshots.remove(snapshotPath), owner); return restartable(key, 'session-expired'); } throw error; }
             if (approvalMismatch && remote.state === 'incomplete') {
               if (remote.nextOffset === 0) {
-                await checkpoints.remove(key); checkpointDurable = false;
-                if (snapshotPath) await snapshots.remove(snapshotPath);
+                await owned(() => checkpoints.remove(key), owner); checkpointDurable = false;
+                if (snapshotPath) await owned(() => snapshots.remove(snapshotPath), owner);
                 checkpoint = null; snapshotPath = null; remote = null;
                 if (reconcileOnly) return restartable(key, 'approval-mismatch-empty-session');
               } else return { found: false, state: 'unknown', approvalMismatch: true, reason: 'approval-mismatch-remote-active', retryAfterUtc: null, checkpointKey: key };
@@ -172,50 +184,50 @@ function createYouTubePublishService({ auth, checkpoints, snapshots, transport =
           }
           if (!checkpoint) {
             const metadata = youtubeMetadata(request.metadata, request.outboundDescription);
-            createdSnapshot = await snapshots.create(request.artifact.artifactPath);
+            createdSnapshot = await owned(() => snapshots.create(request.artifact.artifactPath), owner);
             snapshotPath = createdSnapshot.snapshotPath;
-            try { snapshots.assertManagedPath(snapshotPath); } catch { await snapshots.remove(snapshotPath); throw new YouTubePublishError('youtube-upload-snapshot-invalid', 'The immutable upload snapshot reference is invalid.', { status: 409 }); }
-            artifact = await openArtifact({ artifactPath: snapshotPath, sizeBytes: request.artifact.sizeBytes, contentDigest: request.artifact.contentDigest });
-            const sessionUri = await transport.createSession({ accessToken: credential.accessToken, metadata, sizeBytes: request.artifact.sizeBytes, signal: controller.signal });
-            checkpoint = { version: 1, identity: key, jobId: request.jobId, idempotencyKey: request.idempotencyKey, accountId: request.account.accountId, accountRef: request.account.accountRef, channelRef: request.account.channelRef, approvalFingerprint: request.approvalFingerprint, artifactFingerprint: request.artifact.artifactFingerprint, contentDigest: request.artifact.contentDigest, sizeBytes: request.artifact.sizeBytes, snapshotPath, sessionUri, status: 'active', videoId: null, createdAt: now(), updatedAt: now() };
-            await checkpoints.put(key, checkpoint);
+            try { snapshots.assertManagedPath(snapshotPath); } catch { await owned(() => snapshots.remove(snapshotPath), owner); throw new YouTubePublishError('youtube-upload-snapshot-invalid', 'The immutable upload snapshot reference is invalid.', { status: 409 }); }
+            artifact = await owned(() => openArtifact({ artifactPath: snapshotPath, sizeBytes: request.artifact.sizeBytes, contentDigest: request.artifact.contentDigest }), owner);
+            const sessionUri = await owned(() => transport.createSession({ accessToken: credential.accessToken, metadata, sizeBytes: request.artifact.sizeBytes, signal: controller.signal }), owner);
+            checkpoint = { version: ownerContext ? 2 : 1, ownerId: owner?.ownerId ?? undefined, identity: key, jobId: request.jobId, idempotencyKey: request.idempotencyKey, accountId: request.account.accountId, accountRef: request.account.accountRef, channelRef: request.account.channelRef, approvalFingerprint: request.approvalFingerprint, artifactFingerprint: request.artifact.artifactFingerprint, contentDigest: request.artifact.contentDigest, sizeBytes: request.artifact.sizeBytes, snapshotPath, sessionUri, status: 'active', videoId: null, createdAt: now(), updatedAt: now() };
+            await owned(() => checkpoints.put(key, checkpoint), owner);
             checkpointDurable = true;
-            try { remote = await transport.querySession({ sessionUri: checkpoint.sessionUri, accessToken: credential.accessToken, sizeBytes: checkpoint.sizeBytes, signal: controller.signal }); }
-            catch (error) { if (error?.code === 'youtube-upload-session-expired') { await checkpoints.remove(key); checkpointDurable = false; await snapshots.remove(snapshotPath); return restartable(key, 'session-expired'); } throw error; }
+            try { remote = await owned(() => transport.querySession({ sessionUri: checkpoint.sessionUri, accessToken: credential.accessToken, sizeBytes: checkpoint.sizeBytes, signal: controller.signal }), owner); }
+            catch (error) { if (error?.code === 'youtube-upload-session-expired') { await owned(() => checkpoints.remove(key), owner); checkpointDurable = false; await owned(() => snapshots.remove(snapshotPath), owner); return restartable(key, 'session-expired'); } throw error; }
           }
           while (remote.state === 'incomplete') {
             if (remote.nextOffset === checkpoint.sizeBytes) throw new YouTubePublishError('youtube-upload-ambiguous', 'YouTube received all bytes but has not confirmed the video identifier.', { status: 503, retryable: true });
             if (!artifact) {
               if (!snapshotPath) throw new YouTubePublishError('youtube-upload-snapshot-missing', 'The immutable upload snapshot is unavailable. The existing remote session will not be restarted automatically.', { status: 409 });
               try { snapshots.assertManagedPath(snapshotPath); } catch { throw new YouTubePublishError('youtube-upload-snapshot-invalid', 'The immutable upload snapshot reference is invalid.', { status: 409 }); }
-              try { artifact = await openArtifact({ artifactPath: snapshotPath, sizeBytes: request.artifact.sizeBytes, contentDigest: request.artifact.contentDigest }); }
+              try { artifact = await owned(() => openArtifact({ artifactPath: snapshotPath, sizeBytes: request.artifact.sizeBytes, contentDigest: request.artifact.contentDigest }), owner); }
               catch (error) { if (error?.code === 'artifact-missing') throw new YouTubePublishError('youtube-upload-snapshot-missing', 'The immutable upload snapshot is missing. The existing remote session requires safe user reconciliation.', { status: 409 }); throw error; }
             }
-            await artifact.assertUnchanged();
-            remote = await transport.upload({ sessionUri: checkpoint.sessionUri, accessToken: credential.accessToken, artifact, startOffset: remote.nextOffset, sizeBytes: checkpoint.sizeBytes, signal: controller.signal });
+            await owned(() => artifact.assertUnchanged(), owner);
+            remote = await owned(() => transport.upload({ sessionUri: checkpoint.sessionUri, accessToken: credential.accessToken, artifact, startOffset: remote.nextOffset, sizeBytes: checkpoint.sizeBytes, signal: controller.signal }), owner);
           }
           videoId = remote.videoId;
           const complete = { ...checkpoint, status: 'complete', videoId, updatedAt: now() };
-          await checkpoints.put(key, complete);
+          await owned(() => checkpoints.put(key, complete), owner);
           remoteComplete = true;
         } finally {
           if (artifact) await artifact.close();
-          if (snapshotPath && (remoteComplete || (createdSnapshot && !checkpointDurable))) await snapshots.remove(snapshotPath);
+          if (ownerIsCurrent(owner) && snapshotPath && (remoteComplete || (createdSnapshot && !checkpointDurable))) await owned(() => snapshots.remove(snapshotPath), owner);
         }
-        const result = await verifyKnownVideo({ credential, videoId, signal: controller.signal, key });
+        const result = await owned(() => verifyKnownVideo({ credential, videoId, signal: controller.signal, key }), owner);
         if (!completedApprovalMismatch) return result;
-        if (result.state === 'failed') { await checkpoints.remove(key); return restartable(key, 'prior-approval-remote-failed'); }
+        if (result.state === 'failed') { await owned(() => checkpoints.remove(key), owner); return restartable(key, 'prior-approval-remote-failed'); }
         return { ...result, approvalMismatch: true, reason: result.reason ?? 'approval-mismatch' };
-      } finally { active.delete(request.jobId); }
+      } finally { owner?.signal?.removeEventListener('abort', ownerChanged); const tracked = active.get(request.jobId); if (tracked?.controller === controller) active.delete(request.jobId); }
     })();
-    flights.set(key, flight); try { return await flight; } finally { flights.delete(key); }
+    flights.set(flightKey, flight); try { return await flight; } finally { flights.delete(flightKey); }
   };
   return {
     initialize,
-    publish: (request) => execute(request, false),
-    reconcile: (request) => execute(request, true),
-    cancel(jobId) { const controller = active.get(jobId); if (!controller) return false; controller.abort(); return true; },
-    async acknowledgeReceipt(request) { const key = checkpointKey(request); const checkpoint = await checkpoints.get(key); if (!checkpoint || checkpoint.status !== 'complete' || checkpoint.videoId !== request.remotePublishId) return false; if (checkpoint.snapshotPath) await snapshots.remove(checkpoint.snapshotPath); return checkpoints.remove(key); },
+    publish: (request, owner) => execute(request, false, owner),
+    reconcile: (request, owner) => execute(request, true, owner),
+    cancel(jobId, owner) { assertOwner(owner); const tracked = active.get(jobId); if (!tracked || (ownerContext && (tracked.owner?.ownerId !== owner.ownerId || tracked.owner?.generation !== owner.generation))) return false; tracked.controller.abort(); return true; },
+    async acknowledgeReceipt(request, owner) { assertOwner(owner); await owned(() => auth.resolveExecutionCredential(request.account.credentialRef, owner), owner); const key = checkpointKey(request, owner?.ownerId ?? null); const checkpoint = await owned(() => checkpoints.get(key), owner); if (!checkpoint || (ownerContext && checkpoint.ownerId !== owner.ownerId) || checkpoint.status !== 'complete' || checkpoint.videoId !== request.remotePublishId) return false; if (checkpoint.snapshotPath) await owned(() => snapshots.remove(checkpoint.snapshotPath), owner); return owned(() => checkpoints.remove(key), owner); },
   };
 }
 

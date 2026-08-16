@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createPersistentStorage } from '@/persistence/storeStorage';
+import { resolveV1View } from '@/app/v1Features';
 import type { ModalState, ViewKey } from '@/store/types';
 
 interface PersistedUIState {
@@ -29,7 +30,7 @@ export const useUIStore = create<UIState>()(
       sidebarOpen: true,
       commandPaletteOpen: false,
       activeModal: null,
-      navigate: (currentView) => set({ currentView }),
+      navigate: (currentView) => set({ currentView: resolveV1View(currentView) }),
       setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
       toggleSidebar: () =>
         set((state) => ({ sidebarOpen: !state.sidebarOpen })),
@@ -52,6 +53,14 @@ export const useUIStore = create<UIState>()(
         currentView: state.currentView,
         sidebarOpen: state.sidebarOpen,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<PersistedUIState> | undefined;
+        return {
+          ...currentState,
+          ...persisted,
+          currentView: resolveV1View(persisted?.currentView),
+        };
+      },
     },
   ),
 );

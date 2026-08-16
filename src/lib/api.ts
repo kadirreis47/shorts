@@ -2,6 +2,7 @@ import { aiManager } from '@/lib/ai';
 import type { GeneratedSEOResult } from '@/lib/ai';
 import { apiClient } from '@/lib/api/client';
 import { supabase } from '@/lib/supabase';
+import { assertCurrentOwnerMediaIdentity, uploadPrivateMedia, type PrivateMediaClass, type PrivateMediaUpload } from '@/lib/mediaStorage';
 
 import type {
   Scene,
@@ -14,6 +15,7 @@ import type {
   VisualMode,
   HookVariation,
   ScriptAnalysis,
+  MediaStorageObject,
   PredictiveScore,
   AutoClipJob,
   ViralFormula,
@@ -198,23 +200,9 @@ export async function publishToYouTube(
 
 export async function uploadMedia(
   file: Blob,
-  path: string,
-): Promise<string> {
-  const { error } = await supabase.storage
-    .from('media')
-    .upload(path, file, {
-      contentType: file.type || undefined,
-      upsert: true,
-    });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return supabase.storage
-    .from('media')
-    .getPublicUrl(path)
-    .data.publicUrl;
+  mediaClass: PrivateMediaClass,
+): Promise<PrivateMediaUpload> {
+  return uploadPrivateMedia(file, mediaClass);
 }
 
 export async function getProviderStatus(): Promise<ProviderStatus> {
@@ -331,12 +319,15 @@ export async function generateAIImage(params: {
   mode: VisualMode;
   characterDesc?: string;
   sceneContext?: string;
-}): Promise<{ imageUrl: string; revisedPrompt?: string }> {
-  return apiClient.post<{ imageUrl: string; revisedPrompt?: string }>(
+}): Promise<{ imageUrl: string; media: MediaStorageObject; revisedPrompt?: string }> {
+  const result = await apiClient.post<{ imageUrl: string; media: unknown; revisedPrompt?: string }>(
     'generate-image',
     params,
     { retryCount: 0, timeoutMs: 90_000 },
   );
+  if (typeof result.imageUrl !== 'string' || !result.imageUrl) throw new Error('Generated image returned no private viewing URL.');
+  assertCurrentOwnerMediaIdentity(result.media);
+  return { ...result, media: result.media };
 }
 
 // ============================================================

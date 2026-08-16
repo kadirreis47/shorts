@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { createPersistentStorage } from '@/persistence/storeStorage';
 import type {
   RenderPerformanceSnapshot,
   RenderStageMetric,
@@ -362,6 +363,8 @@ export const useRenderAnalyticsStore =
       {
         name: 'shortsflow.render-analytics.v1',
         version: 1,
+        storage: createPersistentStorage(),
+        skipHydration: true,
         partialize: (state) => ({
           snapshot: state.snapshot,
           history: state.history,

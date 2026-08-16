@@ -1,6 +1,8 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAuthSessionStore } from '@/auth/session';
+import { setValidatedOwnerId } from '@/auth/identity';
 import { I18nProvider } from '@/lib/i18n';
 import { saveStudioDraft, type StudioDraft } from '@/lib/studioDraft';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
@@ -16,7 +18,11 @@ const mocks = vi.hoisted(() => ({
   renderVideo: vi.fn(),
   uploadMedia: vi.fn(),
   getProviderStatus: vi.fn(async () => ({ openai: { configured: true }, elevenlabs: { configured: true }, pexels: { configured: true } })),
-  from: vi.fn(() => ({ select: vi.fn(async () => ({ data: [] })) })),
+  from: vi.fn(() => ({
+    select: vi.fn(() => Object.assign(Promise.resolve({ data: [] }), {
+      eq: vi.fn(async () => ({ data: [] })),
+    })),
+  })),
 }));
 
 vi.mock('@/core/di', () => ({
@@ -44,6 +50,8 @@ vi.mock('@/lib/videoRenderer', () => ({ renderVideo: mocks.renderVideo }));
 
 describe('Studio canonical silent export', () => {
   let container: HTMLDivElement | null = null;
+
+  beforeEach(() => { setValidatedOwnerId('studio-test-user'); useAuthSessionStore.setState({ status: 'authenticated', user: { id: 'studio-test-user' } as never, session: { access_token: 'token' } as never, error: null }); });
 
   afterEach(() => {
     container?.remove();
@@ -94,16 +102,29 @@ describe('Studio canonical silent export', () => {
   it('persists explicit silent narration mode when rendering a Studio video', async () => {
     const insert = vi.fn(); const select = vi.fn(); const single = vi.fn();
     insert.mockReturnValue({ select }); select.mockReturnValue({ single }); single.mockResolvedValue({ data: { id: 'saved-silent-video' } });
-    mocks.from.mockReturnValue({ select: vi.fn(async () => ({ data: [] })), insert } as never);
+    mocks.from.mockReturnValue({
+      select: vi.fn(() => Object.assign(Promise.resolve({ data: [] }), {
+        eq: vi.fn(async () => ({ data: [] })),
+      })),
+      insert,
+    } as never);
     mocks.renderVideo.mockResolvedValue({ videoBlob: new Blob(['video']), duration: 3 });
-    mocks.uploadMedia.mockResolvedValue('https://example.test/silent.webm');
+    mocks.uploadMedia.mockResolvedValue({
+      videoUrl: 'https://example.test/signed-silent.webm',
+      media: { bucket: 'media', objectPath: 'studio-test-user/videos/silent.webm' },
+    });
     saveStudioDraft({ ...silentDraft(), step: 'render' });
     container = document.createElement('div'); document.body.append(container);
     const root = createRoot(container);
     await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
     const render = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Render Video'));
     await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ narration_mode: 'silent' }));
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
+      narration_mode: 'silent',
+      video_url: null,
+      video_storage_bucket: 'media',
+      video_storage_path: 'studio-test-user/videos/silent.webm',
+    }));
     await act(async () => { root.unmount(); });
   });
 });

@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { authorizeProtectedFunction, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,8 +11,11 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "GET") return safeFailure("Method not allowed.", 405);
 
   try {
+    const authorization = await authorizeProtectedFunction(req, "list-voices");
+    if ("response" in authorization) return authorization.response;
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -27,7 +31,7 @@ Deno.serve(async (req: Request) => {
     if (!elevenlabsKey) {
       return new Response(
         JSON.stringify({ error: "ElevenLabs API key not configured" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
@@ -36,10 +40,8 @@ Deno.serve(async (req: Request) => {
     });
 
     if (!response.ok) {
-      return new Response(
-        JSON.stringify({ error: `ElevenLabs request failed: ${response.status}` }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      console.error(JSON.stringify({ event: "edge-function.provider-failure", functionName: "list-voices", providerStatus: response.status }));
+      return safeFailure("Voice provider is temporarily unavailable.", 502);
     }
 
     const data = await response.json();
@@ -54,10 +56,7 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ voices }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("Voice list could not be loaded.", 500);
   }
 });

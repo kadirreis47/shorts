@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { selectEncoder } from '@/core/export-intelligence';
 
 const require = createRequire(import.meta.url);
-const { parseEncoderRows } = require('../../electron/ffmpeg-service.cjs') as {
+const { parseEncoderRows, sanitizeFFmpegDiagnostic } = require('../../electron/ffmpeg-service.cjs') as {
   parseEncoderRows: (output: string) => string[];
+  sanitizeFFmpegDiagnostic: (output: string) => string;
 };
 
 const realSample = `Encoders:
@@ -43,5 +44,11 @@ describe('FFmpeg encoder capability parsing', () => {
     expect(selectEncoder(detected, 'h264', 'cpu')).toMatchObject({ encoder: 'libx264', hardware: 'cpu' });
     expect(selectEncoder(detected, 'h264', 'gpu')).toMatchObject({ encoder: 'h264_nvenc', hardware: 'gpu' });
     expect(selectEncoder(capability(['libx264']), 'h264')).toMatchObject({ encoder: 'libx264', hardware: 'cpu' });
+  });
+
+  it('redacts signed remote media URLs from persisted FFmpeg diagnostics', () => {
+    const diagnostic = sanitizeFFmpegDiagnostic('Error opening https://project.supabase.co/storage/v1/object/sign/media/user/image.png?token=signed-secret-token');
+    expect(diagnostic).toBe('Error opening [remote-media-url]');
+    expect(diagnostic).not.toContain('signed-secret-token');
   });
 });

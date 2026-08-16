@@ -360,7 +360,7 @@ async function runFFmpeg(webContents, request) {
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => {
       for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-        stderrTail.push(line); if (stderrTail.length > 30) stderrTail.shift();
+        stderrTail.push(sanitizeFFmpegDiagnostic(line)); if (stderrTail.length > 30) stderrTail.shift();
       }
     });
     child.on('error', finishError);
@@ -394,6 +394,9 @@ function resolveOutputPath(requested, jobId) {
   return path.join(dir, `${sanitize(jobId)}.mp4`);
 }
 function sanitize(value) { return String(value).replace(/[^a-z0-9_-]/gi, '_'); }
+function sanitizeFFmpegDiagnostic(value) {
+  return String(value).replace(/https?:\/\/[^\s'"<>]+/gi, '[remote-media-url]');
+}
 // Serializes a value for FFmpeg's filtergraph parser, not for a shell. The
 // renderer supplies only a placeholder; this process owns the temporary path.
 function serializeSubtitleFilterFilename(value) {
@@ -406,4 +409,4 @@ function capture(executable, args) {
     child.on('error', reject); child.on('close', code => code === 0 ? resolve(out || err) : reject(new Error(err || `Exit ${code}`)));
   });
 }
-module.exports = { registerFFmpegHandlers, verifyArtifactSnapshot, detectCapabilities, parseEncoderRows, serializeSubtitleFilterFilename, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };
+module.exports = { registerFFmpegHandlers, verifyArtifactSnapshot, detectCapabilities, parseEncoderRows, sanitizeFFmpegDiagnostic, serializeSubtitleFilterFilename, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };

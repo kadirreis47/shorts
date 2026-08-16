@@ -125,6 +125,13 @@ export interface RenderEngineOptions {
   retryPolicy?: Partial<import('./renderResilience').RenderRetryPolicy>;
   circuitBreaker?: import('./renderResilience').RenderCircuitBreaker;
   metricsCollector?: import('./renderMetrics').RenderMetricsCollector;
+  /**
+   * Resolves execution-only media immediately before an adapter runs. The
+   * engine retains and checkpoints the original canonical request.
+   */
+  materializeManifestForExecution?: (
+    manifest: RenderManifest,
+  ) => Promise<RenderManifest>;
 }
 
 export interface RenderEngine {

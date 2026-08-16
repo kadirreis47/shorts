@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,13 +18,26 @@ const HOOK_FORMULAS = [
   { formula: "Fear Hook", template: "If you don't understand {topic}, you're already losing." },
 ];
 
+interface HookRequest { topic?: unknown; niche?: unknown; tone?: unknown }
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
 
   try {
-    const { topic, niche, tone } = await req.json();
+    const authorization = await authorizeProtectedFunction(req, "generate-hooks");
+    if ("response" in authorization) return authorization.response;
+
+    const parsedBody = await readBoundedJson<HookRequest>(req, 8_192);
+    if ("response" in parsedBody) return parsedBody.response;
+    const { topic, niche, tone } = parsedBody.value;
+    if (!isBoundedString(topic, 500, true)
+      || (typeof niche !== "undefined" && !isBoundedString(niche, 100))
+      || (typeof tone !== "undefined" && !isBoundedString(tone, 100))) {
+      return safeFailure("Invalid hook request.", 400);
+    }
 
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
@@ -83,10 +97,7 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ hooks }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("Hook generation could not be completed.", 500);
   }
 });

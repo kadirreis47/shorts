@@ -1,6 +1,7 @@
 import type { Scene, VisualMode } from './types';
 import type { CaptionStyle, MotionStyle, TransitionStyle } from './videoRenderer';
 import type { AudioNarrationMode } from '@/core/media';
+import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 
 export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'publish';
 export type StudioVoiceoverMode = 'elevenlabs' | 'browser' | 'none';
@@ -47,7 +48,7 @@ const STORAGE_KEY = 'shortsflow.studio.draft.v1';
 
 export function loadStudioDraft(): StudioDraft | null {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = readUserScopedLocalStorage(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StudioDraft>;
     if (parsed.version !== 1 || typeof parsed.savedAt !== 'string') return null;
@@ -58,11 +59,11 @@ export function loadStudioDraft(): StudioDraft | null {
 }
 
 export function saveStudioDraft(draft: StudioDraft): void {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
+  writeUserScopedLocalStorage(STORAGE_KEY, JSON.stringify(draft));
 }
 
 export function clearStudioDraft(): void {
-  window.localStorage.removeItem(STORAGE_KEY);
+  removeUserScopedLocalStorage(STORAGE_KEY);
 }
 
 export function resolveStudioAudioNarrationMode(

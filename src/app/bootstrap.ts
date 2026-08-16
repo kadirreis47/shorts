@@ -12,8 +12,18 @@ import { configureSubtitleIntelligenceController } from '@/services/subtitleInte
 import { initializePublishingQueue } from '@/services/publishingController';
 
 let bootstrapPromise: Promise<void> | null = null;
+let bootstrapUserId: string | null = null;
+let bootstrapGeneration = 0;
 let detachRenderQueueInspector: (() => void) | null = null;
 let detachRenderRecoveryCenter: (() => void) | null = null;
+
+class BootstrapCancelledError extends Error {}
+
+function assertCurrentBootstrap(userId: string, generation: number) {
+  if (generation !== bootstrapGeneration || bootstrapUserId !== userId) {
+    throw new BootstrapCancelledError();
+  }
+}
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error
@@ -21,7 +31,8 @@ function getErrorMessage(error: unknown) {
     : 'Uygulama başlatılırken beklenmeyen bir hata oluştu.';
 }
 
-async function runBootstrap() {
+async function runBootstrap(userId: string, generation: number) {
+  assertCurrentBootstrap(userId, generation);
   registerApplicationDependencies();
 
   const appStore = useAppStore.getState();
@@ -59,15 +70,19 @@ async function runBootstrap() {
   );
 
   const startedAt = new Date().toISOString();
+  assertCurrentBootstrap(userId, generation);
   appStore.beginBootstrap();
   appStore.setOffline(!navigator.onLine || !isSupabaseConfigured);
   await eventBus.emit('app:bootstrap-started', { startedAt });
 
   try {
-    const hydrationResult = await persistenceManager.hydrate();
+    assertCurrentBootstrap(userId, generation);
+    const hydrationResult = await persistenceManager.hydrate(userId);
+    assertCurrentBootstrap(userId, generation);
     // Restore the single shared publishing queue, reconcile interrupted jobs,
     // and install the runtime-only next-due wake-up after persistence hydration.
     await initializePublishingQueue();
+    assertCurrentBootstrap(userId, generation);
 
     await eventBus.emit('app:hydration-completed', {
       completedAt: new Date().toISOString(),
@@ -82,13 +97,16 @@ async function runBootstrap() {
     }
 
     useUIStore.getState().resetTransientUI();
+    assertCurrentBootstrap(userId, generation);
     await useChannelStore.getState().loadChannels();
+    assertCurrentBootstrap(userId, generation);
     useAppStore.getState().markReady();
 
     await eventBus.emit('app:ready', {
       readyAt: new Date().toISOString(),
     });
   } catch (error) {
+    if (error instanceof BootstrapCancelledError) return;
     const message = getErrorMessage(error);
 
     useAppStore.getState().setError({
@@ -104,22 +122,35 @@ async function runBootstrap() {
   }
 }
 
-export function bootstrapApplication() {
-  if (!bootstrapPromise) {
-    bootstrapPromise = runBootstrap();
+export function bootstrapApplication(userId: string) {
+  if (!userId) throw new Error('An authenticated user is required before application bootstrap.');
+
+  if (!bootstrapPromise || bootstrapUserId !== userId) {
+    const generation = ++bootstrapGeneration;
+    bootstrapUserId = userId;
+    bootstrapPromise = runBootstrap(userId, generation);
   }
 
   return bootstrapPromise;
 }
 
-export function retryApplicationBootstrap() {
+export function retryApplicationBootstrap(userId: string) {
   registerApplicationDependencies();
   bootstrapPromise = null;
+  bootstrapUserId = userId;
 
   const persistenceManager = applicationContainer.resolve(
     dependencyTokens.persistenceManager,
   );
 
   void persistenceManager.retryHydration();
-  return bootstrapApplication();
+  return bootstrapApplication(userId);
+}
+
+export function invalidateApplicationBootstrap() {
+  bootstrapGeneration += 1;
+  bootstrapPromise = null;
+  bootstrapUserId = null;
+  useAppStore.getState().reset();
+  useUIStore.getState().resetTransientUI();
 }

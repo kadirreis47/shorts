@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -6,25 +7,29 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+interface SearchRequest { query?: unknown; perPage?: number }
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
+  if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
 
   try {
+    const authorization = await authorizeProtectedFunction(req, "search-videos");
+    if ("response" in authorization) return authorization.response;
+
+    const parsedBody = await readBoundedJson<SearchRequest>(req, 8_192);
+    if ("response" in parsedBody) return parsedBody.response;
+    const { query, perPage = 5 } = parsedBody.value;
+    if (!isBoundedString(query, 500, true) || !Number.isInteger(perPage) || perPage < 1 || perPage > 12) {
+      return safeFailure("Invalid video search request.", 400);
+    }
+
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
-
-    const { query, perPage = 5 } = await req.json();
-
-    if (!query?.trim()) {
-      return new Response(
-        JSON.stringify({ error: "Query is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
 
     const { data: apiKeyRow } = await supabase
       .from("api_keys")
@@ -37,7 +42,7 @@ Deno.serve(async (req: Request) => {
     if (!pexelsKey) {
       return new Response(
         JSON.stringify({ error: "Video search is not configured. Contact an administrator." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
@@ -49,10 +54,8 @@ Deno.serve(async (req: Request) => {
     );
 
     if (!response.ok) {
-      return new Response(
-        JSON.stringify({ error: `Pexels API error: ${response.status}` }),
-        { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
+      console.error(JSON.stringify({ event: "edge-function.provider-failure", functionName: "search-videos", providerStatus: response.status }));
+      return safeFailure("Video search provider is temporarily unavailable.", 502);
     }
 
     const data = await response.json();
@@ -83,10 +86,7 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ videos }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+  } catch {
+    return safeFailure("Video search could not be completed.", 500);
   }
 });

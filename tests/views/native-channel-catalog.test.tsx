@@ -1,7 +1,9 @@
 import { act } from 'react';
 import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAuthSessionStore } from '@/auth/session';
+import { setValidatedOwnerId } from '@/auth/identity';
 import type { PublishAccount } from '@/core/publishing';
 import { Sidebar } from '@/components/Sidebar';
 import { useChannels } from '@/hooks/useChannels';
@@ -234,3 +236,4 @@ describe('native channel UI catalog', () => {
     expect(container?.textContent).toContain('Second channel');
   });
 });
+  beforeEach(() => { setValidatedOwnerId('catalog-test-user'); useAuthSessionStore.setState({ status: 'authenticated', user: { id: 'catalog-test-user' } as never, session: { access_token: 'token' } as never, error: null }); });

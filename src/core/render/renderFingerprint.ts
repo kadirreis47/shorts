@@ -1,5 +1,6 @@
 import type { RenderManifest } from '@/core/media';
 import type { RenderPreset } from './types';
+import { canonicalMediaAssetSource } from '@/core/media/storageIdentity';
 
 export interface RenderFingerprintInput {
   manifest: RenderManifest;
@@ -30,6 +31,7 @@ export async function createRenderFingerprint(
 function normalizeManifest(manifest: RenderManifest): unknown {
   return {
     ...manifest,
+    assets: (manifest.assets ?? []).map((asset) => ({ ...asset, source: canonicalMediaAssetSource(asset) })),
     validation: manifest.validation
       ? {
           valid: manifest.validation.valid,

@@ -12,7 +12,15 @@ import {
   useExportIntelligenceStore,
   usePublishingStore,
   useAnalyticsStore,
+  useAIPipelineStore,
+  useRenderStore,
 } from '@/store';
+import { currentPersistenceOwnerId } from '@/persistence/userScopedStorage';
+import { useMediaStore } from '@/store/mediaStore';
+import { useRenderAnalyticsStore } from '@/store/renderAnalyticsStore';
+import { useRenderQueueInspectorStore } from '@/store/renderQueueInspectorStore';
+import { useRenderRecoveryCenterStore } from '@/store/renderRecoveryCenterStore';
+import { usePlatformOptimizationStore } from '@/store/platformOptimizationStore';
 
 export type PersistenceStoreName =
   | 'ui'
@@ -27,7 +35,8 @@ export type PersistenceStoreName =
   | 'subtitle-intelligence'
   | 'export-intelligence'
   | 'publishing'
-  | 'analytics';
+  | 'analytics'
+  | 'render-analytics';
 
 export interface PersistenceHydrationResult {
   hydratedStores: PersistenceStoreName[];
@@ -54,20 +63,40 @@ const stores = [
 ];
 
 let hydrationPromise: Promise<PersistenceHydrationResult> | null = null;
+let hydrationOwnerId: string | null = null;
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Unknown persistence error.';
 }
 
-async function hydrateAllStores(): Promise<PersistenceHydrationResult> {
+function resetPrivateMemory() {
+  const persisted = [...stores.map(({ persist }) => persist), useRenderAnalyticsStore.persist] as any[];
+  const stateStores = [useUIStore, useSettingsStore, useAIStore, useChannelStore, useProjectStore, useDirectorReportStore, useEditingStore, useAudioProductionStore, useVisualProductionStore, useSubtitleIntelligenceStore, useExportIntelligenceStore, usePublishingStore, useAnalyticsStore, useRenderAnalyticsStore] as any[];
+  const originals = persisted.map((persist) => persist.getOptions().storage);
+  persisted.forEach((persist) => persist.setOptions({ storage: { getItem: async () => null, setItem: async () => undefined, removeItem: async () => undefined } }));
+  persisted.forEach((persist, index) => {
+    const store = stateStores[index]!;
+    store.setState(store.getInitialState(), true);
+  });
+  persisted.forEach((persist, index) => persist.setOptions({ storage: originals[index] }));
+  useMediaStore.getState().clearMediaProject();
+  useAIPipelineStore.setState(useAIPipelineStore.getInitialState(), true);
+  useRenderStore.setState(useRenderStore.getInitialState(), true);
+  useRenderQueueInspectorStore.setState(useRenderQueueInspectorStore.getInitialState(), true);
+  useRenderRecoveryCenterStore.setState(useRenderRecoveryCenterStore.getInitialState(), true);
+  usePlatformOptimizationStore.setState(usePlatformOptimizationStore.getInitialState(), true);
+}
+
+async function hydrateAllStores(ownerId: string): Promise<PersistenceHydrationResult> {
   const result: PersistenceHydrationResult = {
     hydratedStores: [],
     failedStores: [],
   };
 
   await Promise.all(
-    stores.map(async ({ name, persist }) => {
+    [...stores, { name: 'render-analytics' as const, persist: useRenderAnalyticsStore.persist }].map(async ({ name, persist }) => {
       try {
+        if (currentPersistenceOwnerId() !== ownerId) return;
         await persist.rehydrate();
         result.hydratedStores.push(name);
       } catch (error) {
@@ -84,9 +113,12 @@ async function hydrateAllStores(): Promise<PersistenceHydrationResult> {
 }
 
 export const persistenceManager = {
-  hydrate() {
-    if (!hydrationPromise) {
-      hydrationPromise = hydrateAllStores();
+  hydrate(ownerId = currentPersistenceOwnerId()) {
+    if (!ownerId) throw new Error('A validated owner is required before persistence hydration.');
+    if (!hydrationPromise || hydrationOwnerId !== ownerId) {
+      hydrationOwnerId = ownerId;
+      resetPrivateMemory();
+      hydrationPromise = hydrateAllStores(ownerId);
     }
 
     return hydrationPromise;
@@ -94,6 +126,7 @@ export const persistenceManager = {
 
   retryHydration() {
     hydrationPromise = null;
+    hydrationOwnerId = null;
     return this.hydrate();
   },
 
@@ -105,5 +138,11 @@ export const persistenceManager = {
     await Promise.all(stores.map(({ persist }) => persist.clearStorage()));
   },
 };
+
+export function detachPersistenceOwner() {
+  hydrationPromise = null;
+  hydrationOwnerId = null;
+  resetPrivateMemory();
+}
 
 export type PersistenceManager = typeof persistenceManager;

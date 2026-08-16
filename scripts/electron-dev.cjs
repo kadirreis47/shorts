@@ -2,7 +2,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { loadLocalYouTubeOAuthConfig } = require('./electron-local-config.cjs');
+const { loadLocalSupabaseConfig, loadLocalYouTubeOAuthConfig } = require('./electron-local-config.cjs');
 
 const HOST = '127.0.0.1';
 const START_PORT = 5173;
@@ -96,6 +96,7 @@ function stopProcess(child) {
 
 async function main() {
   const youtubeOAuth = loadLocalYouTubeOAuthConfig();
+  const supabase = loadLocalSupabaseConfig();
   const port = await findAvailablePort();
   const devServerUrl = `http://${HOST}:${port}`;
   const viteEntry = require.resolve('vite');
@@ -174,6 +175,8 @@ async function main() {
       SHORTSFLOW_DEV_SERVER_URL: devServerUrl,
       ...(youtubeOAuth.clientId ? { SHORTSFLOW_YOUTUBE_CLIENT_ID: youtubeOAuth.clientId } : {}),
       ...(youtubeOAuth.clientSecret ? { SHORTSFLOW_YOUTUBE_CLIENT_SECRET: youtubeOAuth.clientSecret } : {}),
+      ...(supabase.url ? { VITE_SUPABASE_URL: supabase.url } : {}),
+      ...(supabase.anonKey ? { VITE_SUPABASE_ANON_KEY: supabase.anonKey } : {}),
     },
   });
 

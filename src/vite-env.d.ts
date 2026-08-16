@@ -53,6 +53,8 @@ declare global {
       version: string;
       ffmpeg: FFmpegBridge;
       youtube: Partial<YouTubePublishingClient> & {
+        establishOwnerContext?(accessToken: string): Promise<{ ok: true; result: { ready: true; ownerId: string; changed: boolean } } | { ok: false; error: { code: string; message: string } }>;
+        clearOwnerContext?(): Promise<{ ok: true; result: { ready: false; changed: boolean } }>;
         connect(): Promise<YouTubeConnectionResult | YouTubeSelectionRequired>;
         finalizeSelection(selectionRef: string, channelRef: string): Promise<YouTubeConnectionResult>;
         cancelSelection(selectionRef: string): Promise<{ selectionRef: string; cancelled: boolean }>;
