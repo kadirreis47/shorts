@@ -19,3 +19,4 @@ export * from './audioComposer';
 
 export * from './validationTypes';
 export * from './mediaValidator';
+export * from './studioProductionRecipe';

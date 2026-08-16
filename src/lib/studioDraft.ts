@@ -1,6 +1,7 @@
 import type { MediaStorageObject, Scene, VisualMode } from './types';
 import type { CaptionStyle, MotionStyle, TransitionStyle } from './videoRenderer';
 import type { AudioNarrationMode } from '@/core/media';
+import type { StudioProductionRecipeInput } from '@/core/media';
 import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 
 export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'publish';
@@ -77,4 +78,38 @@ export function resolveStudioAudioNarrationMode(
   hasCanonicalNarration = false,
 ): AudioNarrationMode {
   return voiceoverMode === 'elevenlabs' && hasCanonicalNarration ? 'required' : 'silent';
+}
+
+/**
+ * Draft persistence remains the single durable Studio state. This adapter
+ * reconstructs the versioned recipe at the canonical render boundary instead
+ * of persisting a competing copy of it.
+ */
+export function studioProductionRecipeInputFromDraft(draft: StudioDraft): StudioProductionRecipeInput {
+  if (!draft.projectId?.trim()) throw new Error('A Studio draft requires a project id before canonical rendering.');
+  return {
+    projectId: draft.projectId,
+    title: draft.title,
+    scenes: draft.scenes,
+    captionStyle: draft.captionStyle,
+    transitionStyle: draft.transitionStyle,
+    motionStyle: draft.motionStyle,
+    showSubtitles: draft.showSubtitles,
+    captionTextColor: draft.captionTextColor,
+    captionHighlightColor: draft.captionHighlightColor,
+    voiceoverMode: draft.voiceoverMode,
+    narration: draft.narration ?? null,
+    musicId: draft.musicId,
+    musicVolume: draft.musicVolume,
+    beatSync: draft.beatSync,
+    watermarkText: draft.watermarkText,
+    watermarkPosition: draft.watermarkPosition,
+    visualMode: draft.visualMode,
+    selectedStyleId: draft.selectedStyleId,
+    characterProfileId: draft.characterProfileId,
+    useBroll: draft.useBroll,
+    characterName: draft.characterName,
+    characterAppearance: draft.characterAppearance,
+    characterArtStyle: draft.characterArtStyle,
+  };
 }

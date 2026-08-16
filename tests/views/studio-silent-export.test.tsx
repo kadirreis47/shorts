@@ -98,6 +98,10 @@ describe('Studio canonical silent export', () => {
     expect(mocks.buildProject).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'silent-project',
       audio: { narrationMode: 'silent' },
+      productionRecipe: expect.objectContaining({
+        recipe: expect.objectContaining({ version: 1 }),
+        identity: expect.stringMatching(/^studio-recipe-v1-/),
+      }),
     }));
     expect(mocks.planActiveExport).toHaveBeenCalledWith('youtube-shorts');
     expect(mocks.enqueueActiveExport).toHaveBeenCalledWith(expect.anything(), 'C:/exports/silent.mp4');
@@ -238,6 +242,36 @@ describe('Studio canonical silent export', () => {
     await act(async () => { resolveRevalidation?.({ ok: true, artifact: { artifactPath: 'C:/exports/silent.mp4', sizeBytes: 1_024, contentDigest: 'a'.repeat(64) } }); });
     expect(container.textContent).not.toContain('Video Ready');
     expect(container.textContent).not.toContain('Saved video could not be opened.');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('does not attach an A-owned render completion after an owner transition', async () => {
+    const fixture = await editingFixture();
+    const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };
+    const exportJob = verifiedExportJob();
+    let resolveCompletion: ((value: ExportJob) => void) | undefined;
+    mocks.buildProject.mockResolvedValue(validBuild);
+    mocks.loadExportCapabilities.mockResolvedValue(undefined);
+    mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
+    mocks.enqueueActiveExport.mockResolvedValue(exportJob);
+    mocks.waitForActiveExport.mockImplementation(() => new Promise((resolve) => { resolveCompletion = resolve; }));
+    window.electronAPI = { ...window.electronAPI, ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/a.mp4') } } as typeof window.electronAPI;
+    saveStudioDraft({ ...silentDraft(), step: 'render' });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+    const render = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Render Video'));
+    await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    expect(resolveCompletion).toBeDefined();
+
+    setValidatedOwnerId('studio-user-b');
+    await act(async () => {
+      useAuthSessionStore.setState({ status: 'authenticated', user: { id: 'studio-user-b' } as never, session: { access_token: 'token-b' } as never, error: null });
+      await Promise.resolve();
+    });
+    await act(async () => { resolveCompletion?.(exportJob); await Promise.resolve(); });
+
+    expect(container.textContent).not.toContain('Video Ready');
     await act(async () => { root.unmount(); });
   });
 });

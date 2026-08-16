@@ -24,6 +24,7 @@ import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
+import { compileStudioProductionRecipeV1, normalizeStudioProductionRecipeV1 } from '@/core/media';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
 import { enqueueActiveExport, loadExportCapabilities, planActiveExport, waitForActiveExport } from '@/services/exportIntelligenceController';
@@ -265,6 +266,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setCompletedExport(null);
     setPostRenderNotice(null);
     setPostRenderAction(null);
+    setPreparingPublish(false);
+    setError('');
     // Owner-scoped state must never cross an authenticated owner transition.
   }, [authenticatedUserId]);
 
@@ -1077,36 +1080,65 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setError('');
     const ownerContext = captureValidatedMediaOwnerContext();
     try {
-      const exportScenes = scenes.some((scene) => scene.imageStorage || scene.videoStorage)
-        ? await resolvePrivateSceneMedia(toDurableScenes(scenes))
-        : scenes;
       assertCurrentMediaOwnerContext(ownerContext);
-      const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
-      const build = await mediaEngine.buildProject({
+      const recipe = normalizeStudioProductionRecipeV1({
         projectId: directorProjectId,
         title: title || topic || 'Studio video',
-        scenes: exportScenes,
-        audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode, hasCanonicalNarration) },
-        narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : undefined,
-      });
+        scenes: toDurableScenes(scenes),
+        captionStyle,
+        transitionStyle,
+        motionStyle,
+        showSubtitles,
+        captionTextColor,
+        captionHighlightColor,
+        voiceoverMode,
+        narration: hasCanonicalNarration && narration ? {
+          storage: narration.storage,
+          durationMs: narration.durationMs,
+          scriptRevision: narration.scriptRevision,
+          voiceId: narration.voiceId,
+        } : null,
+        musicId,
+        musicVolume,
+        beatSync,
+        watermarkText,
+        watermarkPosition,
+        visualMode,
+        selectedStyleId,
+        characterProfileId,
+        useBroll,
+        characterName,
+        characterAppearance,
+        characterArtStyle,
+      }, ownerContext);
+      const buildInput = compileStudioProductionRecipeV1(recipe);
+      const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
+      const build = await mediaEngine.buildProject(buildInput);
       if (!build.renderReady || build.validation.renderReady !== true) {
         throw new Error(canonicalMediaValidationError(build));
       }
       assertCurrentMediaOwnerContext(ownerContext);
       useMediaStore.getState().setBuildResult(build.project, build.manifest, build.renderReady, build.assetResolution, build.validation);
       await loadExportCapabilities();
+      assertCurrentMediaOwnerContext(ownerContext);
       const plan = await planActiveExport('youtube-shorts');
+      assertCurrentMediaOwnerContext(ownerContext);
       if (plan.blockingIssues.length > 0) throw new Error(plan.blockingIssues.join(' '));
       const outputPath = await window.electronAPI?.ffmpeg.pickOutputPath?.({ defaultPath: `studio-${directorProjectId}.mp4` });
+      assertCurrentMediaOwnerContext(ownerContext);
       if (!outputPath) return;
       const exportJob = await enqueueActiveExport(plan, outputPath);
+      assertCurrentMediaOwnerContext(ownerContext);
       const completed = await waitForActiveExport(exportJob.id);
+      assertCurrentMediaOwnerContext(ownerContext);
       setCompletedExport({ job: completed, revision: canonicalStudioRevision });
       setPostRenderNotice(null);
     } catch (publishError) {
-      setError(publishError instanceof Error ? publishError.message : 'Verified export could not be prepared.');
+      if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+        setError(publishError instanceof Error ? publishError.message : 'Verified export could not be prepared.');
+      }
     } finally {
-      setPreparingPublish(false);
+      if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) setPreparingPublish(false);
     }
   }
 
@@ -1944,9 +1976,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       {step === 'render' && (
         <Card className="p-6">
           <h2 className="mb-4 text-lg font-semibold text-slate-900">{t('studio.renderYourVideo')}</h2>
-          <p className="mb-4 text-sm text-slate-500">
+          <div className="mb-4 text-sm text-slate-500">
             {t('studio.renderDesc', { caption: captionStyle, transition: transitionStyle, motion: motionStyle, audio: hasCanonicalNarration ? ' + ' + t('studio.voiceoverPreview').toLowerCase() : '', music: musicBlob ? ' + ' + t('studio.bgMusic').toLowerCase() : '' })}
-          </p>
+            <p className="mt-2 text-xs text-amber-700">{t('studio.recipeExportNotice')}</p>
+          </div>
           {rendering ? (
             <div className="space-y-3">
               <div className="h-3 overflow-hidden rounded-full bg-slate-100">

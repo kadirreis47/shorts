@@ -4,6 +4,7 @@ import type { AssetResolutionReport } from './assetProviderTypes';
 import type { SubtitleTimeline } from './subtitleTypes';
 import type { AudioBuildOptions, AudioTimeline } from './audioTypes';
 import type { MediaValidationReport } from './validationTypes';
+import type { NormalizedStudioProductionRecipeV1 } from './studioProductionRecipe';
 
 export type MediaAssetType =
   | 'image' | 'video' | 'ai_image' | 'broll' | 'overlay' | 'logo'
@@ -116,6 +117,7 @@ export interface MediaProjectMetadata {
   createdAt: string;
   updatedAt: string;
   tags: string[];
+  productionRecipe?: NormalizedStudioProductionRecipeV1;
 }
 
 export interface MediaProject {
@@ -158,6 +160,7 @@ export interface CreateMediaProjectInput {
     scriptRevision: string;
     voiceId: string;
   };
+  productionRecipe?: NormalizedStudioProductionRecipeV1;
 }
 
 export interface MediaProjectBuildResult {

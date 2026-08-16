@@ -75,6 +75,7 @@ export function createMediaEngine(
           createdAt: now,
           updatedAt: now,
           tags: input.tags ?? [],
+          productionRecipe: input.productionRecipe,
         },
         scenes,
         assets,
