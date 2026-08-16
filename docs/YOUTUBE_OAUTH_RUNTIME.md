@@ -23,5 +23,11 @@ the release validation and package build:
 $env:SHORTSFLOW_YOUTUBE_CLIENT_ID='<desktop-client-id>'
 $env:SHORTSFLOW_YOUTUBE_CLIENT_SECRET='<matching-desktop-client-secret>'
 npm.cmd run validate:release:v1
-npm.cmd run electron:build
+npm.cmd run electron:build # internal unsigned RC / smoke build
 ```
+
+For a public Windows release, use `npm.cmd run electron:release` after setting
+the Windows signing variables described in
+[Windows code-signing release contract](./WINDOWS_CODE_SIGNING.md). The public
+command retains this YouTube runtime validation and additionally requires a
+valid Authenticode signature.
