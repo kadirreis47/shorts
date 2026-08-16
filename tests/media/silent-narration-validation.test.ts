@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createManifestRevisionId } from '@/core/editing';
 import { TypedEventBus, type ApplicationEventMap } from '@/core/events';
-import { createRenderFingerprint, type RenderPreset } from '@/core/render';
+import { buildFFmpegCommand, createRenderFingerprint, type RenderPreset } from '@/core/render';
 import {
   buildRenderManifest,
   createAssetProviderEngine,
@@ -53,6 +53,7 @@ describe('canonical silent narration validation', () => {
     const project = structuredClone(build.project);
     project.subtitles.cues = [];
     project.timeline.scenes[0].durationMs = 0;
+    project.scenes[0].sourceScene.visualMode = 'ai_realistic';
     const report = structuredClone(build.assetResolution);
     report.resolutions[0].asset = null;
     report.resolvedCount -= 1;
@@ -88,6 +89,55 @@ describe('canonical silent narration validation', () => {
     expect(second).toBe(first);
     expect(narrated).not.toBe(first);
   });
+
+  it('accepts the deterministic auto composition used by the Studio preview and FFmpeg export', async () => {
+    const build = await buildFixture('silent');
+    const project = structuredClone(build.project);
+    const report = structuredClone(build.assetResolution);
+    project.scenes.forEach((scene) => {
+      scene.sourceScene = { ...scene.sourceScene, imageUrl: undefined, videoUrl: undefined, visualMode: 'auto' };
+      scene.assetIds = [];
+    });
+    project.timeline.scenes.forEach((scene) => { scene.assetIds = []; });
+    project.assets = [];
+    report.resolutions.forEach((resolution) => { resolution.asset = null; });
+    report.resolvedCount = 0;
+    report.unresolvedCount = report.resolutions.length;
+    const manifest = buildRenderManifest(project);
+    const validation = validateMediaProject({ project, manifest, assetResolution: report });
+    manifest.validation = validation;
+
+    expect(validation.issues.map((issue) => issue.code)).not.toContain('SCENE_ASSET_UNRESOLVED');
+    expect(validation.renderReady).toBe(true);
+    const plan = buildFFmpegCommand({
+      manifest,
+      preset: {
+        id: 'composition-test', name: 'Composition test', container: 'mp4', videoCodec: 'h264',
+        audioCodec: 'aac', quality: 'standard', hardwareAcceleration: 'disabled',
+      },
+    });
+    expect(plan.args).toContain('lavfi');
+    expect(plan.args.join(' ')).toContain('color=c=');
+  });
+
+  it('rejects a signed-only or foreign scene URL instead of treating it as canonical media', async () => {
+    const build = await buildFixture('silent');
+    const project = structuredClone(build.project);
+    const report = structuredClone(build.assetResolution);
+    const signedUrl = 'https://example.supabase.co/storage/v1/object/sign/media/owner/image.png?token=expired';
+    project.scenes[0].sourceScene = { ...project.scenes[0].sourceScene, imageUrl: signedUrl };
+    const assetId = project.scenes[0].assetIds[0]!;
+    const asset = project.assets.find((candidate) => candidate.id === assetId)!;
+    asset.source = signedUrl;
+    report.resolutions[0].asset = asset;
+    const manifest = buildRenderManifest(project);
+    const validation = validateMediaProject({ project, manifest, assetResolution: report });
+
+    expect(validation.issues).toContainEqual(expect.objectContaining({
+      code: 'SCENE_MEDIA_SOURCE_INVALID', severity: 'error', sceneId: project.scenes[0].id,
+    }));
+    expect(validation.renderReady).toBe(false);
+  });
 });
 
 async function buildFixture(narrationMode: 'required' | 'silent'): Promise<MediaProjectBuildResult> {
@@ -98,9 +148,9 @@ async function buildFixture(narrationMode: 'required' | 'silent'): Promise<Media
     title: 'Narration validation fixture',
     audio: { narrationMode },
     scenes: [
-      { text: 'A clear opening line.', duration: 3, visual: 'Opening', imageUrl: 'https://example.test/opening.jpg' },
-      { text: 'A useful middle explanation.', duration: 4, visual: 'Middle', imageUrl: 'https://example.test/middle.jpg' },
-      { text: 'A concise closing line.', duration: 3, visual: 'Closing', imageUrl: 'https://example.test/closing.jpg' },
+      { text: 'A clear opening line.', duration: 3, visual: 'Opening', imageUrl: 'https://images.pexels.com/photos/opening.jpg' },
+      { text: 'A useful middle explanation.', duration: 4, visual: 'Middle', imageUrl: 'https://images.pexels.com/photos/middle.jpg' },
+      { text: 'A concise closing line.', duration: 3, visual: 'Closing', imageUrl: 'https://images.pexels.com/photos/closing.jpg' },
     ],
   });
 }

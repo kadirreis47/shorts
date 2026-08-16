@@ -58,6 +58,24 @@ function providerActionError(action: string, error: unknown): string {
   return `Unable to complete ${action}. Check your connection and try again.`;
 }
 
+function canonicalMediaValidationError(build: {
+  project: { scenes: Array<{ id: string }> };
+  validation: { issues: Array<{ code: string; sceneId?: string }> };
+}): string {
+  const blockedSceneIds = new Set(
+    build.validation.issues
+      .filter((issue) => issue.code === 'SCENE_ASSET_UNRESOLVED' || issue.code === 'SCENE_MEDIA_SOURCE_INVALID')
+      .map((issue) => issue.sceneId)
+      .filter((sceneId): sceneId is string => Boolean(sceneId)),
+  );
+  const sceneNumbers = build.project.scenes
+    .map((scene, index) => blockedSceneIds.has(scene.id) ? index + 1 : null)
+    .filter((index): index is number => index !== null);
+  return sceneNumbers.length > 0
+    ? `Export requires supported canonical media for scene${sceneNumbers.length === 1 ? '' : 's'} ${sceneNumbers.join(', ')}.`
+    : 'Studio content must pass canonical media validation before export.';
+}
+
 const CAPTION_STYLES: { key: CaptionStyle; label: string; desc: string }[] = [
   { key: 'karaoke', label: 'Karaoke', desc: 'Word-by-word pop with accent color' },
   { key: 'highlight', label: 'Highlight Box', desc: 'Active word gets a colored block' },
@@ -912,7 +930,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode) },
       });
       if (!build.renderReady || build.validation.renderReady !== true) {
-        throw new Error('Studio content must pass canonical media validation before export.');
+        throw new Error(canonicalMediaValidationError(build));
       }
       assertCurrentMediaOwnerContext(ownerContext);
       useMediaStore.getState().setBuildResult(build.project, build.manifest, build.renderReady, build.assetResolution, build.validation);

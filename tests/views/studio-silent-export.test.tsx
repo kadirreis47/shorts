@@ -99,6 +99,34 @@ describe('Studio canonical silent export', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it('identifies the blocking scene instead of showing only a generic canonical-media failure', async () => {
+    const fixture = await editingFixture();
+    mocks.buildProject.mockResolvedValue({
+      ...fixture,
+      renderReady: false,
+      validation: {
+        ...fixture.validation,
+        valid: false,
+        renderReady: false,
+        issues: [{ code: 'SCENE_ASSET_UNRESOLVED', sceneId: fixture.project.scenes[0].id }],
+      },
+    });
+    saveStudioDraft(silentDraft());
+
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const publish = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Export & publish safely'));
+    await act(async () => { publish?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    expect(container.textContent).toContain('Export requires supported canonical media for scene 1.');
+    expect(mocks.planActiveExport).not.toHaveBeenCalled();
+    await act(async () => { root.unmount(); });
+  });
+
   it('persists explicit silent narration mode when rendering a Studio video', async () => {
     const insert = vi.fn(); const select = vi.fn(); const single = vi.fn();
     insert.mockReturnValue({ select }); select.mockReturnValue({ single }); single.mockResolvedValue({ data: { id: 'saved-silent-video' } });

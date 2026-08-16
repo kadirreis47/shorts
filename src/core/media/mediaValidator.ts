@@ -1,9 +1,12 @@
 import type { AssetResolutionReport } from './assetProviderTypes';
 import { resolveAudioNarrationMode } from './audioTypes';
 import type {
+  MediaAsset,
   MediaProject,
+  MediaScene,
   RenderManifest,
 } from './types';
+import { mediaStorageIdentityFromMetadata, privateStorageSource } from './storageIdentity';
 import type {
   MediaValidationCategory,
   MediaValidationIssue,
@@ -141,9 +144,12 @@ function validateAssets(
 ): void {
   const sceneCount = Math.max(project.scenes.length, 1);
   const coverage = report.resolvedCount / sceneCount;
+  const scenesById = new Map(project.scenes.map((scene) => [scene.id, scene]));
 
   for (const resolution of report.resolutions) {
     if (!resolution.asset) {
+      const scene = scenesById.get(resolution.sceneId);
+      if (scene && supportsBuiltInComposition(scene)) continue;
       addIssue(
         issues,
         'SCENE_ASSET_UNRESOLVED',
@@ -152,6 +158,15 @@ function validateAssets(
         'Sahne için görsel veya video varlığı çözümlenemedi.',
         resolution.sceneId,
         { queries: resolution.query.queries },
+      );
+    } else if (!hasCanonicalAssetSource(resolution.asset)) {
+      addIssue(
+        issues,
+        'SCENE_MEDIA_SOURCE_INVALID',
+        'assets',
+        'error',
+        'Sahne medyasÄ± desteklenen kalÄ±cÄ± bir kaynak deÄŸil.',
+        resolution.sceneId,
       );
     }
   }
@@ -175,6 +190,42 @@ function validateAssets(
       `${report.duplicateCandidatesRejected} tekrar eden asset adayı elendi.`,
     );
   }
+}
+
+/**
+ * Studio's default/auto mode deliberately renders a deterministic FFmpeg
+ * colour composition when no provider media is selected. This is canonical:
+ * its scene order, duration and colour are all derived from the manifest.
+ * Explicit provider/AI modes still require a concrete canonical asset.
+ */
+function supportsBuiltInComposition(scene: MediaScene): boolean {
+  const source = scene.sourceScene;
+  const hasDeclaredMedia = Boolean(
+    source.imageStorage || source.videoStorage || source.imageUrl || source.videoUrl,
+  );
+  return !hasDeclaredMedia && (source.visualMode == null || source.visualMode === 'auto');
+}
+
+function hasCanonicalAssetSource(asset: MediaAsset): boolean {
+  const storageIdentity = mediaStorageIdentityFromMetadata(asset.metadata);
+  if (storageIdentity) return asset.source === privateStorageSource(storageIdentity);
+  if (isTrustedPexelsMediaUrl(asset.source)) return true;
+  return isLocalMediaPath(asset.source);
+}
+
+function isTrustedPexelsMediaUrl(source: string): boolean {
+  try {
+    const url = new URL(source);
+    return url.protocol === 'https:' && (
+      url.hostname === 'images.pexels.com' || url.hostname === 'videos.pexels.com'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isLocalMediaPath(source: string): boolean {
+  return /^[a-z]:[\\/]/i.test(source) || source.startsWith('file:///');
 }
 
 function validateSubtitles(
