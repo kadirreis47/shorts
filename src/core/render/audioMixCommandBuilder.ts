@@ -55,7 +55,7 @@ export function buildAudioMixCommand(
 
   const inputArgs = resolved.flatMap(({ segment, asset }) => {
     const args: string[] = [];
-    if (segment.type === 'music' || asset.durationMs == null) {
+    if (segment.type === 'music') {
       args.push('-stream_loop', '-1');
     }
     args.push('-i', asset.source);
@@ -159,8 +159,8 @@ function buildSegmentFilters(
     );
 
     const chain = [
-      `[${inputIndex}:a]`,
       `atrim=duration=${durationSeconds.toFixed(3)}`,
+      `apad=whole_dur=${durationSeconds.toFixed(3)}`,
       'asetpts=PTS-STARTPTS',
       'aresample=48000',
       'aformat=sample_fmts=fltp:channel_layouts=stereo',
@@ -177,7 +177,7 @@ function buildSegmentFilters(
     }
 
     chain.push(`adelay=${delayMs}|${delayMs}[${output}]`);
-    filters.push(chain.join(','));
+    filters.push(`[${inputIndex}:a]${chain.join(',')}`);
     return output;
   });
 }

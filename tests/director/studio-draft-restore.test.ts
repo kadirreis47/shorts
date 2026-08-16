@@ -3,10 +3,11 @@ import { resolveStudioAudioNarrationMode, type StudioDraft } from '@/lib/studioD
 import { createStudioProjectDraft, resolveRestoredStudioChannelId, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
 
 describe('Studio draft restore isolation', () => {
-  it('maps only the explicit no-voice choice to canonical silent narration', () => {
+  it('requires a durable ElevenLabs narration asset for canonical narration', () => {
     expect(resolveStudioAudioNarrationMode('none')).toBe('silent');
-    expect(resolveStudioAudioNarrationMode('browser')).toBe('required');
-    expect(resolveStudioAudioNarrationMode('elevenlabs')).toBe('required');
+    expect(resolveStudioAudioNarrationMode('browser')).toBe('silent');
+    expect(resolveStudioAudioNarrationMode('elevenlabs')).toBe('silent');
+    expect(resolveStudioAudioNarrationMode('elevenlabs', true)).toBe('required');
   });
 
   it('auto-selects one available channel only when the restored draft has no prior selection', () => {

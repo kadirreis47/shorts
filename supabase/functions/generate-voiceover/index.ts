@@ -74,16 +74,58 @@ Deno.serve(async (req: Request) => {
       return safeFailure("Voice provider is temporarily unavailable.", 502);
     }
 
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    if (!contentType.startsWith("audio/mpeg")) {
+      console.error(JSON.stringify({ event: "edge-function.provider-invalid-audio", functionName: "generate-voiceover", contentType: contentType.slice(0, 80) }));
+      return safeFailure("Voice provider returned an invalid audio response.", 502);
+    }
     const audioBuffer = await response.arrayBuffer();
-    const base64Audio = btoa(
-      String.fromCharCode(...new Uint8Array(audioBuffer)),
+    const durationMs = mp3DurationMs(new Uint8Array(audioBuffer));
+    if (durationMs === null) return safeFailure("Voice provider returned invalid audio.", 502);
+    const objectPath = `${authorization.userId}/voiceovers/${crypto.randomUUID()}.mp3`;
+    const { error: uploadError } = await supabase.storage.from("media").upload(
+      objectPath,
+      new Uint8Array(audioBuffer),
+      { contentType: "audio/mpeg", upsert: false },
     );
+    if (uploadError) {
+      console.error(JSON.stringify({ event: "edge-function.storage-upload-failure", functionName: "generate-voiceover", code: typeof uploadError.name === "string" ? uploadError.name : "UNKNOWN" }));
+      return safeFailure("Voice audio could not be stored.", 502);
+    }
+    const { data: signed, error: signError } = await supabase.storage.from("media").createSignedUrl(objectPath, 60 * 60);
+    if (signError || !signed?.signedUrl) {
+      console.error(JSON.stringify({ event: "edge-function.storage-sign-failure", functionName: "generate-voiceover" }));
+      return safeFailure("Voice audio could not be opened.", 502);
+    }
 
     return new Response(
-      JSON.stringify({ audio: base64Audio, format: "mp3" }),
+      JSON.stringify({ media: { bucket: "media", objectPath }, durationMs, playbackUrl: signed.signedUrl, format: "mp3" }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch {
     return safeFailure("Voice generation could not be completed.", 500);
   }
 });
+
+function mp3DurationMs(bytes: Uint8Array): number | null {
+  if (bytes.length < 4 || bytes.length > 25_000_000) return null;
+  let offset = bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33
+    ? 10 + ((bytes[6] & 0x7f) << 21) + ((bytes[7] & 0x7f) << 14) + ((bytes[8] & 0x7f) << 7) + (bytes[9] & 0x7f) + ((bytes[5] & 0x10) ? 10 : 0) : 0;
+  if (offset >= bytes.length) return null;
+  const end = bytes.length >= 128 && bytes[bytes.length - 128] === 0x54 && bytes[bytes.length - 127] === 0x41 && bytes[bytes.length - 126] === 0x47 ? bytes.length - 128 : bytes.length;
+  let samples = 0; let sampleRate = 0; let frames = 0;
+  while (offset + 4 <= end) {
+    if (bytes[offset] !== 0xff || (bytes[offset + 1] & 0xe0) !== 0xe0) return null;
+    const version = (bytes[offset + 1] >> 3) & 3; const layer = (bytes[offset + 1] >> 1) & 3;
+    const bitrateIndex = (bytes[offset + 2] >> 4) & 15; const rateIndex = (bytes[offset + 2] >> 2) & 3;
+    if (version === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || rateIndex === 3) return null;
+    const rates = version === 3 ? [44100, 48000, 32000] : version === 2 ? [22050, 24000, 16000] : [11025, 12000, 8000];
+    sampleRate = rates[rateIndex]; const bitrates = version === 3 && layer === 3 ? [0,32,64,96,128,160,192,224,256,288,320,352,384,416,448] : version === 3 ? [0,32,40,48,56,64,80,96,112,128,160,192,224,256,320] : [0,8,16,24,32,40,48,56,64,80,96,112,128,144,160];
+    const bitrate = bitrates[bitrateIndex] * 1000; const frameSamples = layer === 3 ? 384 : layer === 1 ? (version === 3 ? 1152 : 576) : 1152;
+    const frameLength = layer === 3 ? Math.floor((12 * bitrate / sampleRate + ((bytes[offset + 2] >> 1) & 1)) * 4) : Math.floor(((version === 3 ? 144 : 72) * bitrate / sampleRate) + ((bytes[offset + 2] >> 1) & 1));
+    if (frameLength < 4 || offset + frameLength > end) return null;
+    samples += frameSamples; frames += 1; offset += frameLength;
+  }
+  const durationMs = Math.round(samples * 1000 / sampleRate);
+  return frames >= 2 && offset === end && Number.isSafeInteger(durationMs) && durationMs > 0 && durationMs <= 15 * 60_000 ? durationMs : null;
+}

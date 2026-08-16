@@ -113,6 +113,17 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(protectedSource).not.toContain('prompt');
   });
 
+  it('stores generated voiceovers under the verified owner rather than returning durable audio bytes', () => {
+    const source = sourceFor('generate-voiceover');
+    expect(source).toContain('`${authorization.userId}/voiceovers/${crypto.randomUUID()}.mp3`');
+    expect(source).toContain('.from("media").upload(');
+    expect(source).toContain('contentType: "audio/mpeg"');
+    expect(source).toContain('media: { bucket: "media", objectPath }');
+    expect(source).not.toContain('base64Audio');
+    expect(source).not.toContain('btoa(');
+    expect(source).not.toMatch(/(?:ownerId|objectPath|bucket)\s*:\s*parsedBody\.value/);
+  });
+
   it('keeps retired YouTube functions deterministically fail closed', () => {
     expect(manifest.retiredFailClosed).toEqual(['youtube-auth', 'youtube-publish']);
     for (const name of manifest.retiredFailClosed) {

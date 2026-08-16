@@ -6,7 +6,7 @@ import {
   Activity, Languages, Eye, EyeOff, ZoomIn, ZoomOut, Save, RotateCcw,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
+import type { MediaStorageObject, Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
@@ -26,7 +26,7 @@ import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
-import { enqueueActiveExport, loadExportCapabilities, planActiveExport } from '@/services/exportIntelligenceController';
+import { enqueueActiveExport, loadExportCapabilities, planActiveExport, waitForActiveExport } from '@/services/exportIntelligenceController';
 import { useMediaStore, useProjectStore, usePublishingStore, useUIStore } from '@/store';
 import { createStudioProjectDraft, resolveRestoredStudioChannelId, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
 import { createVideoChannelAttribution, toSafePublishingTarget } from '@/services/videoChannelAttribution';
@@ -34,6 +34,7 @@ import { reconcileCharacterProfileSelection } from '@/services/characterProfileS
 import {
   assertCurrentMediaOwnerContext,
   captureValidatedMediaOwnerContext,
+  createPrivateMediaSignedUrl,
   resolvePrivateSceneMedia,
   toDurableScenes,
 } from '@/lib/mediaStorage';
@@ -56,6 +57,12 @@ function providerActionError(action: string, error: unknown): string {
   const message = error instanceof Error ? error.message : '';
   if (/not configured|not available/i.test(message)) return `The provider for ${action} is not configured. Contact an administrator.`;
   return `Unable to complete ${action}. Check your connection and try again.`;
+}
+
+function narrationRevision(text: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
+  return `${text.length}-${(hash >>> 0).toString(16)}`;
 }
 
 function canonicalMediaValidationError(build: {
@@ -194,6 +201,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [selectedVoice, setSelectedVoice] = useState('');
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState('');
+  const [narration, setNarration] = useState<{ storage: MediaStorageObject; durationMs: number; scriptRevision: string; voiceId: string } | null>(null);
   const [generatingVoice, setGeneratingVoice] = useState(false);
 
   const [renderProgress, setRenderProgress] = useState(0);
@@ -209,6 +217,24 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const draftHydratedRef = useRef(false);
 
   const channel = channels.find((c) => c.id === channelId);
+
+  function invalidateNarration(): void {
+    setNarration(null);
+    setAudioBlob(null);
+    setAudioUrl('');
+  }
+
+  const hasCanonicalNarration = Boolean(
+    narration
+    && voiceoverMode === 'elevenlabs'
+    && narration.voiceId === selectedVoice
+    && narration.scriptRevision === narrationRevision(script),
+  );
+
+  useEffect(() => {
+    invalidateNarration();
+  // Owner-scoped state must never cross an authenticated owner transition.
+  }, [authenticatedUserId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -263,6 +289,16 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setBeatSync(draft.beatSync);
       setVoiceoverMode(draft.voiceoverMode);
       setSelectedVoice(draft.selectedVoice);
+      if (draft.narration && Number.isSafeInteger(draft.narration.durationMs) && draft.narration.durationMs > 0) {
+        try {
+          const storage = draft.narration.storage;
+          const ownerContext = captureValidatedMediaOwnerContext();
+          setNarration(draft.narration);
+          void createPrivateMediaSignedUrl(storage, ownerContext).then((url) => {
+            if (!cancelled) setAudioUrl(url);
+          }).catch(() => { /* Canonical identity remains recoverable for a later signing attempt. */ });
+        } catch { setNarration(null); }
+      } else setNarration(null);
       setTargetLanguage(draft.targetLanguage);
       setDraftSavedAt(draft.savedAt);
       setDraftStatus('saved');
@@ -319,11 +355,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     voiceoverMode,
     selectedVoice,
     targetLanguage,
+    narration: narration ?? undefined,
   }), [directorProjectId, step, channelId, unavailableRestoredChannelId, topic, niche, tone, duration, title, hook, script, cta, scenes,
     captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicVolume, visualMode,
     selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId,
     watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor,
-    beatSync, voiceoverMode, selectedVoice, targetLanguage]);
+    beatSync, voiceoverMode, selectedVoice, targetLanguage, narration]);
 
   useEffect(() => {
     if (!draftHydratedRef.current) return;
@@ -357,6 +394,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setScenes([]);
     setAudioBlob(null);
     setAudioUrl('');
+    setNarration(null);
     setVideoUrl('');
     setStudioVideoId(null);
     setChannelId(defaultChannelId(channels));
@@ -467,6 +505,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setTitle(result.title);
       setHook(result.hook);
       setScript(result.script);
+      invalidateNarration();
       setCta(result.cta);
       setScenes(result.scenes ?? []);
       setStep('script');
@@ -708,14 +747,16 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setError('');
     try {
       if (voiceoverMode === 'browser') {
-        const blob = await generateBrowserTTS(script);
-        setAudioBlob(blob.size > 0 ? blob : null);
-        setAudioUrl(blob.size > 0 ? URL.createObjectURL(blob) : '');
+        await generateBrowserTTS(script);
+        invalidateNarration();
         setStep('render');
       } else if (voiceoverMode === 'elevenlabs') {
-        const blob = await generateVoiceover(script, selectedVoice);
-        setAudioBlob(blob);
-        setAudioUrl(URL.createObjectURL(blob));
+        const ownerContext = captureValidatedMediaOwnerContext();
+        const generated = await generateVoiceover(script, selectedVoice);
+        assertCurrentMediaOwnerContext(ownerContext);
+        setNarration({ storage: generated.media, durationMs: generated.durationMs, scriptRevision: narrationRevision(script), voiceId: selectedVoice });
+        setAudioUrl(generated.playbackUrl ?? await createPrivateMediaSignedUrl(generated.media, ownerContext));
+        setAudioBlob(null);
         setStep('render');
       } else {
         setAudioBlob(null);
@@ -731,7 +772,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
   }
 
-  async function generateBrowserTTS(text: string): Promise<Blob> {
+  async function generateBrowserTTS(text: string): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
         const utterance = new SpeechSynthesisUtterance(text);
@@ -743,7 +784,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                           voices[0];
         if (preferred) utterance.voice = preferred;
         window.speechSynthesis.cancel();
-        utterance.onend = () => resolve(new Blob([], { type: 'audio/wav' }));
+        utterance.onend = () => resolve();
         utterance.onerror = () => reject(new Error('Browser TTS failed'));
         window.speechSynthesis.speak(utterance);
       } catch (err) {
@@ -874,7 +915,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       const { data, error: saveError } = await supabase.from('videos').insert({
         title,
         ...createVideoChannelAttribution(channel),
-        narration_mode: resolveStudioAudioNarrationMode(voiceoverMode),
+        // This legacy preview renderer has no durable audio binding. The verified
+        // canonical export below signs and mixes narration through MediaProject.
+        narration_mode: 'silent',
         description: script,
         script,
         hook,
@@ -908,7 +951,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
   }
 
-  async function prepareModernPublish() {
+  async function prepareModernPublish(navigateToPublishing = true) {
     if (!channel) {
       setError('Select an available channel before preparing this video for publishing.');
       setStep('topic');
@@ -927,7 +970,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         projectId: directorProjectId,
         title: title || topic || 'Studio video',
         scenes: exportScenes,
-        audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode) },
+        audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode, hasCanonicalNarration) },
+        narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : undefined,
       });
       if (!build.renderReady || build.validation.renderReady !== true) {
         throw new Error(canonicalMediaValidationError(build));
@@ -940,12 +984,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       const outputPath = await window.electronAPI?.ffmpeg.pickOutputPath?.({ defaultPath: `studio-${directorProjectId}.mp4` });
       if (!outputPath) return;
       const exportJob = await enqueueActiveExport(plan, outputPath);
-      const publishing = usePublishingStore.getState();
-      const target = toSafePublishingTarget(channel);
-      publishing.setHandoff(studioVideoId
-        ? { kind: 'video-needs-verification', sourceVideoId: studioVideoId, title: title || topic || 'Studio video', exportJobId: exportJob.id, target }
-        : { kind: 'verified-export', exportJobId: exportJob.id, sourceVideoId: null, target });
-      navigate('publishing-studio');
+      await waitForActiveExport(exportJob.id);
+      if (navigateToPublishing) {
+        const publishing = usePublishingStore.getState();
+        const target = toSafePublishingTarget(channel);
+        publishing.setHandoff(studioVideoId
+          ? { kind: 'video-needs-verification', sourceVideoId: studioVideoId, title: title || topic || 'Studio video', exportJobId: exportJob.id, target }
+          : { kind: 'verified-export', exportJobId: exportJob.id, sourceVideoId: null, target });
+        navigate('publishing-studio');
+      }
     } catch (publishError) {
       setError(publishError instanceof Error ? publishError.message : 'Verified export could not be prepared.');
     } finally {
@@ -1127,7 +1174,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             </div>
             <div>
               <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">{t('studio.scriptLabel')}</label>
-              <textarea value={script} onChange={(e) => setScript(e.target.value)} rows={6}
+              <textarea value={script} onChange={(e) => { setScript(e.target.value); invalidateNarration(); }} rows={6}
                 className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400" />
             </div>
             <div>
@@ -1700,7 +1747,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           <div className="space-y-4">
             <div className="space-y-2">
               <button
-                onClick={() => setVoiceoverMode('elevenlabs')}
+                onClick={() => { setVoiceoverMode('elevenlabs'); invalidateNarration(); }}
                 disabled={!hasElevenLabs}
                 className={classNames(
                   'flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors disabled:opacity-50',
@@ -1713,7 +1760,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 </div>
               </button>
               <button
-                onClick={() => setVoiceoverMode('browser')}
+                onClick={() => { setVoiceoverMode('browser'); invalidateNarration(); }}
                 className={classNames(
                   'flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors',
                   voiceoverMode === 'browser' ? 'border-slate-900 bg-slate-50' : 'border-slate-200 hover:bg-slate-50',
@@ -1725,7 +1772,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 </div>
               </button>
               <button
-                onClick={() => setVoiceoverMode('none')}
+                onClick={() => { setVoiceoverMode('none'); invalidateNarration(); }}
                 className={classNames(
                   'flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors',
                   voiceoverMode === 'none' ? 'border-slate-900 bg-slate-50' : 'border-slate-200 hover:bg-slate-50',
@@ -1748,7 +1795,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                   <div className="max-h-48 space-y-2 overflow-y-auto">
                     {voices.map((v) => (
                       <button key={v.voice_id}
-                        onClick={() => setSelectedVoice(v.voice_id)}
+                        onClick={() => { setSelectedVoice(v.voice_id); invalidateNarration(); }}
                         className={classNames(
                           'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors',
                           selectedVoice === v.voice_id ? 'border-slate-900 bg-slate-50' : 'border-slate-200 hover:bg-slate-50',
@@ -1788,7 +1835,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         <Card className="p-6">
           <h2 className="mb-4 text-lg font-semibold text-slate-900">{t('studio.renderYourVideo')}</h2>
           <p className="mb-4 text-sm text-slate-500">
-            {t('studio.renderDesc', { caption: captionStyle, transition: transitionStyle, motion: motionStyle, audio: audioBlob ? ' + ' + t('studio.voiceoverPreview').toLowerCase() : '', music: musicBlob ? ' + ' + t('studio.bgMusic').toLowerCase() : '' })}
+            {t('studio.renderDesc', { caption: captionStyle, transition: transitionStyle, motion: motionStyle, audio: hasCanonicalNarration ? ' + ' + t('studio.voiceoverPreview').toLowerCase() : '', music: musicBlob ? ' + ' + t('studio.bgMusic').toLowerCase() : '' })}
           </p>
           {rendering ? (
             <div className="space-y-3">
@@ -1808,7 +1855,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
               )}
               <div className="flex justify-between gap-2">
                 <Button variant="secondary" onClick={() => setStep('voice')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
-                <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes, audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode) } } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={handleRender} disabled={!channel}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
+                <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes, audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode, hasCanonicalNarration) }, narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : undefined } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={() => void prepareModernPublish(false)} disabled={!channel || preparingPublish}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
               </div>
             </div>
           )}

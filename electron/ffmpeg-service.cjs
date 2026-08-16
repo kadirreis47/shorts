@@ -16,8 +16,7 @@ function registerFFmpegHandlers() {
   ipcMain.handle('ffmpeg:pick-output-path', async (event, options = {}) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showSaveDialog(window, { title: 'Export destination', defaultPath: typeof options.defaultPath === 'string' ? options.defaultPath : 'export.mp4', filters: [{ name: 'MP4 video', extensions: ['mp4'] }] });
-    if (result.canceled || !result.filePath) return null;
-    return validateTargetPath(result.filePath);
+    return resolveSelectedOutputPath(result);
   });
   ipcMain.handle('ffmpeg:capabilities', async (_event, forceRefresh = false) => {
     if (cachedCapabilities && !forceRefresh) return cachedCapabilities;
@@ -393,6 +392,11 @@ function resolveOutputPath(requested, jobId) {
   const dir = path.join(app.getPath('videos'), 'ShortsFlow');
   return path.join(dir, `${sanitize(jobId)}.mp4`);
 }
+function resolveSelectedOutputPath(result) {
+  if (!result || result.canceled || typeof result.filePath !== 'string' || !result.filePath) return null;
+  const selectedPath = validateTargetPath(result.filePath);
+  return path.extname(selectedPath).toLowerCase() === '.mp4' ? selectedPath : `${selectedPath}.mp4`;
+}
 function sanitize(value) { return String(value).replace(/[^a-z0-9_-]/gi, '_'); }
 function sanitizeFFmpegDiagnostic(value) {
   return String(value).replace(/https?:\/\/[^\s'"<>]+/gi, '[remote-media-url]');
@@ -409,4 +413,4 @@ function capture(executable, args) {
     child.on('error', reject); child.on('close', code => code === 0 ? resolve(out || err) : reject(new Error(err || `Exit ${code}`)));
   });
 }
-module.exports = { registerFFmpegHandlers, verifyArtifactSnapshot, detectCapabilities, parseEncoderRows, sanitizeFFmpegDiagnostic, serializeSubtitleFilterFilename, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };
+module.exports = { registerFFmpegHandlers, materializeFile, resolveSelectedOutputPath, verifyArtifactSnapshot, detectCapabilities, parseEncoderRows, sanitizeFFmpegDiagnostic, serializeSubtitleFilterFilename, resolveExecutable, resolveFFprobeExecutable, resolveRuntime };

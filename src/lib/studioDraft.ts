@@ -1,4 +1,4 @@
-import type { Scene, VisualMode } from './types';
+import type { MediaStorageObject, Scene, VisualMode } from './types';
 import type { CaptionStyle, MotionStyle, TransitionStyle } from './videoRenderer';
 import type { AudioNarrationMode } from '@/core/media';
 import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
@@ -42,6 +42,12 @@ export interface StudioDraft {
   voiceoverMode: StudioVoiceoverMode;
   selectedVoice: string;
   targetLanguage: string;
+  narration?: {
+    storage: MediaStorageObject;
+    durationMs: number;
+    scriptRevision: string;
+    voiceId: string;
+  };
 }
 
 const STORAGE_KEY = 'shortsflow.studio.draft.v1';
@@ -68,6 +74,7 @@ export function clearStudioDraft(): void {
 
 export function resolveStudioAudioNarrationMode(
   voiceoverMode: StudioVoiceoverMode,
+  hasCanonicalNarration = false,
 ): AudioNarrationMode {
-  return voiceoverMode === 'none' ? 'silent' : 'required';
+  return voiceoverMode === 'elevenlabs' && hasCanonicalNarration ? 'required' : 'silent';
 }

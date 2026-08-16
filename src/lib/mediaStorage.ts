@@ -7,7 +7,7 @@ import { mediaStorageIdentityFromMetadata } from '@/core/media/storageIdentity';
 export const PRIVATE_MEDIA_BUCKET = 'media' as const;
 export const PRIVATE_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
-export type PrivateMediaClass = 'videos' | 'generated-images';
+export type PrivateMediaClass = 'videos' | 'generated-images' | 'voiceovers';
 
 export interface ValidatedMediaOwnerContext {
   readonly ownerId: string;
@@ -17,6 +17,7 @@ export interface ValidatedMediaOwnerContext {
 export interface PrivateMediaUpload {
   readonly imageUrl?: string;
   readonly videoUrl?: string;
+  readonly audioUrl?: string;
   readonly media: MediaStorageObject;
 }
 
@@ -35,11 +36,12 @@ export function assertCurrentMediaOwnerContext(context: ValidatedMediaOwnerConte
 function extensionForBlob(file: Blob): string {
   if (file.type === 'video/webm') return 'webm';
   if (file.type === 'image/png') return 'png';
+  if (file.type === 'audio/mpeg') return 'mp3';
   throw new Error('This media type is not supported for private upload.');
 }
 
 function ownerPath(context: ValidatedMediaOwnerContext, mediaClass: PrivateMediaClass, extension: string): string {
-  if (mediaClass !== 'videos' && mediaClass !== 'generated-images') {
+  if (mediaClass !== 'videos' && mediaClass !== 'generated-images' && mediaClass !== 'voiceovers') {
     throw new Error('This private media class is not supported.');
   }
   return `${context.ownerId}/${mediaClass}/${crypto.randomUUID()}.${extension}`;
@@ -47,7 +49,7 @@ function ownerPath(context: ValidatedMediaOwnerContext, mediaClass: PrivateMedia
 
 function assertOwnedMediaIdentity(identity: MediaStorageObject, context: ValidatedMediaOwnerContext): void {
   const escapedOwner = context.ownerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const boundedPath = new RegExp(`^${escapedOwner}/(?:videos/[0-9a-f-]+\\.webm|generated-images/[0-9a-f-]+\\.png)$`, 'i');
+  const boundedPath = new RegExp(`^${escapedOwner}/(?:videos/[0-9a-f-]+\\.webm|generated-images/[0-9a-f-]+\\.png|voiceovers/[0-9a-f-]+\\.mp3)$`, 'i');
   if (identity.bucket !== PRIVATE_MEDIA_BUCKET || !boundedPath.test(identity.objectPath)) {
     throw new Error('Private media is not available for the authenticated user.');
   }
@@ -78,7 +80,9 @@ export async function uploadPrivateMedia(file: Blob, mediaClass: PrivateMediaCla
   const signedUrl = await createPrivateMediaSignedUrl(media, context);
   return mediaClass === 'videos'
     ? { videoUrl: signedUrl, media }
-    : { imageUrl: signedUrl, media };
+    : mediaClass === 'voiceovers'
+      ? { audioUrl: signedUrl, media }
+      : { imageUrl: signedUrl, media };
 }
 
 export async function createPrivateMediaSignedUrl(

@@ -23,10 +23,12 @@ describe('packaged FFmpeg runtime staging and V1 release gate', () => {
   });
   it('requires a bundle for packaged builds and clears stale staged binaries first', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'shortsflow-release-')); const output = path.join(root, 'runtime');
+    const inheritedBundle = process.env.SHORTSFLOW_FFMPEG_BUNDLE_DIR;
     try {
+      delete process.env.SHORTSFLOW_FFMPEG_BUNDLE_DIR;
       expect(() => provisionFFmpegRuntime({ outputDirectory: output, requireBundle: true })).toThrow(/bundle is required/i);
       expect(require('node:fs').existsSync(path.join(output, REQUIRED[0]))).toBe(false);
-    } finally { rmSync(root, { recursive: true, force: true }); }
+    } finally { if (inheritedBundle === undefined) delete process.env.SHORTSFLOW_FFMPEG_BUNDLE_DIR; else process.env.SHORTSFLOW_FFMPEG_BUNDLE_DIR = inheritedBundle; rmSync(root, { recursive: true, force: true }); }
   });
   it('rejects incomplete and empty bundles', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'shortsflow-release-')); const output = path.join(root, 'runtime');

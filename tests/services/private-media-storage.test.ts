@@ -50,6 +50,14 @@ describe('private media renderer boundary', () => {
     expect(mocks.createSignedUrl).toHaveBeenCalledWith(uploadedPath, PRIVATE_MEDIA_SIGNED_URL_TTL_SECONDS);
   });
 
+  it('accepts only a validated owner-scoped voiceover identity', async () => {
+    const result = await uploadPrivateMedia(new Blob(['audio'], { type: 'audio/mpeg' }), 'voiceovers');
+    const uploadedPath = mocks.upload.mock.calls[0][0] as string;
+    expect(uploadedPath).toMatch(/^11111111-1111-4111-8111-111111111111\/voiceovers\/[0-9a-f-]+\.mp3$/i);
+    expect(result).toMatchObject({ media: { bucket: 'media', objectPath: uploadedPath }, audioUrl: 'https://signed.example/media' });
+    await expect(createPrivateMediaSignedUrl({ bucket: 'media', objectPath: '22222222-2222-4222-8222-222222222222/voiceovers/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.mp3' })).rejects.toThrow(/not available/i);
+  });
+
   it('fails closed while signed out and rejects a foreign path before asking Storage to sign it', async () => {
     setValidatedOwnerId(null);
     await expect(uploadPrivateMedia(new Blob(['video'], { type: 'video/webm' }), 'videos')).rejects.toThrow(/authenticated user/i);

@@ -65,6 +65,7 @@ export interface AudioBuildOptions {
   settings?: Partial<AudioMixSettings>;
   musicAssetId?: string;
   voiceAssetIdsByScene?: Readonly<Record<string, string>>;
+  narrationAssetId?: string;
 }
 
 export function resolveAudioNarrationMode(

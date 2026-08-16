@@ -1,4 +1,5 @@
 import type { Scene } from '@/lib/types';
+import type { MediaStorageObject } from '@/lib/types';
 import type { AssetResolutionReport } from './assetProviderTypes';
 import type { SubtitleTimeline } from './subtitleTypes';
 import type { AudioBuildOptions, AudioTimeline } from './audioTypes';
@@ -151,6 +152,12 @@ export interface CreateMediaProjectInput {
   tags?: string[];
   settings?: Partial<MediaProjectSettings>;
   audio?: AudioBuildOptions;
+  narration?: {
+    storage: MediaStorageObject;
+    durationMs: number;
+    scriptRevision: string;
+    voiceId: string;
+  };
 }
 
 export interface MediaProjectBuildResult {

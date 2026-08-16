@@ -1,4 +1,4 @@
-import { createExportJob, encoderSupportsCodec, type ExportExecutor, type ExportJob, type ExportPlan, type ExportProgress, type ExportQueue } from '@/core/export-intelligence';
+import { createExportJob, encoderSupportsCodec, isVerifiedExportJob, type ExportExecutor, type ExportJob, type ExportPlan, type ExportProgress, type ExportQueue } from '@/core/export-intelligence';
 import { getFFmpegBridge, type RenderEngine, type RenderJobSnapshot } from '@/core/render';
 import { useMediaStore } from '@/store/mediaStore';
 import { applicationContainer, dependencyTokens } from '@/core/di';
@@ -25,7 +25,38 @@ export async function enqueueActiveExport(plan: ExportPlan, outputPath: string):
   void queue.start();
   return job;
 }
+/**
+ * Waits for a specific locally-owned export to reach a terminal state.  Queue
+ * admission is deliberately not presented as a completed save: callers that
+ * initiated a native destination selection must wait for the verified bytes
+ * to exist at that exact destination.
+ */
+export async function waitForActiveExport(jobId: string): Promise<ExportJob> {
+  const queue = await ensureExportQueue();
+  for (;;) {
+    const job = queue.get(jobId);
+    if (!job) throw new Error('Export job could not be found.');
+    if (job.state === 'failed') throw new Error(job.failure?.message ?? 'Export failed before the MP4 could be saved.');
+    if (job.state === 'cancelled') throw new Error('Export was cancelled before the MP4 could be saved.');
+    if (job.state === 'completed') {
+      if (!isVerifiedExportJob(job)) throw new Error('Export completed without a verified MP4 artifact.');
+      if (normalizeFilesystemPath(job.artifact.path) !== normalizeFilesystemPath(job.outputPath)) {
+        throw new Error('Verified export destination does not match the selected save path.');
+      }
+      const bridge = getFFmpegBridge();
+      if (!bridge?.fileExists || !await bridge.fileExists(job.outputPath)) {
+        throw new Error('Export finished but the selected MP4 file could not be found.');
+      }
+      return job;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 export async function retryExportJob(jobId: string): Promise<ExportJob | null> { const queue = await ensureExportQueue(); return queue.retry(jobId); }
+
+function normalizeFilesystemPath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+}
 
 let sharedQueue: ExportQueue | null = null;
 let queueReady: Promise<ExportQueue> | null = null;
@@ -84,7 +115,7 @@ function getExportQueue(ownerId: string): ExportQueue {
       }
       if (snapshot.status !== 'completed' || !snapshot.output) throw new Error(snapshot.error ?? 'Render failed.');
       const sourcePath = snapshot.output.uri;
-      const normalizePath = (value: string) => value.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase();
+      const normalizePath = normalizeFilesystemPath;
       let finalPath = sourcePath;
       if (normalizePath(sourcePath) !== normalizePath(job.outputPath)) {
         const bridge = getFFmpegBridge();

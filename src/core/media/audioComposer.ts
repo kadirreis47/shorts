@@ -32,7 +32,9 @@ export function buildAudioTimeline(
   const narrationMode = options.narrationMode === 'silent' ? 'silent' : 'required';
   const voice = narrationMode === 'silent'
     ? []
-    : buildVoiceSegments(scenes, settings, options.voiceAssetIdsByScene);
+    : options.narrationAssetId
+      ? [buildCanonicalNarrationSegment(durationMs, settings, options.narrationAssetId)]
+      : buildVoiceSegments(scenes, settings, options.voiceAssetIdsByScene);
   const music = buildMusicSegments(durationMs, settings, options.musicAssetId);
   const sfx = buildSfxSegments(scenes, markers, settings);
   const automation = buildDuckingAutomation(voice, settings);
@@ -46,6 +48,20 @@ export function buildAudioTimeline(
     sfx,
     automation,
     metrics: calculateAudioMetrics(durationMs, voice, music, sfx, automation, settings),
+  };
+}
+
+function buildCanonicalNarrationSegment(
+  durationMs: number,
+  settings: AudioMixSettings,
+  assetId: string,
+): AudioSegment {
+  return {
+    id: createId('audio-voice'), type: 'voice', assetId,
+    startMs: 0, endMs: durationMs, durationMs, gain: settings.voiceGain,
+    fadeInMs: Math.min(45, Math.round(durationMs * 0.05)),
+    fadeOutMs: Math.min(70, Math.round(durationMs * 0.08)),
+    metadata: { source: 'canonical-narration', scope: 'whole-project' },
   };
 }
 

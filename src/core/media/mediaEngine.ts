@@ -8,6 +8,7 @@ import { buildSubtitleTimeline } from './subtitleSynchronizer';
 import { buildAudioTimeline } from './audioComposer';
 import { composeTracks } from './trackComposer';
 import { validateMediaProject } from './mediaValidator';
+import { privateStorageSource } from './storageIdentity';
 import type { CreateMediaProjectInput, MediaProject, MediaProjectBuildResult } from './types';
 
 export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
@@ -19,8 +20,15 @@ export function createMediaEngine(
   return {
     async buildProject(input) {
       const settings = normalizeMediaSettings(input.settings);
-      const plannedScenes = planScenes(input.scenes, settings);
-      const timelinePlan = buildIntelligentTimeline(plannedScenes, settings);
+      let plannedScenes = reconcileNarrationDuration(planScenes(input.scenes, settings), input.narration?.durationMs);
+      let timelinePlan = buildIntelligentTimeline(plannedScenes, settings);
+      for (let attempt = 0; input.narration && timelinePlan.durationMs < input.narration.durationMs && attempt < 3; attempt += 1) {
+        const sum = plannedScenes.reduce((total, scene) => total + scene.durationMs, 0);
+        plannedScenes = reconcileNarrationDuration(plannedScenes, Math.ceil(sum * input.narration.durationMs / timelinePlan.durationMs));
+        if (plannedScenes.some((scene) => scene.durationMs > settings.maximumSceneDurationMs)) throw new Error('Narration duration exceeds canonical scene-duration limits.');
+        timelinePlan = buildIntelligentTimeline(plannedScenes, settings);
+      }
+      if (input.narration && timelinePlan.durationMs < input.narration.durationMs) throw new Error('Narration duration cannot be reconciled with the canonical timeline.');
       const scenes = timelinePlan.scenes;
       const now = new Date().toISOString();
       const projectId = input.projectId?.trim() || createId('media-project');
@@ -34,12 +42,27 @@ export function createMediaEngine(
         projectId, assetCount: assets.length, resolvedAt: new Date().toISOString(),
       });
 
+      const narrationAsset = input.narration ? {
+        id: createId('asset-voice'),
+        type: 'voice' as const,
+        source: privateStorageSource(input.narration.storage),
+        mimeType: 'audio/mpeg',
+        metadata: {
+          storageBucket: input.narration.storage.bucket,
+          storageObjectPath: input.narration.storage.objectPath,
+          durationMs: input.narration.durationMs,
+          scriptRevision: input.narration.scriptRevision,
+          voiceId: input.narration.voiceId,
+          source: 'canonical-narration',
+        },
+      } : null;
+      if (narrationAsset) assets.push(narrationAsset);
       const subtitleTimeline = buildSubtitleTimeline(scenes, settings);
       const audioTimeline = buildAudioTimeline(
         scenes,
         timelinePlan.markers,
         timelinePlan.durationMs,
-        input.audio,
+        { ...input.audio, narrationAssetId: narrationAsset?.id },
       );
       const tracks = composeTracks(scenes, subtitleTimeline, audioTimeline);
       const project: MediaProject = {
@@ -121,6 +144,21 @@ export function createMediaEngine(
       };
     },
   };
+}
+
+function reconcileNarrationDuration<T extends { durationMs: number }>(scenes: T[], narrationDurationMs: number | undefined): T[] {
+  if (typeof narrationDurationMs !== 'number' || !Number.isSafeInteger(narrationDurationMs) || narrationDurationMs <= 0) return scenes;
+  const total = scenes.reduce((sum, scene) => sum + scene.durationMs, 0);
+  if (narrationDurationMs <= total || total <= 0) return scenes;
+  const target = narrationDurationMs;
+  let allocated = 0;
+  return scenes.map((scene, index) => {
+    const durationMs = index === scenes.length - 1
+      ? target - allocated
+      : Math.max(1, Math.floor(scene.durationMs * target / total));
+    allocated += durationMs;
+    return { ...scene, durationMs, endMs: durationMs };
+  });
 }
 
 function createId(prefix: string): string {

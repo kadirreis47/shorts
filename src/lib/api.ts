@@ -71,7 +71,9 @@ export interface GeneratedScript {
 }
 
 interface VoiceoverResponse {
-  audio: string;
+  media: MediaStorageObject;
+  durationMs: number;
+  playbackUrl?: string;
 }
 
 interface VoiceListResponse {
@@ -94,22 +96,6 @@ interface VideoSearchResponse {
   videos?: PexelsVideo[];
 }
 
-function base64ToBlob(
-  base64: string,
-  contentType = 'audio/mpeg',
-): Blob {
-  const audioBytes = atob(base64);
-  const byteArray = new Uint8Array(audioBytes.length);
-
-  for (let index = 0; index < audioBytes.length; index += 1) {
-    byteArray[index] = audioBytes.charCodeAt(index);
-  }
-
-  return new Blob([byteArray], {
-    type: contentType,
-  });
-}
-
 export async function generateScript(params: {
   topic: string;
   niche?: string;
@@ -125,7 +111,7 @@ export async function generateScript(params: {
 export async function generateVoiceover(
   text: string,
   voiceId?: string,
-): Promise<Blob> {
+): Promise<{ media: MediaStorageObject; durationMs: number; playbackUrl?: string }> {
   const data = await apiClient.post<VoiceoverResponse>(
     'generate-voiceover',
     {
@@ -138,11 +124,11 @@ export async function generateVoiceover(
     },
   );
 
-  if (!data.audio) {
-    throw new Error('Ses dosyası sunucudan alınamadı.');
-  }
+  if (!data.media) throw new Error('Voice audio was not returned by the server.');
+  if (!Number.isSafeInteger(data.durationMs) || data.durationMs <= 0) throw new Error('Voice audio duration was invalid.');
+  assertCurrentOwnerMediaIdentity(data.media);
+  return { media: data.media, durationMs: data.durationMs, playbackUrl: data.playbackUrl };
 
-  return base64ToBlob(data.audio);
 }
 
 export async function listVoices(): Promise<Voice[]> {

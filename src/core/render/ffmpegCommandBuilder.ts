@@ -1,4 +1,6 @@
 import type { RenderExecutionContext } from './types';
+import { buildAudioMixCommand } from './audioMixCommandBuilder';
+import { resolveAudioNarrationMode } from '@/core/media';
 
 export interface FFmpegCommandPlan {
   args: string[];
@@ -53,13 +55,17 @@ export function buildFFmpegCommand(
   );
 
   const durationSeconds = Math.max(0.1, manifest.durationMs / 1000);
+  const hasAudioTimeline = Boolean(manifest.audio);
+  const audio = hasAudioTimeline ? buildAudioMixCommand(manifest, scenes.length) : null;
+  if (hasAudioTimeline && resolveAudioNarrationMode(manifest.audio) === 'required' && audio!.voiceInputCount === 0) {
+    throw new Error('Required canonical narration could not be bound to FFmpeg.');
+  }
+  if (audio?.realInputCount) args.push(...audio.inputArgs);
+  else args.push('-f', 'lavfi', '-t', durationSeconds.toFixed(3), '-i', `anullsrc=channel_layout=${(preset.audioChannels ?? 2) === 1 ? 'mono' : 'stereo'}:sample_rate=${preset.sampleRate ?? 48000}`);
   args.push(
-    '-f', 'lavfi',
-    '-t', durationSeconds.toFixed(3),
-    '-i', `anullsrc=channel_layout=${(preset.audioChannels ?? 2) === 1 ? 'mono' : 'stereo'}:sample_rate=${preset.sampleRate ?? 48000}`,
-    '-filter_complex', filters.join(';'),
+    '-filter_complex', [...filters, ...(audio?.filterComplex ? [audio.filterComplex] : [])].join(';'),
     '-map', '[videoout]',
-    '-map', `${scenes.length}:a`,
+    '-map', audio?.realInputCount ? (audio.outputLabel ?? '[audioout]') : `${scenes.length}:a`,
     '-c:v', videoCodec(preset),
     ...qualityArgs(preset),
     ...videoSettings(preset),

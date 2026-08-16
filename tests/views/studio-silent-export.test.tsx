@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   loadExportCapabilities: vi.fn(),
   planActiveExport: vi.fn(),
   enqueueActiveExport: vi.fn(),
+  waitForActiveExport: vi.fn(),
   renderVideo: vi.fn(),
   uploadMedia: vi.fn(),
   getProviderStatus: vi.fn(async () => ({ openai: { configured: true }, elevenlabs: { configured: true }, pexels: { configured: true } })),
@@ -33,6 +34,7 @@ vi.mock('@/services/exportIntelligenceController', () => ({
   loadExportCapabilities: mocks.loadExportCapabilities,
   planActiveExport: mocks.planActiveExport,
   enqueueActiveExport: mocks.enqueueActiveExport,
+  waitForActiveExport: mocks.waitForActiveExport,
 }));
 vi.mock('@/lib/supabase', () => ({
   isSupabaseConfigured: false,
@@ -75,6 +77,7 @@ describe('Studio canonical silent export', () => {
     mocks.loadExportCapabilities.mockResolvedValue(undefined);
     mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
     mocks.enqueueActiveExport.mockResolvedValue({ id: 'export' });
+    mocks.waitForActiveExport.mockResolvedValue({ id: 'export' });
     window.electronAPI = {
       ...window.electronAPI,
       ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/silent.mp4') },
@@ -96,6 +99,8 @@ describe('Studio canonical silent export', () => {
       audio: { narrationMode: 'silent' },
     }));
     expect(mocks.planActiveExport).toHaveBeenCalledWith('youtube-shorts');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledWith(expect.anything(), 'C:/exports/silent.mp4');
+    expect(mocks.waitForActiveExport).toHaveBeenCalledWith('export');
     await act(async () => { root.unmount(); });
   });
 
@@ -127,7 +132,7 @@ describe('Studio canonical silent export', () => {
     await act(async () => { root.unmount(); });
   });
 
-  it('persists explicit silent narration mode when rendering a Studio video', async () => {
+  it('routes render through the canonical silent export path', async () => {
     const insert = vi.fn(); const select = vi.fn(); const single = vi.fn();
     insert.mockReturnValue({ select }); select.mockReturnValue({ single }); single.mockResolvedValue({ data: { id: 'saved-silent-video' } });
     mocks.from.mockReturnValue({
@@ -147,12 +152,11 @@ describe('Studio canonical silent export', () => {
     await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
     const render = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Render Video'));
     await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(insert).toHaveBeenCalledWith(expect.objectContaining({
-      narration_mode: 'silent',
-      video_url: null,
-      video_storage_bucket: 'media',
-      video_storage_path: 'studio-test-user/videos/silent.webm',
+    expect(mocks.buildProject).toHaveBeenCalledWith(expect.objectContaining({
+      audio: { narrationMode: 'silent' },
+      narration: undefined,
     }));
+    expect(insert).not.toHaveBeenCalled();
     await act(async () => { root.unmount(); });
   });
 });
