@@ -262,7 +262,7 @@ describe('StudioProductionRecipeV1', () => {
     expect(compiled.audio).toEqual({ narrationMode: 'silent' });
     expect(compiled.narration).toBeUndefined();
     expect(normalized.exportSupport).toMatchObject({
-      browserSpeech: 'preview-only', motion: 'supported', transitions: 'unsupported', watermark: 'unsupported', music: 'unsupported',
+      browserSpeech: 'preview-only', motion: 'supported', transitions: 'partial', watermark: 'unsupported', music: 'unsupported',
     });
   });
 
@@ -297,6 +297,28 @@ describe('StudioProductionRecipeV1', () => {
       ...compiled,
       motion: { mode: 'zoompan=unsafe' as never },
     })).rejects.toThrow('Canonical motion mode is invalid');
+  });
+
+  it.each([
+    ['crossfade', 'crossfade'],
+    ['none', 'cut'],
+    ['slide', 'cut'],
+    ['zoom', 'cut'],
+  ] as const)('compiles %s transition to the bounded canonical %s policy', (transitionStyle, expected) => {
+    const input = recipeInput();
+    input.transitionStyle = transitionStyle;
+    const compiled = compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(input, ownerContext()));
+    expect(compiled.transition).toEqual({ type: expected });
+  });
+
+  it('rejects malformed direct canonical transition input before it can reach FFmpeg planning', async () => {
+    const input = recipeInput();
+    const compiled = compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(input, ownerContext()));
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    await expect(createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject({
+      ...compiled,
+      transition: { type: 'xfade=unsafe' as never },
+    })).rejects.toThrow('Canonical transition type is invalid');
   });
 
   it('reconstructs an equivalent normalized recipe from durable draft fields without persisting execution data', () => {

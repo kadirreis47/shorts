@@ -1,6 +1,6 @@
 import type { MediaStorageObject, Scene, VisualMode } from '@/lib/types';
 import { assertCurrentMediaOwnerContext, type ValidatedMediaOwnerContext } from '@/lib/mediaStorage';
-import type { CanonicalMotionMode, CreateMediaProjectInput } from './types';
+import type { CanonicalMotionMode, CanonicalTransitionType, CreateMediaProjectInput } from './types';
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
@@ -125,7 +125,7 @@ export const STUDIO_PRODUCTION_RECIPE_V1_EXPORT_CAPABILITIES: StudioProductionRe
   browserSpeech: 'preview-only',
   subtitles: 'partial',
   motion: 'supported',
-  transitions: 'unsupported',
+  transitions: 'partial',
   watermark: 'unsupported',
   music: 'unsupported',
 });
@@ -223,8 +223,18 @@ export function compileStudioProductionRecipeV1(
     motion: {
       mode: recipeMotionToCanonical(recipe.composition.motion),
     },
+    transition: {
+      type: recipeTransitionToCanonical(recipe.composition.transition),
+    },
     productionRecipe: normalized,
   };
+}
+
+function recipeTransitionToCanonical(transition: StudioRecipeTransition): CanonicalTransitionType {
+  // V1.1 canonical execution intentionally supports only a reliable crossfade.
+  // Existing richer preview choices remain durable Recipe intent but export as a
+  // truthful hard cut until a later, dedicated transition slice supports them.
+  return transition === 'crossfade' ? 'crossfade' : 'cut';
 }
 
 function recipeMotionToCanonical(motion: StudioRecipeMotion): CanonicalMotionMode {

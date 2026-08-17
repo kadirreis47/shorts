@@ -22,6 +22,11 @@ export type CanonicalMotionMode = 'none' | 'ken_burns' | 'pan' | 'zoom_in' | 'zo
 export interface CanonicalMotionConfiguration {
   mode: CanonicalMotionMode;
 }
+export type CanonicalTransitionType = 'cut' | 'crossfade';
+
+export interface CanonicalTransitionConfiguration {
+  type: CanonicalTransitionType;
+}
 export type TransitionType = 'cut' | 'fade' | 'crossfade' | 'slide' | 'zoom' | 'blur';
 export type SceneRole = 'hook' | 'setup' | 'development' | 'payoff' | 'cta' | 'outro';
 export type PacingPreset = 'calm' | 'balanced' | 'dynamic' | 'viral';
@@ -172,6 +177,7 @@ export interface CreateMediaProjectInput {
   };
   subtitles?: CanonicalSubtitleConfiguration;
   motion?: CanonicalMotionConfiguration;
+  transition?: CanonicalTransitionConfiguration;
   productionRecipe?: NormalizedStudioProductionRecipeV1;
 }
 

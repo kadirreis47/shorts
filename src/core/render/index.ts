@@ -7,6 +7,7 @@ export * from './ffmpegBridge';
 export * from './ffmpegCommandBuilder';
 export * from './ffmpegRenderAdapter';
 export * from './canonicalSceneExecutionPlan';
+export * from './canonicalTransitionPlan';
 export * from './encodingContract';
 export * from './subtitleRenderBuilder';
 

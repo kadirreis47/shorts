@@ -149,6 +149,8 @@ export class FFmpegRenderAdapter implements RenderAdapter {
         preset,
         segmentPaths,
       });
+      const videoCodecIndex = concatPlan.args.lastIndexOf('-c:v');
+      const finalVideoReencoded = videoCodecIndex >= 0 && concatPlan.args[videoCodecIndex + 1] !== 'copy';
 
       await context.reportProgress({
         stage: 'finalizing',
@@ -195,8 +197,8 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           elapsedMs: result.elapsedMs,
           exitCode: result.exitCode,
           hardwareAcceleration: preset.hardwareAcceleration,
-          incrementalExecutionMode: 'zero-copy-segment-assembly',
-          finalVideoReencoded: false,
+          incrementalExecutionMode: finalVideoReencoded ? 'final-composition-reencode' : 'zero-copy-segment-assembly',
+          finalVideoReencoded,
           realAudioMixed: context.manifest.audio.voice.some((segment) => Boolean(segment.assetId))
             || context.manifest.audio.music.some((segment) => Boolean(segment.assetId))
             || context.manifest.audio.sfx.some((segment) => Boolean(segment.assetId)),
@@ -204,7 +206,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
             context.manifest.audio.voice.some((segment) => Boolean(segment.assetId))
             && context.manifest.audio.music.some((segment) => Boolean(segment.assetId)),
           cameraMotionSceneCount: appliedCameraMotionSceneCount(context.manifest, preset),
-          transitionEffectSceneCount: 0,
+          transitionEffectSceneCount: appliedTransitionSceneCount(context.manifest),
           advancedSubtitleRenderer: true,
           subtitleCueCount: context.manifest.subtitles.cues.length,
           karaokeReadyCueCount: context.manifest.subtitles.cues.filter(
@@ -265,6 +267,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           adapter: this.id, ffmpegVersion: capabilities.version, elapsedMs: result.elapsedMs, exitCode: result.exitCode,
           hardwareAcceleration: preset.hardwareAcceleration, averageFps: latestFps, encodingSpeed: latestSpeed, ...extraMetadata,
           cameraMotionSceneCount: appliedCameraMotionSceneCount(context.manifest, preset),
+          transitionEffectSceneCount: appliedTransitionSceneCount(context.manifest),
         },
       };
     } finally {
@@ -277,6 +280,12 @@ export class FFmpegRenderAdapter implements RenderAdapter {
 function appliedCameraMotionSceneCount(manifest: RenderManifest, preset: RenderPreset): number {
   return manifest.timeline.scenes.filter((scene) =>
     buildCanonicalSceneExecutionPlan(manifest, scene, preset).filters.some((filter) => filter.startsWith('zoompan=')),
+  ).length;
+}
+
+function appliedTransitionSceneCount(manifest: RenderManifest): number {
+  return manifest.timeline.scenes.filter((scene) =>
+    scene.transition.type === 'crossfade' && scene.overlapBeforeMs > 0,
   ).length;
 }
 

@@ -3,6 +3,7 @@ import {
   buildFFmpegCommand,
   buildSceneSegmentCommand,
   buildSegmentConcatCommand,
+  createRenderFingerprint,
   createSceneFingerprint,
   createIncrementalRenderPlanner,
   type RenderPreset,
@@ -94,6 +95,43 @@ describe('full and incremental canonical execution parity', () => {
     expect(buildSceneSegmentCommand({ manifest: video, scene: video.timeline.scenes[0], preset, outputPath: 'one.mp4' }).args).not.toContain(expect.stringContaining('zoompan'));
   });
 
+  it('composes the same canonical crossfade in full and cache-assisted final rendering', () => {
+    const value = manifest({
+      durationMs: 9_000,
+      timeline: { scenes: [
+        { ...manifest().timeline.scenes[0], transition: { type: 'cut', durationMs: 0 }, overlapBeforeMs: 0, overlapAfterMs: 1_000 },
+        { ...manifest().timeline.scenes[1], transition: { type: 'crossfade', durationMs: 1_000 }, overlapBeforeMs: 1_000 },
+      ], tracks: [] },
+    });
+    const full = buildFFmpegCommand({ manifest: value, preset });
+    const segment = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[0], preset, outputPath: 'one.mp4' });
+    const concat = buildSegmentConcatCommand({ manifest: value, preset, segmentPaths: ['one.mp4', 'two.mp4'] });
+    expect(filter(full)).toContain('xfade=transition=fade:duration=1.000:offset=4.000');
+    expect(filter(concat)).toContain('xfade=transition=fade:duration=1.000:offset=4.000');
+    expect(segment.totalFrames).toBe(150);
+    expect(concat.args).toEqual(expect.arrayContaining(['-i', 'one.mp4', '-i', 'two.mp4']));
+    expect(concat.args).toContain('libx264');
+  });
+
+  it('invalidates final identity while retaining clean segment identity for a transition-only edit', async () => {
+    const cut = manifest({
+      timeline: { scenes: [
+        { ...manifest().timeline.scenes[0], transition: { type: 'cut', durationMs: 0 }, overlapAfterMs: 0 },
+        { ...manifest().timeline.scenes[1], transition: { type: 'cut', durationMs: 0 }, overlapBeforeMs: 0 },
+      ], tracks: [] },
+      durationMs: 10_000,
+    });
+    const fade = structuredClone(cut);
+    fade.durationMs = 9_000;
+    fade.timeline.scenes[0].overlapAfterMs = 1_000;
+    fade.timeline.scenes[1].transition = { type: 'crossfade', durationMs: 1_000 };
+    fade.timeline.scenes[1].overlapBeforeMs = 1_000;
+    expect(await createSceneFingerprint(cut.timeline.scenes[0], cut, preset))
+      .toBe(await createSceneFingerprint(fade.timeline.scenes[0], fade, preset));
+    expect(await createRenderFingerprint({ manifest: cut, preset, adapterId: 'ffmpeg' }))
+      .not.toBe(await createRenderFingerprint({ manifest: fade, preset, adapterId: 'ffmpeg' }));
+  });
+
   it('invalidates pre-motion and changed-motion clean scene cache identities', async () => {
     const base = manifest({ assets: [{ id: 'image', type: 'image', source: 'image.png', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['image'], cameraMotion: 'none' }, manifest().timeline.scenes[1]], tracks: [] } });
     const changed = structuredClone(base);
@@ -102,13 +140,14 @@ describe('full and incremental canonical execution parity', () => {
       .not.toBe(await createSceneFingerprint(changed.timeline.scenes[0], changed, preset));
   });
 
-  it('uses hard-cut effective durations that equal the canonical overlapped timeline without truncating the final scene', () => {
+  it('keeps clean scene segments full-length and applies legacy hard-cut overlap only during final composition', () => {
     const value = manifest();
     const full = buildFFmpegCommand({ manifest: value, preset });
     const first = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[0], preset, outputPath: 'one.mp4' });
     const second = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[1], preset, outputPath: 'two.mp4' });
-    expect(full.args).toEqual(expect.arrayContaining(['-t', '4.000', '-t', '5.000']));
-    expect(first.args).toContain('4.000');
+    expect(full.args).toEqual(expect.arrayContaining(['-t', '5.000', '-t', '5.000']));
+    expect(filter(full)).toContain('[v0]trim=duration=4.000');
+    expect(first.args).toContain('5.000');
     expect(second.args).toContain('5.000');
     expect(full.totalFrames).toBe(270);
   });
@@ -144,10 +183,10 @@ describe('full and incremental canonical execution parity', () => {
     const first = buildSceneSegmentCommand({ manifest: chained, scene: chained.timeline.scenes[0], preset, outputPath: 'one.mp4' });
     const second = buildSceneSegmentCommand({ manifest: chained, scene: chained.timeline.scenes[1], preset, outputPath: 'two.mp4' });
     const third = buildSceneSegmentCommand({ manifest: chained, scene: chained.timeline.scenes[2], preset, outputPath: 'three.mp4' });
-    expect([first, second, third].map((plan) => plan.totalFrames)).toEqual([120, 90, 120]);
+    expect([first, second, third].map((plan) => plan.totalFrames)).toEqual([150, 150, 120]);
     const invalid = structuredClone(chained);
     invalid.timeline.scenes[1].overlapBeforeMs = 9_000;
-    expect(() => buildFFmpegCommand({ manifest: invalid, preset })).toThrow('invalid hard-cut overlap');
+    expect(() => buildFFmpegCommand({ manifest: invalid, preset })).toThrow('invalid transition overlap');
   });
 
   it('burns one shared global ASS plan only at final composition in both strategies', () => {
@@ -178,7 +217,7 @@ describe('full and incremental canonical execution parity', () => {
     expect(full.args).toContain('https://signed.example/owner/voice.mp3');
     expect(concat.args).toContain('https://signed.example/owner/voice.mp3');
     expect(filter(full)).toContain('[2:a]atrim=duration=9.000');
-    expect(filter(concat)).toContain('[1:a]atrim=duration=9.000');
+    expect(filter(concat)).toContain('[2:a]atrim=duration=9.000');
     expect(full.args).toContain('[audioout]');
     expect(concat.args).toContain('[audioout]');
   });

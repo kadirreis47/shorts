@@ -103,15 +103,15 @@ const CAPTION_STYLES: { key: CaptionStyle; label: string; desc: string }[] = [
   { key: 'minimal', label: 'Minimal', desc: 'Clean bottom captions with a light outline' },
 ];
 
-const TRANSITION_STYLES: { key: TransitionStyle; label: string }[] = [
-  { key: 'crossfade', label: 'Crossfade' },
-  { key: 'slide', label: 'Slide' },
-  { key: 'zoom', label: 'Zoom Punch' },
-  { key: 'fadeblack', label: 'Fade to Black' },
-  { key: 'glitch', label: 'Glitch' },
-  { key: 'shake', label: 'Shake' },
-  { key: 'whippan', label: 'Whip Pan' },
-  { key: 'none', label: 'None' },
+const TRANSITION_STYLES: { key: TransitionStyle; label: string; canonical: boolean }[] = [
+  { key: 'crossfade', label: 'Crossfade', canonical: true },
+  { key: 'slide', label: 'Slide', canonical: false },
+  { key: 'zoom', label: 'Zoom Punch', canonical: false },
+  { key: 'fadeblack', label: 'Fade to Black', canonical: false },
+  { key: 'glitch', label: 'Glitch', canonical: false },
+  { key: 'shake', label: 'Shake', canonical: false },
+  { key: 'whippan', label: 'Whip Pan', canonical: false },
+  { key: 'none', label: 'None', canonical: true },
 ];
 
 const MOTION_STYLES: { key: MotionStyle; label: string; icon: typeof Move }[] = [
@@ -1508,13 +1508,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             <div>
               <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">{t('studio.transitions')}</label>
               <div className="mt-2 flex flex-wrap gap-2">
-                {TRANSITION_STYLES.map((t) => (
-                  <button key={t.key} onClick={() => setTransitionStyle(t.key)}
+                {TRANSITION_STYLES.map((transition) => (
+                  <button key={transition.key} onClick={() => setTransitionStyle(transition.key)}
                     className={classNames(
                       'rounded-lg border px-3 py-2 text-sm transition-colors',
-                      transitionStyle === t.key ? 'border-slate-900 bg-slate-50 font-medium text-slate-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50',
+                      transitionStyle === transition.key ? 'border-slate-900 bg-slate-50 font-medium text-slate-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50',
                     )}>
-                    {t.label}
+                    {transition.label}{!transition.canonical && <span className="ml-1 text-[10px] text-slate-400">{t('studio.previewOnly')}</span>}
                   </button>
                 ))}
               </div>

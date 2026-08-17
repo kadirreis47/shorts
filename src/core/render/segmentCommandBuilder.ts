@@ -5,7 +5,8 @@ import type {
 } from '@/core/media';
 import type { RenderPreset } from './types';
 import { assertRequiredNarrationBound, buildAudioMixCommand } from './audioMixCommandBuilder';
-import { assertCanonicalHardCutTimeline, buildCanonicalSceneExecutionPlan, canonicalSceneColor } from './canonicalSceneExecutionPlan';
+import { buildCanonicalSceneExecutionPlan, canonicalSceneColor } from './canonicalSceneExecutionPlan';
+import { assertCanonicalTransitionTimeline, buildCanonicalTransitionCompositionPlan } from './canonicalTransitionPlan';
 import { canonicalQualityArgs, canonicalVideoCodec, canonicalVideoSettings } from './encodingContract';
 import { buildCanonicalSubtitleRenderPlan } from './subtitleRenderBuilder';
 
@@ -33,7 +34,7 @@ export function buildSceneSegmentCommand(input: {
   const width = manifest.render.width;
   const height = manifest.render.height;
   const execution = buildCanonicalSceneExecutionPlan(manifest, scene, preset);
-  assertCanonicalHardCutTimeline(manifest);
+  assertCanonicalTransitionTimeline(manifest);
 
   const args: string[] = ['-hide_banner', '-y'];
 
@@ -100,10 +101,8 @@ export function buildSegmentConcatCommand(input: {
   segmentPaths: string[];
 }): SegmentConcatCommandPlan {
   const { manifest, preset, segmentPaths } = input;
-  assertCanonicalHardCutTimeline(manifest);
+  assertCanonicalTransitionTimeline(manifest);
   const durationSeconds = Math.max(0.1, manifest.durationMs / 1000);
-  const audio = buildAudioMixCommand(manifest, 1);
-  assertRequiredNarrationBound(manifest, audio);
   const subtitlePlan = buildCanonicalSubtitleRenderPlan({
     cues: manifest.subtitles.cues,
     width: manifest.render.width,
@@ -112,25 +111,39 @@ export function buildSegmentConcatCommand(input: {
     enabled: manifest.subtitles.enabled,
   });
 
-  const args: string[] = [
-    '-hide_banner',
-    '-y',
-    '-f',
-    'concat',
-    '-safe',
-    '0',
-    '-i',
-    '{{CONCAT_FILE}}',
-  ];
+  const needsFinalVisualComposition = manifest.timeline.scenes.length > 1 && manifest.timeline.scenes.some((scene) =>
+    scene.overlapBeforeMs > 0 || scene.transition?.type === 'crossfade',
+  );
+  // Real incremental execution supplies one verified segment per scene. Keep
+  // the existing concat-plan contract usable for legacy/unit callers that
+  // intentionally supply a partial list solely to inspect subtitle output.
+  // A partial list cannot execute a canonical crossfade, so it must not enter
+  // the direct-input composition path.
+  const canComposeTransitions = needsFinalVisualComposition && segmentPaths.length === manifest.timeline.scenes.length;
+  const transitionPlan = canComposeTransitions
+    ? buildCanonicalTransitionCompositionPlan(manifest, segmentPaths.map((_, index) => `${index}:v`))
+    : null;
+  const videoInputCount = canComposeTransitions ? segmentPaths.length : 1;
+  const audio = buildAudioMixCommand(manifest, videoInputCount);
+  assertRequiredNarrationBound(manifest, audio);
+  const args: string[] = ['-hide_banner', '-y'];
+  if (canComposeTransitions) {
+    for (const segmentPath of segmentPaths) args.push('-i', segmentPath);
+  } else {
+    args.push('-f', 'concat', '-safe', '0', '-i', '{{CONCAT_FILE}}');
+  }
 
   const filters: string[] = [];
-  if (subtitlePlan.assContent) filters.push('[0:v]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}[videoout]');
+  if (transitionPlan) filters.push(...transitionPlan.filters);
+  const visualLabel = transitionPlan?.outputLabel ?? '0:v';
+  if (subtitlePlan.assContent) filters.push(`[${visualLabel}]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}[videoout]`);
+  else if (transitionPlan) filters.push(`[${visualLabel}]null[videoout]`);
 
   if (audio.realInputCount > 0) {
     args.push(...audio.inputArgs);
     if (audio.filterComplex) filters.push(audio.filterComplex);
     if (filters.length > 0) args.push('-filter_complex', filters.join(';'));
-    args.push('-map', subtitlePlan.assContent ? '[videoout]' : '0:v:0', '-map', audio.outputLabel ?? '[audioout]');
+    args.push('-map', subtitlePlan.assContent || transitionPlan ? '[videoout]' : '0:v:0', '-map', audio.outputLabel ?? '[audioout]');
   } else {
     args.push(
       '-f',
@@ -141,7 +154,7 @@ export function buildSegmentConcatCommand(input: {
       `anullsrc=channel_layout=${(preset.audioChannels ?? 2) === 1 ? 'mono' : 'stereo'}:sample_rate=${preset.sampleRate ?? 48000}`,
       ...(filters.length > 0 ? ['-filter_complex', filters.join(';')] : []),
       '-map',
-      subtitlePlan.assContent ? '[videoout]' : '0:v:0',
+      subtitlePlan.assContent || transitionPlan ? '[videoout]' : '0:v:0',
       '-map',
       '1:a:0',
     );
@@ -149,9 +162,9 @@ export function buildSegmentConcatCommand(input: {
 
   args.push(
     '-c:v',
-    subtitlePlan.assContent ? canonicalVideoCodec(preset) : 'copy',
-    ...(subtitlePlan.assContent ? canonicalQualityArgs(preset) : []),
-    ...(subtitlePlan.assContent ? canonicalVideoSettings(preset) : []),
+    subtitlePlan.assContent || transitionPlan ? canonicalVideoCodec(preset) : 'copy',
+    ...(subtitlePlan.assContent || transitionPlan ? canonicalQualityArgs(preset) : []),
+    ...(subtitlePlan.assContent || transitionPlan ? canonicalVideoSettings(preset) : []),
     '-c:a',
     preset.audioCodec === 'opus' ? 'libopus' : 'aac',
     '-b:a',
@@ -171,7 +184,7 @@ export function buildSegmentConcatCommand(input: {
 
   return {
     args,
-    concatContent: segmentPaths
+    concatContent: canComposeTransitions ? '' : segmentPaths
       .map((segmentPath) => `file '${escapeConcatPath(segmentPath)}'`)
       .join('\n'),
     subtitleContent: subtitlePlan.assContent,

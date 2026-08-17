@@ -9,7 +9,7 @@ import { buildAudioTimeline } from './audioComposer';
 import { composeTracks } from './trackComposer';
 import { validateMediaProject } from './mediaValidator';
 import { privateStorageSource } from './storageIdentity';
-import type { CameraMotion, CanonicalMotionMode, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
+import type { CameraMotion, CanonicalMotionMode, CanonicalTransitionType, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
 
 export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
 
@@ -24,6 +24,17 @@ export function createMediaEngine(
         reconcileNarrationDuration(planScenes(input.scenes, settings), input.narration?.durationMs),
         canonicalMotionMode(input.motion?.mode),
       );
+      // Recipe-compiled projects always provide the bounded canonical
+      // transition configuration. Preserve the legacy planner's transition
+      // metadata for non-Recipe callers such as the editing audit pipeline;
+      // it is not an authorization path for Studio canonical export.
+      if (input.transition !== undefined) {
+        plannedScenes = applyCanonicalTransition(
+          plannedScenes,
+          canonicalTransitionType(input.transition.type),
+          settings.defaultTransitionMs,
+        );
+      }
       let timelinePlan = buildIntelligentTimeline(plannedScenes, settings);
       for (let attempt = 0; input.narration && timelinePlan.durationMs < input.narration.durationMs && attempt < 3; attempt += 1) {
         const sum = plannedScenes.reduce((total, scene) => total + scene.durationMs, 0);
@@ -176,6 +187,25 @@ function resolveCanonicalCameraMotion(mode: CanonicalMotionMode, sceneIndex: num
     // scene index avoids random motion while making adjacent image scenes vary.
     case 'pan': return sceneIndex % 2 === 0 ? 'pan_right' : 'pan_left';
   }
+}
+
+function canonicalTransitionType(value: unknown): CanonicalTransitionType {
+  if (value === undefined) return 'cut';
+  if (value === 'cut' || value === 'crossfade') return value;
+  throw new Error('Canonical transition type is invalid.');
+}
+
+function applyCanonicalTransition(
+  scenes: MediaScene[],
+  type: CanonicalTransitionType,
+  durationMs: number,
+): MediaScene[] {
+  return scenes.map((scene, index) => ({
+    ...scene,
+    transition: index === 0 || type === 'cut'
+      ? { type: 'cut', durationMs: 0 }
+      : { type: 'crossfade', durationMs },
+  }));
 }
 
 function reconcileNarrationDuration<T extends { durationMs: number }>(scenes: T[], narrationDurationMs: number | undefined): T[] {

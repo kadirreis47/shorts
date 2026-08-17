@@ -25,7 +25,7 @@ export async function createSceneFingerprint(
     .filter((track) => track.type === 'video')
     .flatMap((track) => track.clips)
     .filter((clip) => clip.sceneId === scene.id)
-    .map((clip) => { const { visualProduction: _visualProduction, ...metadata } = clip.metadata; return { id: clip.id, assetId: clip.assetId ?? null, startMs: clip.startMs, endMs: clip.endMs, offsetMs: clip.offsetMs, metadata }; });
+    .map((clip) => { const { visualProduction: _visualProduction, ...metadata } = clip.metadata; return { id: clip.id, assetId: clip.assetId ?? null, metadata }; });
 
   const visualProduction = getSceneVisualOperations(manifest, scene.id);
   const execution = buildCanonicalSceneExecutionPlan(manifest, scene, preset);
@@ -37,12 +37,9 @@ export async function createSceneFingerprint(
       role: scene.role,
       text: scene.text,
       visualPrompt: scene.visualPrompt,
-      startMs: scene.startMs,
-      endMs: scene.endMs,
       durationMs: scene.durationMs,
       assetIds: scene.assetIds,
       cameraMotion: scene.cameraMotion,
-      transition: scene.transition,
       subtitleText: scene.subtitleText,
       intensity: scene.intensity,
     },
@@ -51,8 +48,9 @@ export async function createSceneFingerprint(
     visualProduction,
     execution: {
       // Global subtitles are applied only after clean segments are composed.
-      // Versioning prevents reuse of pre-Slice-6 static-motion segments.
-      version: CANONICAL_SCENE_EXECUTION_VERSION,
+      // Clean segments are transition-free; versioning prevents reuse of
+      // pre-Slice-7 overlap-trimmed segment outputs.
+      version: CANONICAL_SCENE_EXECUTION_VERSION + 1,
       inputKind: execution.input.kind,
       durationMs: execution.durationMs,
       filters: execution.filters,

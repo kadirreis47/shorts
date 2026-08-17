@@ -1,6 +1,7 @@
 import type { RenderExecutionContext } from './types';
 import { assertRequiredNarrationBound, buildAudioMixCommand } from './audioMixCommandBuilder';
-import { assertCanonicalHardCutTimeline, buildCanonicalSceneExecutionPlan, canonicalSceneColor } from './canonicalSceneExecutionPlan';
+import { buildCanonicalSceneExecutionPlan, canonicalSceneColor } from './canonicalSceneExecutionPlan';
+import { buildCanonicalTransitionCompositionPlan } from './canonicalTransitionPlan';
 import { canonicalQualityArgs, canonicalVideoCodec, canonicalVideoSettings } from './encodingContract';
 import { buildCanonicalSubtitleRenderPlan } from './subtitleRenderBuilder';
 
@@ -20,7 +21,6 @@ export function buildFFmpegCommand(
   const scenes = manifest.timeline.scenes;
   const args: string[] = ['-hide_banner', '-y'];
   const filters: string[] = [];
-  assertCanonicalHardCutTimeline(manifest);
 
   scenes.forEach((scene, index) => {
     const plan = buildCanonicalSceneExecutionPlan(manifest, scene, preset);
@@ -37,8 +37,8 @@ export function buildFFmpegCommand(
     filters.push(`[${index}:v]${plan.filters.join(',')}[v${index}]`);
   });
 
-  const concatInputs = scenes.map((_, index) => `[v${index}]`).join('');
-  filters.push(`${concatInputs}concat=n=${scenes.length}:v=1:a=0[basevideo]`);
+  const transitionPlan = buildCanonicalTransitionCompositionPlan(manifest, scenes.map((_, index) => `v${index}`));
+  filters.push(...transitionPlan.filters);
   const subtitlePlan = buildCanonicalSubtitleRenderPlan({
     cues: manifest.subtitles.cues,
     width,
@@ -47,8 +47,8 @@ export function buildFFmpegCommand(
     enabled: manifest.subtitles.enabled,
   });
   filters.push(subtitlePlan.assContent
-    ? '[basevideo]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}[videoout]'
-    : '[basevideo]null[videoout]');
+    ? `[${transitionPlan.outputLabel}]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}[videoout]`
+    : `[${transitionPlan.outputLabel}]null[videoout]`);
 
   const durationSeconds = Math.max(0.1, manifest.durationMs / 1000);
   const hasAudioTimeline = Boolean(manifest.audio);
