@@ -44,6 +44,7 @@ export function buildFFmpegCommand(
     width,
     height,
     style: manifest.subtitles.style,
+    enabled: manifest.subtitles.enabled,
   });
   filters.push(subtitlePlan.assContent
     ? '[basevideo]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}[videoout]'

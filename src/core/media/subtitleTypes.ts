@@ -45,6 +45,8 @@ export interface SubtitleStyle {
 }
 
 export interface SubtitleTimeline {
+  /** Explicit canonical visibility; false means there are intentionally no burn-in cues. */
+  enabled: boolean;
   source: SubtitleAlignmentSource;
   language: string;
   durationMs: number;
@@ -64,7 +66,21 @@ export interface SubtitleMetrics {
   estimatedConfidence: number;
 }
 
+/**
+ * Bounded, authoring-level subtitle choices accepted by the canonical media
+ * builder. This deliberately does not expose ASS or browser-preview values.
+ */
+export type CanonicalSubtitlePreset = 'karaoke' | 'highlight' | 'classic' | 'minimal';
+
+export interface CanonicalSubtitleConfiguration {
+  enabled: boolean;
+  preset: CanonicalSubtitlePreset;
+  textColor: string | null;
+  highlightColor: string | null;
+}
+
 export interface SubtitleBuildOptions {
   language?: string;
   style?: Partial<SubtitleStyle>;
+  canonical?: CanonicalSubtitleConfiguration;
 }

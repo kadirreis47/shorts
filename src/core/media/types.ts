@@ -1,7 +1,7 @@
 import type { Scene } from '@/lib/types';
 import type { MediaStorageObject } from '@/lib/types';
 import type { AssetResolutionReport } from './assetProviderTypes';
-import type { SubtitleTimeline } from './subtitleTypes';
+import type { CanonicalSubtitleConfiguration, SubtitleTimeline } from './subtitleTypes';
 import type { AudioBuildOptions, AudioTimeline } from './audioTypes';
 import type { MediaValidationReport } from './validationTypes';
 import type { NormalizedStudioProductionRecipeV1 } from './studioProductionRecipe';
@@ -160,6 +160,7 @@ export interface CreateMediaProjectInput {
     scriptRevision: string;
     voiceId: string;
   };
+  subtitles?: CanonicalSubtitleConfiguration;
   productionRecipe?: NormalizedStudioProductionRecipeV1;
 }
 

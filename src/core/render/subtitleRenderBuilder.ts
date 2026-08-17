@@ -19,9 +19,18 @@ export function buildCanonicalSubtitleRenderPlan(input: {
   width: number;
   height: number;
   style: SubtitleStyle;
+  enabled?: boolean;
 }): SubtitleRenderPlan {
   const { cues, width, height, style } = input;
-  const validCues = cues.filter((cue) => cue.text.trim().length > 0 && cue.endMs > cue.startMs);
+  if (input.enabled === false) return { preset: 'clean', cueCount: 0, highlightedWordCount: 0 };
+  const validCues = cues
+    .filter((cue) => cue.text.trim().length > 0 && cue.endMs > cue.startMs)
+    .sort((left, right) =>
+      left.startMs - right.startMs
+      || left.endMs - right.endMs
+      || compareStableText(left.sceneId, right.sceneId)
+      || compareStableText(left.text, right.text),
+    );
   if (validCues.length === 0) return { preset: 'clean', cueCount: 0, highlightedWordCount: 0 };
   const preset = choosePreset(style);
   return {
@@ -38,6 +47,10 @@ export function buildCanonicalSubtitleRenderPlan(input: {
     cueCount: validCues.length,
     highlightedWordCount: validCues.reduce((total, cue) => total + Math.max(0, (cue.wordIds ?? []).length), 0),
   };
+}
+
+function compareStableText(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
 }
 
 export function buildSceneSubtitleRenderPlan(input: {

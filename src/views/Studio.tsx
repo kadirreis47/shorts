@@ -97,10 +97,10 @@ function canonicalMediaValidationError(build: {
 }
 
 const CAPTION_STYLES: { key: CaptionStyle; label: string; desc: string }[] = [
-  { key: 'karaoke', label: 'Karaoke', desc: 'Word-by-word pop with accent color' },
-  { key: 'highlight', label: 'Highlight Box', desc: 'Active word gets a colored block' },
-  { key: 'classic', label: 'Classic', desc: 'Bottom gradient with full text' },
-  { key: 'minimal', label: 'Minimal', desc: 'Clean centered text, subtle shadow' },
+  { key: 'karaoke', label: 'Karaoke', desc: 'Timed word reveal with accent color' },
+  { key: 'highlight', label: 'Highlight', desc: 'Accent color for emphasized words' },
+  { key: 'classic', label: 'Classic', desc: 'Bottom captions with a gentle fade' },
+  { key: 'minimal', label: 'Minimal', desc: 'Clean bottom captions with a light outline' },
 ];
 
 const TRANSITION_STYLES: { key: TransitionStyle; label: string }[] = [

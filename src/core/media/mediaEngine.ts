@@ -57,7 +57,9 @@ export function createMediaEngine(
         },
       } : null;
       if (narrationAsset) assets.push(narrationAsset);
-      const subtitleTimeline = buildSubtitleTimeline(scenes, settings);
+      const subtitleTimeline = buildSubtitleTimeline(scenes, settings, {
+        canonical: input.subtitles,
+      });
       const audioTimeline = buildAudioTimeline(
         scenes,
         timelinePlan.markers,

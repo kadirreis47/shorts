@@ -107,6 +107,7 @@ export function buildSegmentConcatCommand(input: {
     width: manifest.render.width,
     height: manifest.render.height,
     style: manifest.subtitles.style,
+    enabled: manifest.subtitles.enabled,
   });
 
   const args: string[] = [

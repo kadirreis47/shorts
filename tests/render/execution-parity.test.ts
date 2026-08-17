@@ -3,10 +3,12 @@ import {
   buildFFmpegCommand,
   buildSceneSegmentCommand,
   buildSegmentConcatCommand,
+  createSceneFingerprint,
   createIncrementalRenderPlanner,
   type RenderPreset,
 } from '@/core/render';
 import type { RenderManifest } from '@/core/media';
+import { buildSubtitleTimeline } from '@/core/media';
 
 const preset: RenderPreset = {
   id: 'parity', name: 'Parity', container: 'mp4', videoCodec: 'h264',
@@ -57,6 +59,25 @@ describe('full and incremental canonical execution parity', () => {
     expect(first.args).toContain('4.000');
     expect(second.args).toContain('5.000');
     expect(full.totalFrames).toBe(270);
+  });
+
+  it('bounds global subtitle cues to the same hard-cut scene boundaries', () => {
+    const value = manifest();
+    const scenes = value.timeline.scenes.map((scene, index) => ({
+      ...scene,
+      startMs: index === 0 ? 0 : 4_000,
+      endMs: index === 0 ? 5_000 : 9_000,
+      subtitleText: index === 0 ? 'First scene subtitle words' : 'Second scene subtitle words',
+      sourceScene: { text: 'source', duration: 5, visual: 'source' },
+    }));
+    const timeline = buildSubtitleTimeline(scenes, { fps: 30 } as never, {
+      canonical: { enabled: true, preset: 'minimal', textColor: null, highlightColor: null },
+    });
+    const firstSceneCues = timeline.cues.filter((cue) => cue.sceneId === 'one');
+
+    expect(firstSceneCues.length).toBeGreaterThan(0);
+    expect(Math.max(...firstSceneCues.map((cue) => cue.endMs))).toBeLessThanOrEqual(4_000);
+    expect(Math.min(...timeline.cues.filter((cue) => cue.sceneId === 'two').map((cue) => cue.startMs))).toBeGreaterThanOrEqual(4_000);
   });
 
   it('handles chained valid overlaps deterministically and rejects malformed overlap metadata', () => {
@@ -138,5 +159,15 @@ describe('full and incremental canonical execution parity', () => {
     } finally {
       planner.clear('execution-parity-cache-project');
     }
+  });
+
+  it('reuses clean subtitle-free segments for subtitle-only changes while final identity remains separate', async () => {
+    const value = manifest();
+    const changed = structuredClone(value);
+    changed.subtitles.style.textColor = '#ff00aa';
+    changed.subtitles.cues[0].text = 'Changed subtitle';
+
+    expect(await createSceneFingerprint(value.timeline.scenes[0], value, preset))
+      .toBe(await createSceneFingerprint(changed.timeline.scenes[0], changed, preset));
   });
 });

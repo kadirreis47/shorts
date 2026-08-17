@@ -1,5 +1,6 @@
 import type { MediaProjectSettings, MediaScene } from './types';
 import type {
+  CanonicalSubtitleConfiguration,
   SubtitleBuildOptions,
   SubtitleCue,
   SubtitleMetrics,
@@ -16,7 +17,8 @@ const DEFAULT_STYLE: SubtitleStyle = {
   strokeWidth: 4,
   shadowDepth: 1,
   textColor: '#FFFFFF',
-  highlightColor: '#FACC15',
+  // Match Studio's existing empty-state highlight swatch.
+  highlightColor: '#10B981',
   backgroundColor: '#000000',
   backgroundOpacity: 0.34,
   position: 'bottom',
@@ -41,12 +43,22 @@ export function buildSubtitleTimeline(
   settings: MediaProjectSettings,
   options: SubtitleBuildOptions = {},
 ): SubtitleTimeline {
-  const style = { ...DEFAULT_STYLE, ...options.style };
-  const words = scenes.flatMap((scene) => alignSceneWords(scene, settings));
-  const cues = buildCues(words, style);
+  const canonical = options.canonical ? normalizeCanonicalSubtitleConfiguration(options.canonical) : null;
+  const style = { ...DEFAULT_STYLE, ...(canonical ? canonicalSubtitleStyle(canonical) : {}), ...options.style };
+  // Slice 4 executes overlaps as hard cuts: the outgoing scene loses the
+  // following scene's overlap. Subtitle cues must use those same visual
+  // boundaries or an outgoing cue can appear over the incoming scene.
+  const subtitleScenes = scenes.map(effectiveSubtitleScene);
+  const words = canonical?.enabled === false ? [] : subtitleScenes.flatMap((scene) => alignSceneWords(scene, settings));
+  const cues = buildCues(
+    words,
+    style,
+    canonical?.preset === 'highlight' || canonical?.preset === 'karaoke',
+  );
   const durationMs = scenes.length > 0 ? scenes[scenes.length - 1].endMs : 0;
 
   return {
+    enabled: canonical?.enabled ?? true,
     source: 'estimated',
     language: options.language ?? 'tr',
     durationMs,
@@ -55,6 +67,54 @@ export function buildSubtitleTimeline(
     style,
     metrics: calculateSubtitleMetrics(words, cues, durationMs),
   };
+}
+
+function effectiveSubtitleScene(scene: MediaScene): MediaScene {
+  const overlapAfterMs = Number.isFinite(scene.overlapAfterMs)
+    ? Math.max(0, Math.min(scene.durationMs, scene.overlapAfterMs))
+    : 0;
+  if (overlapAfterMs === 0) return scene;
+  const durationMs = scene.durationMs - overlapAfterMs;
+  return { ...scene, durationMs, endMs: scene.startMs + durationMs };
+}
+
+/** Maps the four Studio Recipe V1 presets to fixed ASS-supported semantics. */
+export function canonicalSubtitleStyle(configuration: CanonicalSubtitleConfiguration): Partial<SubtitleStyle> {
+  const canonical = normalizeCanonicalSubtitleConfiguration(configuration);
+  const colors = {
+    textColor: canonical.textColor ?? DEFAULT_STYLE.textColor,
+    highlightColor: canonical.highlightColor ?? DEFAULT_STYLE.highlightColor,
+  };
+  switch (canonical.preset) {
+    case 'karaoke':
+      return { ...colors, fontWeight: 800, strokeWidth: 4, shadowDepth: 1, position: 'bottom', animation: 'karaoke' };
+    case 'highlight':
+      // The existing clean ASS path highlights only declared emphasis words.
+      // Keep it distinct from synthetic-timing karaoke rather than claiming
+      // a second word-by-word animation.
+      return { ...colors, fontWeight: 800, strokeWidth: 4, shadowDepth: 1, backgroundOpacity: .48, position: 'bottom', animation: 'none' };
+    case 'classic':
+      return { ...colors, fontWeight: 700, strokeWidth: 3, shadowDepth: 2, backgroundOpacity: .42, position: 'bottom', animation: 'fade' };
+    case 'minimal':
+      return { ...colors, fontWeight: 700, strokeWidth: 2, shadowDepth: 1, backgroundOpacity: 0, position: 'bottom', animation: 'none' };
+  }
+}
+
+function normalizeCanonicalSubtitleConfiguration(value: CanonicalSubtitleConfiguration | undefined): CanonicalSubtitleConfiguration {
+  if (!value) throw new Error('A canonical subtitle configuration is required.');
+  if (!['karaoke', 'highlight', 'classic', 'minimal'].includes(value.preset)) throw new Error('Unsupported canonical subtitle preset.');
+  return {
+    enabled: value.enabled === true,
+    preset: value.preset,
+    textColor: normalizeCanonicalColor(value.textColor),
+    highlightColor: normalizeCanonicalColor(value.highlightColor),
+  };
+}
+
+function normalizeCanonicalColor(value: string | null): string | null {
+  if (value === null || value === '') return null;
+  if (!/^#[0-9a-f]{6}$/i.test(value)) throw new Error('Canonical subtitle colors must be normalized hex values.');
+  return value.toUpperCase();
 }
 
 function alignSceneWords(scene: MediaScene, settings: MediaProjectSettings): SubtitleWord[] {
@@ -89,13 +149,21 @@ function alignSceneWords(scene: MediaScene, settings: MediaProjectSettings): Sub
   });
 }
 
-function buildCues(words: SubtitleWord[], style: SubtitleStyle): SubtitleCue[] {
+function buildCues(
+  words: SubtitleWord[],
+  style: SubtitleStyle,
+  ensureCueEmphasis = false,
+): SubtitleCue[] {
   const cues: SubtitleCue[] = [];
   let current: SubtitleWord[] = [];
 
   const flush = () => {
     if (!current.length) return;
     const text = current.map((word) => word.text).join(' ');
+    const explicitEmphasis = current.filter((word) => word.emphasis).map((word) => word.id);
+    const emphasisWordIds = explicitEmphasis.length > 0 || !ensureCueEmphasis
+      ? explicitEmphasis
+      : [deterministicCueEmphasis(current).id];
     cues.push({
       id: createId('subtitle-cue'),
       sceneId: current[0].sceneId,
@@ -105,7 +173,7 @@ function buildCues(words: SubtitleWord[], style: SubtitleStyle): SubtitleCue[] {
       durationMs: current[current.length - 1].endMs - current[0].startMs,
       wordIds: current.map((word) => word.id),
       lineCount: estimateLineCount(text, style.maxCharactersPerLine),
-      emphasisWordIds: current.filter((word) => word.emphasis).map((word) => word.id),
+      emphasisWordIds,
     });
     current = [];
   };
@@ -124,6 +192,19 @@ function buildCues(words: SubtitleWord[], style: SubtitleStyle): SubtitleCue[] {
 
   flush();
   return cues;
+}
+
+/**
+ * Bounded fallback for the Studio highlight/karaoke presets when ordinary
+ * scene text has no explicit emphasis. It deliberately chooses only from the
+ * already-estimated cue words; it is not word alignment.
+ */
+function deterministicCueEmphasis(words: readonly SubtitleWord[]): SubtitleWord {
+  return words.reduce((best, word) => {
+    const wordLength = word.normalizedText.length;
+    const bestLength = best.normalizedText.length;
+    return wordLength > bestLength ? word : best;
+  });
 }
 
 export function calculateSubtitleMetrics(

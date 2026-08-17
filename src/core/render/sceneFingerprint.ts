@@ -21,21 +21,6 @@ export async function createSceneFingerprint(
       metadata: asset.metadata,
     }));
 
-  const subtitleCues = manifest.subtitles.cues
-    .filter(
-      (cue) =>
-        cue.startMs < scene.endMs &&
-        cue.endMs > scene.startMs,
-    )
-    .map((cue) => ({
-      startMs: Math.max(0, cue.startMs - scene.startMs),
-      endMs: Math.max(0, cue.endMs - scene.startMs),
-      text: cue.text,
-      wordIds: cue.wordIds,
-      emphasisWordIds: cue.emphasisWordIds,
-      lineCount: cue.lineCount,
-    }));
-
   const videoClips = manifest.timeline.tracks
     .filter((track) => track.type === 'video')
     .flatMap((track) => track.clips)
@@ -65,13 +50,13 @@ export async function createSceneFingerprint(
     videoClips,
     visualProduction,
     execution: {
-      version: 1,
+      // Global subtitles are applied only after clean segments are composed.
+      // Versioning prevents reuse of pre-Slice-5 segment fingerprints.
+      version: 2,
       inputKind: execution.input.kind,
       durationMs: execution.durationMs,
       filters: execution.filters,
     },
-    subtitleCues,
-    subtitleStyle: manifest.subtitles.style,
     render: manifest.render,
     preset,
   });

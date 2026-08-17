@@ -234,6 +234,10 @@ function validateSubtitles(
 ): void {
   const { subtitles } = project;
 
+  // Studio's canonical subtitle toggle intentionally produces an empty
+  // subtitle track. Legacy timelines without this field retain prior checks.
+  if (subtitles.enabled === false) return;
+
   if (subtitles.cues.length === 0) {
     addIssue(issues, 'SUBTITLE_CUES_EMPTY', 'subtitles', 'error', 'Altyazı cue listesi boş.');
     return;

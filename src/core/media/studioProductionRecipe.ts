@@ -214,6 +214,12 @@ export function compileStudioProductionRecipeV1(
       scriptRevision: narration.scriptRevision,
       voiceId: narration.voiceId,
     } : undefined,
+    subtitles: {
+      enabled: recipe.subtitles.enabled,
+      preset: recipe.subtitles.preset,
+      textColor: recipe.subtitles.textColor,
+      highlightColor: recipe.subtitles.highlightColor,
+    },
     productionRecipe: normalized,
   };
 }

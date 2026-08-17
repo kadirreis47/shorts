@@ -31,7 +31,7 @@ export function isRenderManifestReady(manifest: RenderManifest): boolean {
     manifest.render.fps > 0 &&
     manifest.render.width > 0 &&
     manifest.render.height > 0 &&
-    manifest.subtitles.cues.length > 0 &&
+    (manifest.subtitles.enabled === false || manifest.subtitles.cues.length > 0) &&
     voiceRequirementSatisfied &&
     manifest.validation?.renderReady === true
   );

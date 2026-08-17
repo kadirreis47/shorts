@@ -3,7 +3,10 @@ import {
   compileStudioProductionRecipeV1,
   createAssetProviderEngine,
   createMediaEngine,
+  canonicalSubtitleStyle,
   normalizeStudioProductionRecipeV1,
+  type SubtitleCue,
+  type SubtitleStyle,
 } from '@/core/media';
 import type { StudioProductionRecipeInput } from '@/core/media';
 import { studioProductionRecipeInputFromDraft, type StudioDraft } from '@/lib/studioDraft';
@@ -12,8 +15,10 @@ import { TypedEventBus } from '@/core/events/eventBus';
 import type { ApplicationEventMap } from '@/core/events';
 import { captureValidatedMediaOwnerContext } from '@/lib/mediaStorage';
 import { setValidatedOwnerId } from '@/auth/identity';
+import { buildCanonicalSubtitleRenderPlan, buildFFmpegCommand, buildSegmentConcatCommand, type RenderPreset } from '@/core/render';
 
 const OWNER_A = 'owner-a';
+const RENDER_PRESET: RenderPreset = { id: 'recipe-subtitles', name: 'Recipe subtitles', container: 'mp4', videoCodec: 'h264', audioCodec: 'aac', frameRate: 30, quality: 'standard', hardwareAcceleration: 'disabled' };
 
 describe('StudioProductionRecipeV1', () => {
   it('normalizes the same logical Studio state deterministically', () => {
@@ -44,6 +49,18 @@ describe('StudioProductionRecipeV1', () => {
     changed.captionTextColor = '#FF00AA';
     changed.watermarkText = '@ShortsFlow';
 
+    expect(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity).not.toBe(baseline.identity);
+  });
+
+  it.each([
+    ['visibility', (input: StudioProductionRecipeInput) => { input.showSubtitles = false; }],
+    ['preset', (input: StudioProductionRecipeInput) => { input.captionStyle = 'classic'; }],
+    ['text color', (input: StudioProductionRecipeInput) => { input.captionTextColor = '#FF00AA'; }],
+    ['highlight color', (input: StudioProductionRecipeInput) => { input.captionHighlightColor = '#00FF00'; }],
+  ])('changes Recipe V1 identity for canonical subtitle %s', (_name, mutate) => {
+    const baseline = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
+    const changed = recipeInput();
+    mutate(changed);
     expect(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity).not.toBe(baseline.identity);
   });
 
@@ -106,11 +123,117 @@ describe('StudioProductionRecipeV1', () => {
         voiceId: 'voice-a',
       },
       productionRecipe: { identity: normalized.identity },
+      subtitles: { enabled: true, preset: 'karaoke', textColor: null, highlightColor: null },
     });
   });
 
+  it('compiles bounded Recipe V1 subtitle intent into canonical media input', () => {
+    const input = recipeInput();
+    input.captionStyle = 'minimal';
+    input.captionTextColor = '#ff00aa';
+    input.captionHighlightColor = '#00ff00';
+    const compiled = compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(input, ownerContext()));
+
+    expect(compiled.subtitles).toEqual({ enabled: true, preset: 'minimal', textColor: '#FF00AA', highlightColor: '#00FF00' });
+  });
+
+  it('makes disabled Recipe V1 subtitles canonically empty and export-ready in both execution paths', async () => {
+    const input = recipeInput();
+    input.showSubtitles = false;
+    const normalized = normalizeStudioProductionRecipeV1(input, ownerContext());
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const build = await createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject(compileStudioProductionRecipeV1(normalized));
+    const full = buildFFmpegCommand({ manifest: build.manifest, preset: RENDER_PRESET });
+    const concat = buildSegmentConcatCommand({ manifest: build.manifest, preset: RENDER_PRESET, segmentPaths: build.manifest.timeline.scenes.map((_, index) => `scene-${index}.mp4`) });
+
+    expect(build.project.subtitles).toMatchObject({ enabled: false, cues: [], words: [] });
+    expect(build.validation.renderReady).toBe(true);
+    expect(build.renderReady).toBe(true);
+    expect(full.subtitleContent).toBe('');
+    expect(concat.subtitleContent).toBeUndefined();
+    expect(full.args.join(' ')).not.toContain('subtitles=filename');
+    expect(concat.args.join(' ')).not.toContain('subtitles=filename');
+  });
+
+  it('keeps an explicitly disabled manifest subtitle-free even if stale cues are present', async () => {
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const build = await createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject(compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(recipeInput(), ownerContext())));
+    build.manifest.subtitles.enabled = false;
+    const full = buildFFmpegCommand({ manifest: build.manifest, preset: RENDER_PRESET });
+    const concat = buildSegmentConcatCommand({ manifest: build.manifest, preset: RENDER_PRESET, segmentPaths: build.manifest.timeline.scenes.map((_, index) => `scene-${index}.mp4`) });
+
+    expect(build.manifest.subtitles.cues.length).toBeGreaterThan(0);
+    expect(full.subtitleContent).toBe('');
+    expect(concat.subtitleContent).toBeUndefined();
+  });
+
+  it.each([
+    ['karaoke', 'karaoke'],
+    ['highlight', 'none'],
+    ['classic', 'fade'],
+    ['minimal', 'none'],
+  ] as const)('maps the %s preset to deterministic bounded ASS semantics', (preset, animation) => {
+    const style = canonicalSubtitleStyle({ enabled: true, preset, textColor: '#FF00AA', highlightColor: '#00FF00' });
+    expect(style).toMatchObject({ animation, textColor: '#FF00AA', highlightColor: '#00FF00', position: 'bottom' });
+  });
+
+  it('uses deterministic canonical defaults when no custom colors are selected', () => {
+    expect(canonicalSubtitleStyle({ enabled: true, preset: 'highlight', textColor: null, highlightColor: null }))
+      .toMatchObject({ textColor: '#FFFFFF', highlightColor: '#10B981' });
+  });
+
+  it('propagates normalized colors into deterministic, safely escaped ASS output', () => {
+    const canonical = canonicalSubtitleStyle({ enabled: true, preset: 'karaoke', textColor: '#FF00AA', highlightColor: '#00FF00' });
+    const style: SubtitleStyle = { fontFamily: 'Inter', fontSize: 64, fontWeight: canonical.fontWeight ?? 800, lineSpacing: 1, strokeWidth: canonical.strokeWidth ?? 4, shadowDepth: canonical.shadowDepth ?? 1, textColor: canonical.textColor!, highlightColor: canonical.highlightColor!, backgroundColor: '#000000', backgroundOpacity: canonical.backgroundOpacity ?? .34, position: canonical.position ?? 'bottom', maxWordsPerCue: 4, maxCharactersPerLine: 26, animation: canonical.animation!, uppercase: false };
+    const cues: SubtitleCue[] = [
+      { id: 'cue-2', sceneId: 'scene-2', startMs: 1_000, endMs: 2_000, durationMs: 1_000, text: 'Second {line}\\next', wordIds: [], emphasisWordIds: [], lineCount: 1 },
+      { id: 'cue-1', sceneId: 'scene-1', startMs: 0, endMs: 900, durationMs: 900, text: 'First\nline', wordIds: [], emphasisWordIds: [], lineCount: 1 },
+    ];
+    const first = buildCanonicalSubtitleRenderPlan({ cues, width: 1080, height: 1920, style });
+    const second = buildCanonicalSubtitleRenderPlan({ cues: [...cues].reverse(), width: 1080, height: 1920, style });
+
+    expect(first.assContent).toContain('&H00AA00FF&');
+    expect(first.assContent).toContain('&H0000FF00&');
+    expect(first.assContent).toContain('\\{line\\}\\\\next');
+    expect(first.assContent).toContain('First\\N');
+    expect(first.assContent).toBe(second.assContent);
+  });
+
+  it('renders the highlight preset through the bounded emphasized-word ASS path', () => {
+    const canonical = canonicalSubtitleStyle({ enabled: true, preset: 'highlight', textColor: '#FFFFFF', highlightColor: '#00FF00' });
+    const style: SubtitleStyle = { fontFamily: 'Inter', fontSize: 64, fontWeight: canonical.fontWeight ?? 800, lineSpacing: 1, strokeWidth: canonical.strokeWidth ?? 4, shadowDepth: canonical.shadowDepth ?? 1, textColor: canonical.textColor!, highlightColor: canonical.highlightColor!, backgroundColor: '#000000', backgroundOpacity: canonical.backgroundOpacity ?? .34, position: canonical.position ?? 'bottom', maxWordsPerCue: 4, maxCharactersPerLine: 26, animation: canonical.animation!, uppercase: false };
+    const plan = buildCanonicalSubtitleRenderPlan({ cues: [{ id: 'highlight-cue', sceneId: 'scene', startMs: 0, endMs: 1_000, durationMs: 1_000, text: 'Focus now', wordIds: ['focus', 'now'], emphasisWordIds: ['focus'], lineCount: 1 }], width: 1080, height: 1920, style });
+
+    expect(plan.preset).toBe('clean');
+    expect(plan.assContent).toContain('{\\c&H0000FF00&}Focus{\\c&H00FFFFFF&}');
+  });
+
+  it.each(['highlight', 'karaoke'] as const)('selects a deterministic emphasized word for ordinary %s Recipe text', async (preset) => {
+    const input = recipeInput();
+    input.captionStyle = preset;
+    input.captionHighlightColor = '#10b981';
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const build = await createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject(compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(input, ownerContext())));
+    const cue = build.project.subtitles.cues[0];
+    const plan = buildCanonicalSubtitleRenderPlan({ cues: [cue], width: 1080, height: 1920, style: build.project.subtitles.style, enabled: true });
+
+    expect(cue.emphasisWordIds).toEqual([cue.wordIds[0]]);
+    expect(plan.assContent).toContain('{\\c&H0081B910&}');
+    expect(plan.assContent).toContain('{\\c&H00FFFFFF&}');
+  });
+
+  it('rejects malformed Recipe color input before it can reach ASS', () => {
+    const input = recipeInput();
+    input.captionTextColor = '#ffffff,{\\pos(0,0)}';
+    expect(() => normalizeStudioProductionRecipeV1(input, ownerContext())).toThrow('six-digit hex');
+  });
+
   it('carries compiled narration and recipe provenance into the existing MediaProject', async () => {
-    const normalized = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
+    const input = recipeInput();
+    input.captionStyle = 'classic';
+    input.captionTextColor = '#FF00AA';
+    input.captionHighlightColor = '#00FF00';
+    const normalized = normalizeStudioProductionRecipeV1(input, ownerContext());
     const bus = new TypedEventBus<ApplicationEventMap>();
     const media = createMediaEngine(bus, createAssetProviderEngine(bus));
     const build = await media.buildProject(compileStudioProductionRecipeV1(normalized));
@@ -121,6 +244,11 @@ describe('StudioProductionRecipeV1', () => {
       }),
     }));
     expect(build.manifest.metadata.productionRecipe?.identity).toBe(normalized.identity);
+    expect(build.project.subtitles).toMatchObject({
+      enabled: true,
+      style: { animation: 'fade', textColor: '#FF00AA', highlightColor: '#00FF00' },
+    });
+    expect(build.project.subtitles.cues.length).toBeGreaterThan(0);
   });
 
   it('keeps Browser TTS preview-only and unsupported controls truthful', () => {
