@@ -162,6 +162,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
         args: concatPlan.args,
         outputPath: context.outputPath,
         concatContent: concatPlan.concatContent,
+        subtitleContent: concatPlan.subtitleContent,
       });
       childJobIds.delete(concatJobId);
 
@@ -201,14 +202,10 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           audioDuckingApplied:
             context.manifest.audio.voice.some((segment) => Boolean(segment.assetId))
             && context.manifest.audio.music.some((segment) => Boolean(segment.assetId)),
-          cameraMotionSceneCount: context.manifest.timeline.scenes.filter(
-            (scene) => scene.cameraMotion !== 'none',
-          ).length,
-          transitionEffectSceneCount: context.manifest.timeline.scenes.filter(
-            (scene) =>
-              scene.transition.type !== 'cut' &&
-              scene.transition.durationMs > 0,
-          ).length,
+          // Slice 4 deliberately executes the truthful hard-cut baseline;
+          // recipe/manifest intent is not reported as an applied effect.
+          cameraMotionSceneCount: 0,
+          transitionEffectSceneCount: 0,
           advancedSubtitleRenderer: true,
           subtitleCueCount: context.manifest.subtitles.cues.length,
           karaokeReadyCueCount: context.manifest.subtitles.cues.filter(

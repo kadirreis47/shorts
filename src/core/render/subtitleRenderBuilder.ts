@@ -13,6 +13,33 @@ export interface SubtitleRenderPlan {
   highlightedWordCount: number;
 }
 
+/** Global canonical ASS plan used after either full composition or segment concat. */
+export function buildCanonicalSubtitleRenderPlan(input: {
+  cues: SubtitleCue[];
+  width: number;
+  height: number;
+  style: SubtitleStyle;
+}): SubtitleRenderPlan {
+  const { cues, width, height, style } = input;
+  const validCues = cues.filter((cue) => cue.text.trim().length > 0 && cue.endMs > cue.startMs);
+  if (validCues.length === 0) return { preset: 'clean', cueCount: 0, highlightedWordCount: 0 };
+  const preset = choosePreset(style);
+  return {
+    assContent: [
+      '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${width}`, `PlayResY: ${height}`,
+      'WrapStyle: 2', 'ScaledBorderAndShadow: yes', 'YCbCr Matrix: TV.709', '',
+      '[V4+ Styles]',
+      'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+      ...styleBlock(style, width, height), '', '[Events]',
+      'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+      ...validCues.flatMap((cue) => buildCueEvents(cue, cue.startMs, cue.endMs, preset, style)), '',
+    ].join('\n'),
+    preset,
+    cueCount: validCues.length,
+    highlightedWordCount: validCues.reduce((total, cue) => total + Math.max(0, (cue.wordIds ?? []).length), 0),
+  };
+}
+
 export function buildSceneSubtitleRenderPlan(input: {
   scene: MediaScene;
   cues: SubtitleCue[];
@@ -101,7 +128,7 @@ function buildCueEvents(
           const pop = preset === 'viral'
             ? `{\\k${perWord}\\t(0,110,\\fscx118\\fscy118)\\t(110,220,\\fscx100\\fscy100)}`
             : `{\\k${perWord}}`;
-          const emphasized = cue.emphasisWordIds.includes(cue.wordIds[index]);
+          const emphasized = (cue.emphasisWordIds ?? []).includes((cue.wordIds ?? [])[index]);
           const highlight = emphasized ? `{\\c${assColor(style.highlightColor)}}` : '';
           const restore = emphasized ? `{\\c${assColor(style.textColor)}}` : '';
           return `${pop}${highlight}${escapeAss(token.value)}${restore}`;
@@ -154,11 +181,13 @@ function choosePreset(style: SubtitleStyle): SubtitleRenderPreset {
 }
 
 function highlightText(cue: SubtitleCue, style: SubtitleStyle): string {
-  if (!cue.emphasisWordIds.length) return '';
+  const emphasisWordIds = cue.emphasisWordIds ?? [];
+  const wordIds = cue.wordIds ?? [];
+  if (!emphasisWordIds.length) return '';
   let wordIndex = 0;
   return tokenizeSubtitleText(cue.text).map((token) => {
     if (token.kind !== 'word') return escapeAss(token.value);
-    const emphasized = cue.emphasisWordIds.includes(cue.wordIds[wordIndex++]);
+    const emphasized = emphasisWordIds.includes(wordIds[wordIndex++]);
     return emphasized ? `{\\c${assColor(style.highlightColor)}}${escapeAss(token.value)}{\\c${assColor(style.textColor)}}` : escapeAss(token.value);
   }).join('');
 }

@@ -14,6 +14,15 @@ export interface AudioMixCommandPlan {
   sfxInputCount: number;
 }
 
+export function assertRequiredNarrationBound(
+  manifest: RenderManifest,
+  audio: Pick<AudioMixCommandPlan, 'voiceInputCount'>,
+): void {
+  if (manifest.audio?.narrationMode === 'required' && audio.voiceInputCount === 0) {
+    throw new Error('Required canonical narration could not be bound to FFmpeg.');
+  }
+}
+
 interface ResolvedAudioSegment {
   segment: AudioSegment;
   asset: MediaAsset;

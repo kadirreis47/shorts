@@ -2,6 +2,7 @@ import type { MediaAsset, MediaScene, RenderManifest } from '@/core/media';
 import { getSceneVisualOperations } from '@/core/visual-production/visualState';
 import type { RenderPreset } from './types';
 import { canonicalMediaAssetSource } from '@/core/media/storageIdentity';
+import { buildCanonicalSceneExecutionPlan } from './canonicalSceneExecutionPlan';
 
 export async function createSceneFingerprint(
   scene: MediaScene,
@@ -42,6 +43,7 @@ export async function createSceneFingerprint(
     .map((clip) => { const { visualProduction: _visualProduction, ...metadata } = clip.metadata; return { id: clip.id, assetId: clip.assetId ?? null, startMs: clip.startMs, endMs: clip.endMs, offsetMs: clip.offsetMs, metadata }; });
 
   const visualProduction = getSceneVisualOperations(manifest, scene.id);
+  const execution = buildCanonicalSceneExecutionPlan(manifest, scene, preset);
 
   const payload = stableStringify({
     scene: {
@@ -62,6 +64,12 @@ export async function createSceneFingerprint(
     assets,
     videoClips,
     visualProduction,
+    execution: {
+      version: 1,
+      inputKind: execution.input.kind,
+      durationMs: execution.durationMs,
+      filters: execution.filters,
+    },
     subtitleCues,
     subtitleStyle: manifest.subtitles.style,
     render: manifest.render,

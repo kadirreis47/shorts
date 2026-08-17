@@ -28,21 +28,19 @@ describe('FFmpeg subtitles filter filename serialization', () => {
     expect(serializeSubtitleFilterFilename(input)).toBe(expected);
   });
 
-  it('keeps full render subtitles filename and force_style as separate filter options', () => {
+  it('keeps the canonical ASS subtitle filename as a safely serialized filter option', () => {
     const filter = buildFFmpegCommand({ manifest, preset }).args[buildFFmpegCommand({ manifest, preset }).args.indexOf('-filter_complex') + 1];
     const resolved = filter.replace('{{SUBTITLE_FILE_FILTER_VALUE}}', serializeSubtitleFilterFilename('C:\\Temp Folder\\Shorts Flow\\subtitles.srt'));
-    expect(resolved).toContain("subtitles=filename='C\\:/Temp Folder/Shorts Flow/subtitles.srt':force_style='");
+    expect(resolved).toContain("subtitles=filename='C\\:/Temp Folder/Shorts Flow/subtitles.srt'");
     expect(resolved).not.toContain('subtitles=C');
     expect(resolved).not.toContain('original_size=');
   });
 
-  it('keeps segment render subtitles filename explicit and safely serializable', async () => {
+  it('defers segment subtitles to the canonical final concat stage', async () => {
     const fixture = await editingFixture();
     const scene = fixture.manifest.timeline.scenes[0];
     const command = buildSceneSegmentCommand({ manifest: fixture.manifest, scene, preset, outputPath: 'out.mp4' });
     const filter = command.args[command.args.indexOf('-vf') + 1];
-    const resolved = filter.replace('{{SUBTITLE_FILE_FILTER_VALUE}}', serializeSubtitleFilterFilename('C:\\Temp Folder\\Shorts Flow\\subtitles.srt'));
-    expect(resolved).toContain("subtitles=filename='C\\:/Temp Folder/Shorts Flow/subtitles.srt'");
-    expect(resolved).not.toContain('original_size=');
+    expect(filter).not.toContain('subtitles=');
   });
 });
