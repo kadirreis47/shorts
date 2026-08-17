@@ -25,7 +25,7 @@ export function buildFFmpegCommand(
   scenes.forEach((scene, index) => {
     const plan = buildCanonicalSceneExecutionPlan(manifest, scene, preset);
     if (plan.input.source) {
-      if (plan.input.kind === 'image') args.push('-loop', '1', '-t', plan.durationSeconds, '-i', plan.input.source);
+      if (plan.input.kind === 'image') args.push('-framerate', String(fps), '-loop', '1', '-t', plan.durationSeconds, '-i', plan.input.source);
       else args.push('-stream_loop', '-1', '-t', plan.durationSeconds, '-i', plan.input.source);
     } else {
       args.push(

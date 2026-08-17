@@ -1,6 +1,7 @@
 import { evaluateRenderDiagnostics } from './renderDiagnostics';
 import type { RenderManifest } from '@/core/media';
 import { buildFFmpegCommand } from './ffmpegCommandBuilder';
+import { buildCanonicalSceneExecutionPlan } from './canonicalSceneExecutionPlan';
 import {
   buildSceneSegmentCommand,
   buildSegmentConcatCommand,
@@ -202,9 +203,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           audioDuckingApplied:
             context.manifest.audio.voice.some((segment) => Boolean(segment.assetId))
             && context.manifest.audio.music.some((segment) => Boolean(segment.assetId)),
-          // Slice 4 deliberately executes the truthful hard-cut baseline;
-          // recipe/manifest intent is not reported as an applied effect.
-          cameraMotionSceneCount: 0,
+          cameraMotionSceneCount: appliedCameraMotionSceneCount(context.manifest, preset),
           transitionEffectSceneCount: 0,
           advancedSubtitleRenderer: true,
           subtitleCueCount: context.manifest.subtitles.cues.length,
@@ -265,6 +264,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
         metadata: {
           adapter: this.id, ffmpegVersion: capabilities.version, elapsedMs: result.elapsedMs, exitCode: result.exitCode,
           hardwareAcceleration: preset.hardwareAcceleration, averageFps: latestFps, encodingSpeed: latestSpeed, ...extraMetadata,
+          cameraMotionSceneCount: appliedCameraMotionSceneCount(context.manifest, preset),
         },
       };
     } finally {
@@ -273,6 +273,13 @@ export class FFmpegRenderAdapter implements RenderAdapter {
     }
   }
 }
+
+function appliedCameraMotionSceneCount(manifest: RenderManifest, preset: RenderPreset): number {
+  return manifest.timeline.scenes.filter((scene) =>
+    buildCanonicalSceneExecutionPlan(manifest, scene, preset).filters.some((filter) => filter.startsWith('zoompan=')),
+  ).length;
+}
+
 export function createFFmpegRenderAdapter(hardwareScheduler: HardwareScheduler): RenderAdapter {
   return new FFmpegRenderAdapter(hardwareScheduler);
 }

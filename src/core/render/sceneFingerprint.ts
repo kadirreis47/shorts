@@ -2,7 +2,7 @@ import type { MediaAsset, MediaScene, RenderManifest } from '@/core/media';
 import { getSceneVisualOperations } from '@/core/visual-production/visualState';
 import type { RenderPreset } from './types';
 import { canonicalMediaAssetSource } from '@/core/media/storageIdentity';
-import { buildCanonicalSceneExecutionPlan } from './canonicalSceneExecutionPlan';
+import { buildCanonicalSceneExecutionPlan, CANONICAL_SCENE_EXECUTION_VERSION } from './canonicalSceneExecutionPlan';
 
 export async function createSceneFingerprint(
   scene: MediaScene,
@@ -51,8 +51,8 @@ export async function createSceneFingerprint(
     visualProduction,
     execution: {
       // Global subtitles are applied only after clean segments are composed.
-      // Versioning prevents reuse of pre-Slice-5 segment fingerprints.
-      version: 2,
+      // Versioning prevents reuse of pre-Slice-6 static-motion segments.
+      version: CANONICAL_SCENE_EXECUTION_VERSION,
       inputKind: execution.input.kind,
       durationMs: execution.durationMs,
       filters: execution.filters,

@@ -22,7 +22,7 @@ function manifest(overrides: Record<string, unknown> = {}): RenderManifest {
     render: { fps: 30, width: 1080, height: 1920 },
     timeline: {
       scenes: [
-        { id: 'one', index: 0, durationMs: 5_000, overlapBeforeMs: 0, overlapAfterMs: 1_000, assetIds: [], cameraMotion: 'zoom_in', transition: { type: 'fade', durationMs: 1_000 } },
+        { id: 'one', index: 0, durationMs: 5_000, overlapBeforeMs: 0, overlapAfterMs: 1_000, assetIds: [], cameraMotion: 'none', transition: { type: 'fade', durationMs: 1_000 } },
         { id: 'two', index: 1, durationMs: 5_000, overlapBeforeMs: 1_000, overlapAfterMs: 0, assetIds: [], cameraMotion: 'none', transition: { type: 'fade', durationMs: 1_000 } },
       ], tracks: [],
     },
@@ -39,7 +39,7 @@ function manifest(overrides: Record<string, unknown> = {}): RenderManifest {
 function filter(plan: { args: string[] }): string { return plan.args[plan.args.indexOf('-filter_complex') + 1] ?? ''; }
 
 describe('full and incremental canonical execution parity', () => {
-  it('uses the same baseline framing and suppresses hidden motion, visual operations, and transition approximations', () => {
+  it('uses the same static baseline framing and suppresses unsupported visual operations and transition approximations', () => {
     const value = manifest();
     const full = buildFFmpegCommand({ manifest: value, preset });
     const segment = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[0], preset, outputPath: 'one.mp4' });
@@ -48,6 +48,58 @@ describe('full and incremental canonical execution parity', () => {
     expect(segmentFilter).toContain('scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30');
     expect(filter(full)).not.toMatch(/zoompan|gblur|fade=/);
     expect(segmentFilter).not.toMatch(/zoompan|gblur|fade=/);
+  });
+
+  it.each(['ken_burns', 'zoom_in', 'zoom_out', 'pan_left', 'pan_right'] as const)('uses deterministic shared image motion for %s', async (motion) => {
+    const value = manifest({
+      assets: [{ id: 'image', type: 'image', source: 'https://media.example/image.png', metadata: {} }],
+      timeline: { scenes: [
+        { ...manifest().timeline.scenes[0], assetIds: ['image'], cameraMotion: motion },
+        manifest().timeline.scenes[1],
+      ], tracks: [] },
+    });
+    const full = buildFFmpegCommand({ manifest: value, preset });
+    const segment = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[0], preset, outputPath: 'one.mp4' });
+    const segmentFilter = segment.args[segment.args.indexOf('-vf') + 1];
+    expect(filter(full)).toContain(segmentFilter);
+    expect(segmentFilter).toContain("zoompan=z='");
+    expect(segmentFilter).toContain('s=1080x1920:fps=30');
+    expect(await createSceneFingerprint(value.timeline.scenes[0], value, preset))
+      .toBe(await createSceneFingerprint(value.timeline.scenes[0], value, preset));
+  });
+
+  it('keeps fractional-duration motion bounded and makes Ken Burns distinct from Zoom In', () => {
+    const base = manifest({
+      assets: [{ id: 'image', type: 'image', source: 'image.png', metadata: {} }],
+      durationMs: 1_001,
+      timeline: { scenes: [
+        { ...manifest().timeline.scenes[0], durationMs: 1_001, overlapAfterMs: 0, assetIds: ['image'], cameraMotion: 'ken_burns' },
+      ], tracks: [] },
+    });
+    const zoom = structuredClone(base);
+    zoom.timeline.scenes[0].cameraMotion = 'zoom_in';
+    const kenArgs = buildSceneSegmentCommand({ manifest: base, scene: base.timeline.scenes[0], preset, outputPath: 'ken.mp4' }).args;
+    const zoomArgs = buildSceneSegmentCommand({ manifest: zoom, scene: zoom.timeline.scenes[0], preset, outputPath: 'zoom.mp4' }).args;
+    const kenFilter = kenArgs[kenArgs.indexOf('-vf') + 1];
+    const zoomFilter = zoomArgs[zoomArgs.indexOf('-vf') + 1];
+    expect(kenFilter).toContain('on/30');
+    expect(kenFilter).toContain('0.35+0.3*on/30');
+    expect(zoomFilter).toContain("z='1+0.15*on/30'");
+  });
+
+  it('keeps video and static-image scenes free from still-image zoompan', () => {
+    const image = manifest({ assets: [{ id: 'image', type: 'image', source: 'image.png', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['image'], cameraMotion: 'none' }, manifest().timeline.scenes[1]], tracks: [] } });
+    const video = manifest({ assets: [{ id: 'video', type: 'video', source: 'video.mp4', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['video'], cameraMotion: 'zoom_in' }, manifest().timeline.scenes[1]], tracks: [] } });
+    expect(buildSceneSegmentCommand({ manifest: image, scene: image.timeline.scenes[0], preset, outputPath: 'one.mp4' }).args).not.toContain(expect.stringContaining('zoompan'));
+    expect(buildSceneSegmentCommand({ manifest: video, scene: video.timeline.scenes[0], preset, outputPath: 'one.mp4' }).args).not.toContain(expect.stringContaining('zoompan'));
+  });
+
+  it('invalidates pre-motion and changed-motion clean scene cache identities', async () => {
+    const base = manifest({ assets: [{ id: 'image', type: 'image', source: 'image.png', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['image'], cameraMotion: 'none' }, manifest().timeline.scenes[1]], tracks: [] } });
+    const changed = structuredClone(base);
+    changed.timeline.scenes[0].cameraMotion = 'zoom_in';
+    expect(await createSceneFingerprint(base.timeline.scenes[0], base, preset))
+      .not.toBe(await createSceneFingerprint(changed.timeline.scenes[0], changed, preset));
   });
 
   it('uses hard-cut effective durations that equal the canonical overlapped timeline without truncating the final scene', () => {

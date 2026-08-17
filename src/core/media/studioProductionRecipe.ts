@@ -1,6 +1,6 @@
 import type { MediaStorageObject, Scene, VisualMode } from '@/lib/types';
 import { assertCurrentMediaOwnerContext, type ValidatedMediaOwnerContext } from '@/lib/mediaStorage';
-import type { CreateMediaProjectInput } from './types';
+import type { CanonicalMotionMode, CreateMediaProjectInput } from './types';
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
@@ -124,7 +124,7 @@ export const STUDIO_PRODUCTION_RECIPE_V1_EXPORT_CAPABILITIES: StudioProductionRe
   narration: 'supported',
   browserSpeech: 'preview-only',
   subtitles: 'partial',
-  motion: 'unsupported',
+  motion: 'supported',
   transitions: 'unsupported',
   watermark: 'unsupported',
   music: 'unsupported',
@@ -220,8 +220,21 @@ export function compileStudioProductionRecipeV1(
       textColor: recipe.subtitles.textColor,
       highlightColor: recipe.subtitles.highlightColor,
     },
+    motion: {
+      mode: recipeMotionToCanonical(recipe.composition.motion),
+    },
     productionRecipe: normalized,
   };
+}
+
+function recipeMotionToCanonical(motion: StudioRecipeMotion): CanonicalMotionMode {
+  switch (motion) {
+    case 'static': return 'none';
+    case 'kenburns': return 'ken_burns';
+    case 'pan': return 'pan';
+    case 'zoom_in': return 'zoom_in';
+    case 'zoom_out': return 'zoom_out';
+  }
 }
 
 export function recipeIdentity(recipe: StudioProductionRecipeV1): string {

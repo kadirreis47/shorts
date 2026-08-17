@@ -12,6 +12,16 @@ export type MediaAssetType =
 
 export type MediaTrackType = 'video' | 'voice' | 'music' | 'subtitle' | 'overlay' | 'effects';
 export type CameraMotion = 'none' | 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right' | 'ken_burns';
+/**
+ * Bounded user-approved motion intent. This is deliberately separate from
+ * per-scene CameraMotion: `pan` is resolved deterministically per scene by
+ * the media engine, while CameraMotion is the executable scene-level result.
+ */
+export type CanonicalMotionMode = 'none' | 'ken_burns' | 'pan' | 'zoom_in' | 'zoom_out';
+
+export interface CanonicalMotionConfiguration {
+  mode: CanonicalMotionMode;
+}
 export type TransitionType = 'cut' | 'fade' | 'crossfade' | 'slide' | 'zoom' | 'blur';
 export type SceneRole = 'hook' | 'setup' | 'development' | 'payoff' | 'cta' | 'outro';
 export type PacingPreset = 'calm' | 'balanced' | 'dynamic' | 'viral';
@@ -161,6 +171,7 @@ export interface CreateMediaProjectInput {
     voiceId: string;
   };
   subtitles?: CanonicalSubtitleConfiguration;
+  motion?: CanonicalMotionConfiguration;
   productionRecipe?: NormalizedStudioProductionRecipeV1;
 }
 

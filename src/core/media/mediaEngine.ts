@@ -9,7 +9,7 @@ import { buildAudioTimeline } from './audioComposer';
 import { composeTracks } from './trackComposer';
 import { validateMediaProject } from './mediaValidator';
 import { privateStorageSource } from './storageIdentity';
-import type { CreateMediaProjectInput, MediaProject, MediaProjectBuildResult } from './types';
+import type { CameraMotion, CanonicalMotionMode, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
 
 export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
 
@@ -20,7 +20,10 @@ export function createMediaEngine(
   return {
     async buildProject(input) {
       const settings = normalizeMediaSettings(input.settings);
-      let plannedScenes = reconcileNarrationDuration(planScenes(input.scenes, settings), input.narration?.durationMs);
+      let plannedScenes = applyCanonicalMotion(
+        reconcileNarrationDuration(planScenes(input.scenes, settings), input.narration?.durationMs),
+        canonicalMotionMode(input.motion?.mode),
+      );
       let timelinePlan = buildIntelligentTimeline(plannedScenes, settings);
       for (let attempt = 0; input.narration && timelinePlan.durationMs < input.narration.durationMs && attempt < 3; attempt += 1) {
         const sum = plannedScenes.reduce((total, scene) => total + scene.durationMs, 0);
@@ -147,6 +150,32 @@ export function createMediaEngine(
       };
     },
   };
+}
+
+/** Resolve global Recipe V1 intent once, before the canonical timeline exists. */
+function applyCanonicalMotion(scenes: MediaScene[], mode: CanonicalMotionMode): MediaScene[] {
+  return scenes.map((scene, index) => ({
+    ...scene,
+    cameraMotion: resolveCanonicalCameraMotion(mode, index),
+  }));
+}
+
+function canonicalMotionMode(value: unknown): CanonicalMotionMode {
+  if (value === undefined) return 'none';
+  if (value === 'none' || value === 'ken_burns' || value === 'pan' || value === 'zoom_in' || value === 'zoom_out') return value;
+  throw new Error('Canonical motion mode is invalid.');
+}
+
+function resolveCanonicalCameraMotion(mode: CanonicalMotionMode, sceneIndex: number): CameraMotion {
+  switch (mode) {
+    case 'none': return 'none';
+    case 'ken_burns': return 'ken_burns';
+    case 'zoom_in': return 'zoom_in';
+    case 'zoom_out': return 'zoom_out';
+    // The Studio has one generic pan choice. Alternating direction by stable
+    // scene index avoids random motion while making adjacent image scenes vary.
+    case 'pan': return sceneIndex % 2 === 0 ? 'pan_right' : 'pan_left';
+  }
 }
 
 function reconcileNarrationDuration<T extends { durationMs: number }>(scenes: T[], narrationDurationMs: number | undefined): T[] {

@@ -40,6 +40,8 @@ export function buildSceneSegmentCommand(input: {
   if (execution.input.source) {
     if (execution.input.kind === 'image') {
       args.push(
+        '-framerate',
+        String(fps),
         '-loop',
         '1',
         '-t',

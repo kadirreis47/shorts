@@ -249,9 +249,10 @@ describe('StudioProductionRecipeV1', () => {
       style: { animation: 'fade', textColor: '#FF00AA', highlightColor: '#00FF00' },
     });
     expect(build.project.subtitles.cues.length).toBeGreaterThan(0);
+    expect(build.project.scenes[0].cameraMotion).toBe('ken_burns');
   });
 
-  it('keeps Browser TTS preview-only and unsupported controls truthful', () => {
+  it('keeps Browser TTS preview-only while exposing bounded canonical image motion', () => {
     const browser = recipeInput();
     browser.voiceoverMode = 'browser';
     browser.narration = null;
@@ -261,8 +262,41 @@ describe('StudioProductionRecipeV1', () => {
     expect(compiled.audio).toEqual({ narrationMode: 'silent' });
     expect(compiled.narration).toBeUndefined();
     expect(normalized.exportSupport).toMatchObject({
-      browserSpeech: 'preview-only', motion: 'unsupported', transitions: 'unsupported', watermark: 'unsupported', music: 'unsupported',
+      browserSpeech: 'preview-only', motion: 'supported', transitions: 'unsupported', watermark: 'unsupported', music: 'unsupported',
     });
+  });
+
+  it.each([
+    ['static', 'none'],
+    ['kenburns', 'ken_burns'],
+    ['zoom_in', 'zoom_in'],
+    ['zoom_out', 'zoom_out'],
+  ] as const)('compiles %s motion into bounded canonical scene motion %s', (motionStyle, expected) => {
+    const input = recipeInput();
+    input.motionStyle = motionStyle;
+    const compiled = compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(input, ownerContext()));
+    expect(compiled.motion).toEqual({ mode: expected });
+  });
+
+  it('resolves the generic Studio pan intent deterministically before the canonical timeline', async () => {
+    const input = recipeInput();
+    input.motionStyle = 'pan';
+    const normalized = normalizeStudioProductionRecipeV1(input, ownerContext());
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const build = await createMediaEngine(bus, createAssetProviderEngine(bus))
+      .buildProject(compileStudioProductionRecipeV1(normalized));
+    expect(build.project.scenes[0].cameraMotion).toBe('pan_right');
+    expect(build.manifest.timeline.scenes[0].cameraMotion).toBe('pan_right');
+  });
+
+  it('rejects malformed direct canonical motion input before it can reach FFmpeg planning', async () => {
+    const input = recipeInput();
+    const compiled = compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(input, ownerContext()));
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    await expect(createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject({
+      ...compiled,
+      motion: { mode: 'zoompan=unsafe' as never },
+    })).rejects.toThrow('Canonical motion mode is invalid');
   });
 
   it('reconstructs an equivalent normalized recipe from durable draft fields without persisting execution data', () => {
