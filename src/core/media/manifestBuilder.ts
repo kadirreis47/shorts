@@ -17,6 +17,7 @@ export function buildRenderManifest(project: MediaProject): RenderManifest {
     timeline: project.timeline,
     subtitles: project.subtitles,
     audio: project.audio,
+    branding: project.branding,
     validation: null,
     metadata: project.metadata,
   };

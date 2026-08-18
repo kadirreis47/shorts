@@ -7,6 +7,7 @@ import type { RenderPreset } from './types';
 import { assertRequiredNarrationBound, buildAudioMixCommand } from './audioMixCommandBuilder';
 import { buildCanonicalSceneExecutionPlan, canonicalSceneColor } from './canonicalSceneExecutionPlan';
 import { assertCanonicalTransitionTimeline, buildCanonicalTransitionCompositionPlan } from './canonicalTransitionPlan';
+import { buildCanonicalBrandingRenderPlan } from './brandingRenderBuilder';
 import { canonicalQualityArgs, canonicalVideoCodec, canonicalVideoSettings } from './encodingContract';
 import { buildCanonicalSubtitleRenderPlan } from './subtitleRenderBuilder';
 
@@ -123,6 +124,12 @@ export function buildSegmentConcatCommand(input: {
   const transitionPlan = canComposeTransitions
     ? buildCanonicalTransitionCompositionPlan(manifest, segmentPaths.map((_, index) => `${index}:v`))
     : null;
+  const brandingPlan = buildCanonicalBrandingRenderPlan({
+    branding: manifest.branding,
+    width: manifest.render.width,
+    height: manifest.render.height,
+    inputLabel: transitionPlan?.outputLabel ?? '0:v',
+  });
   const videoInputCount = canComposeTransitions ? segmentPaths.length : 1;
   const audio = buildAudioMixCommand(manifest, videoInputCount);
   assertRequiredNarrationBound(manifest, audio);
@@ -135,15 +142,16 @@ export function buildSegmentConcatCommand(input: {
 
   const filters: string[] = [];
   if (transitionPlan) filters.push(...transitionPlan.filters);
-  const visualLabel = transitionPlan?.outputLabel ?? '0:v';
+  if (brandingPlan.filter) filters.push(brandingPlan.filter);
+  const visualLabel = brandingPlan.outputLabel;
   if (subtitlePlan.assContent) filters.push(`[${visualLabel}]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}[videoout]`);
-  else if (transitionPlan) filters.push(`[${visualLabel}]null[videoout]`);
+  else if (transitionPlan || brandingPlan.filter) filters.push(`[${visualLabel}]null[videoout]`);
 
   if (audio.realInputCount > 0) {
     args.push(...audio.inputArgs);
     if (audio.filterComplex) filters.push(audio.filterComplex);
     if (filters.length > 0) args.push('-filter_complex', filters.join(';'));
-    args.push('-map', subtitlePlan.assContent || transitionPlan ? '[videoout]' : '0:v:0', '-map', audio.outputLabel ?? '[audioout]');
+    args.push('-map', subtitlePlan.assContent || transitionPlan || brandingPlan.filter ? '[videoout]' : '0:v:0', '-map', audio.outputLabel ?? '[audioout]');
   } else {
     args.push(
       '-f',
@@ -154,7 +162,7 @@ export function buildSegmentConcatCommand(input: {
       `anullsrc=channel_layout=${(preset.audioChannels ?? 2) === 1 ? 'mono' : 'stereo'}:sample_rate=${preset.sampleRate ?? 48000}`,
       ...(filters.length > 0 ? ['-filter_complex', filters.join(';')] : []),
       '-map',
-      subtitlePlan.assContent || transitionPlan ? '[videoout]' : '0:v:0',
+      subtitlePlan.assContent || transitionPlan || brandingPlan.filter ? '[videoout]' : '0:v:0',
       '-map',
       '1:a:0',
     );
@@ -162,9 +170,9 @@ export function buildSegmentConcatCommand(input: {
 
   args.push(
     '-c:v',
-    subtitlePlan.assContent || transitionPlan ? canonicalVideoCodec(preset) : 'copy',
-    ...(subtitlePlan.assContent || transitionPlan ? canonicalQualityArgs(preset) : []),
-    ...(subtitlePlan.assContent || transitionPlan ? canonicalVideoSettings(preset) : []),
+    subtitlePlan.assContent || transitionPlan || brandingPlan.filter ? canonicalVideoCodec(preset) : 'copy',
+    ...(subtitlePlan.assContent || transitionPlan || brandingPlan.filter ? canonicalQualityArgs(preset) : []),
+    ...(subtitlePlan.assContent || transitionPlan || brandingPlan.filter ? canonicalVideoSettings(preset) : []),
     '-c:a',
     preset.audioCodec === 'opus' ? 'libopus' : 'aac',
     '-b:a',

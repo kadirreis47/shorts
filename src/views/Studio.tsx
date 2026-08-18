@@ -1819,7 +1819,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <div>
                   <p className="text-xs font-medium text-slate-500">{t('studio.watermark')}</p>
-                  <input value={watermarkText} onChange={(e) => setWatermarkText(e.target.value)}
+                  <input value={watermarkText} maxLength={20} onChange={(e) => setWatermarkText(e.target.value)}
                     placeholder={t('studio.watermarkPlaceholder')}
                     className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm outline-none focus:border-slate-400" />
                 </div>

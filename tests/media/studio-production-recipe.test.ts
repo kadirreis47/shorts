@@ -252,6 +252,31 @@ describe('StudioProductionRecipeV1', () => {
     expect(build.project.scenes[0].cameraMotion).toBe('ken_burns');
   });
 
+  it('compiles the existing bounded text watermark into canonical project state', async () => {
+    const input = recipeInput();
+    input.watermarkText = "Brand: O'Reilly";
+    input.watermarkPosition = 'top-left';
+    const normalized = normalizeStudioProductionRecipeV1(input, ownerContext());
+    const compiled = compileStudioProductionRecipeV1(normalized);
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const build = await createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject(compiled);
+
+    expect(compiled.branding).toEqual({ watermark: { text: "Brand: O'Reilly", position: 'top-left' } });
+    expect(build.project.branding).toEqual(compiled.branding);
+    expect(build.manifest.branding).toEqual(compiled.branding);
+  });
+
+  it('normalizes whitespace while rejecting multiline, control-character, and overlong watermark text', () => {
+    const padded = recipeInput();
+    padded.watermarkText = '  Brand  ';
+    expect(normalizeStudioProductionRecipeV1(padded, ownerContext()).recipe.branding.watermark?.text).toBe('Brand');
+    for (const text of ['Brand\nLine', 'Brand\u0000', 'W'.repeat(21)]) {
+      const invalid = recipeInput();
+      invalid.watermarkText = text;
+      expect(() => normalizeStudioProductionRecipeV1(invalid, ownerContext())).toThrow(/watermark text/i);
+    }
+  });
+
   it('keeps Browser TTS preview-only while exposing bounded canonical image motion', () => {
     const browser = recipeInput();
     browser.voiceoverMode = 'browser';
@@ -262,7 +287,7 @@ describe('StudioProductionRecipeV1', () => {
     expect(compiled.audio).toEqual({ narrationMode: 'silent' });
     expect(compiled.narration).toBeUndefined();
     expect(normalized.exportSupport).toMatchObject({
-      browserSpeech: 'preview-only', motion: 'supported', transitions: 'partial', watermark: 'unsupported', music: 'unsupported',
+      browserSpeech: 'preview-only', motion: 'supported', transitions: 'partial', watermark: 'supported', music: 'unsupported',
     });
   });
 
@@ -319,6 +344,15 @@ describe('StudioProductionRecipeV1', () => {
       ...compiled,
       transition: { type: 'xfade=unsafe' as never },
     })).rejects.toThrow('Canonical transition type is invalid');
+  });
+
+  it('rejects malformed direct canonical branding before it can reach FFmpeg planning', async () => {
+    const compiled = compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(recipeInput(), ownerContext()));
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    await expect(createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject({
+      ...compiled,
+      branding: { watermark: { text: 'Brand', position: 'center' as never } },
+    })).rejects.toThrow('Canonical watermark position is invalid');
   });
 
   it('reconstructs an equivalent normalized recipe from durable draft fields without persisting execution data', () => {

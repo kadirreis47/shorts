@@ -9,6 +9,7 @@ import { buildAudioTimeline } from './audioComposer';
 import { composeTracks } from './trackComposer';
 import { validateMediaProject } from './mediaValidator';
 import { privateStorageSource } from './storageIdentity';
+import { normalizeCanonicalBrandingConfiguration } from './brandingTypes';
 import type { CameraMotion, CanonicalMotionMode, CanonicalTransitionType, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
 
 export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
@@ -20,6 +21,7 @@ export function createMediaEngine(
   return {
     async buildProject(input) {
       const settings = normalizeMediaSettings(input.settings);
+      const branding = normalizeCanonicalBrandingConfiguration(input.branding);
       let plannedScenes = applyCanonicalMotion(
         reconcileNarrationDuration(planScenes(input.scenes, settings), input.narration?.durationMs),
         canonicalMotionMode(input.motion?.mode),
@@ -98,6 +100,7 @@ export function createMediaEngine(
         tracks,
         subtitles: subtitleTimeline,
         audio: audioTimeline,
+        branding,
         timeline: {
           durationMs: timelinePlan.durationMs,
           scenes,

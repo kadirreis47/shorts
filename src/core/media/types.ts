@@ -27,6 +27,12 @@ export type CanonicalTransitionType = 'cut' | 'crossfade';
 export interface CanonicalTransitionConfiguration {
   type: CanonicalTransitionType;
 }
+export type CanonicalWatermarkPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+/** Bounded global branding intent; logo media is intentionally not part of V1.1. */
+export interface CanonicalBrandingConfiguration {
+  watermark: { text: string; position: CanonicalWatermarkPosition } | null;
+}
 export type TransitionType = 'cut' | 'fade' | 'crossfade' | 'slide' | 'zoom' | 'blur';
 export type SceneRole = 'hook' | 'setup' | 'development' | 'payoff' | 'cta' | 'outro';
 export type PacingPreset = 'calm' | 'balanced' | 'dynamic' | 'viral';
@@ -146,6 +152,7 @@ export interface MediaProject {
   timeline: MediaTimeline;
   subtitles: SubtitleTimeline;
   audio: AudioTimeline;
+  branding?: CanonicalBrandingConfiguration;
 }
 
 export interface RenderManifest {
@@ -158,6 +165,7 @@ export interface RenderManifest {
   timeline: MediaTimeline;
   subtitles: SubtitleTimeline;
   audio: AudioTimeline;
+  branding?: CanonicalBrandingConfiguration;
   validation: MediaValidationReport | null;
   metadata: MediaProjectMetadata;
 }
@@ -178,6 +186,7 @@ export interface CreateMediaProjectInput {
   subtitles?: CanonicalSubtitleConfiguration;
   motion?: CanonicalMotionConfiguration;
   transition?: CanonicalTransitionConfiguration;
+  branding?: CanonicalBrandingConfiguration;
   productionRecipe?: NormalizedStudioProductionRecipeV1;
 }
 

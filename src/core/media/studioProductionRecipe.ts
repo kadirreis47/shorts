@@ -1,6 +1,7 @@
 import type { MediaStorageObject, Scene, VisualMode } from '@/lib/types';
 import { assertCurrentMediaOwnerContext, type ValidatedMediaOwnerContext } from '@/lib/mediaStorage';
-import type { CanonicalMotionMode, CanonicalTransitionType, CreateMediaProjectInput } from './types';
+import type { CanonicalMotionMode, CanonicalTransitionType, CanonicalWatermarkPosition, CreateMediaProjectInput } from './types';
+import { normalizeCanonicalWatermarkText } from './brandingTypes';
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
@@ -76,7 +77,7 @@ export interface StudioRecipeNarrationV1 {
   readonly voiceId: string;
 }
 
-export type StudioRecipeWatermarkPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+export type StudioRecipeWatermarkPosition = CanonicalWatermarkPosition;
 
 export interface StudioProductionRecipeInput {
   projectId: string;
@@ -126,7 +127,7 @@ export const STUDIO_PRODUCTION_RECIPE_V1_EXPORT_CAPABILITIES: StudioProductionRe
   subtitles: 'partial',
   motion: 'supported',
   transitions: 'partial',
-  watermark: 'unsupported',
+  watermark: 'supported',
   music: 'unsupported',
 });
 
@@ -226,6 +227,7 @@ export function compileStudioProductionRecipeV1(
     transition: {
       type: recipeTransitionToCanonical(recipe.composition.transition),
     },
+    branding: recipe.branding,
     productionRecipe: normalized,
   };
 }
@@ -357,9 +359,8 @@ function normalizeMusic(id: string, volume: number, beatSync: boolean): StudioPr
 }
 
 function normalizeWatermark(text: string, position: string): StudioProductionRecipeV1['branding']['watermark'] {
-  const safeText = optionalText(text);
+  const safeText = normalizeCanonicalWatermarkText(text);
   if (!safeText) return null;
-  if (safeText.length > 120) throw new Error('Watermark text is too long.');
   return { text: safeText, position: enumValue(position, WATERMARK_POSITIONS, 'watermark position') };
 }
 

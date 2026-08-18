@@ -2,6 +2,7 @@ import type { RenderExecutionContext } from './types';
 import { assertRequiredNarrationBound, buildAudioMixCommand } from './audioMixCommandBuilder';
 import { buildCanonicalSceneExecutionPlan, canonicalSceneColor } from './canonicalSceneExecutionPlan';
 import { buildCanonicalTransitionCompositionPlan } from './canonicalTransitionPlan';
+import { buildCanonicalBrandingRenderPlan } from './brandingRenderBuilder';
 import { canonicalQualityArgs, canonicalVideoCodec, canonicalVideoSettings } from './encodingContract';
 import { buildCanonicalSubtitleRenderPlan } from './subtitleRenderBuilder';
 
@@ -39,6 +40,13 @@ export function buildFFmpegCommand(
 
   const transitionPlan = buildCanonicalTransitionCompositionPlan(manifest, scenes.map((_, index) => `v${index}`));
   filters.push(...transitionPlan.filters);
+  const brandingPlan = buildCanonicalBrandingRenderPlan({
+    branding: manifest.branding,
+    width,
+    height,
+    inputLabel: transitionPlan.outputLabel,
+  });
+  if (brandingPlan.filter) filters.push(brandingPlan.filter);
   const subtitlePlan = buildCanonicalSubtitleRenderPlan({
     cues: manifest.subtitles.cues,
     width,
@@ -47,8 +55,8 @@ export function buildFFmpegCommand(
     enabled: manifest.subtitles.enabled,
   });
   filters.push(subtitlePlan.assContent
-    ? `[${transitionPlan.outputLabel}]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}[videoout]`
-    : `[${transitionPlan.outputLabel}]null[videoout]`);
+    ? `[${brandingPlan.outputLabel}]subtitles=filename={{SUBTITLE_FILE_FILTER_VALUE}}[videoout]`
+    : `[${brandingPlan.outputLabel}]null[videoout]`);
 
   const durationSeconds = Math.max(0.1, manifest.durationMs / 1000);
   const hasAudioTimeline = Boolean(manifest.audio);

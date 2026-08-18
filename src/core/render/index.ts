@@ -8,6 +8,7 @@ export * from './ffmpegCommandBuilder';
 export * from './ffmpegRenderAdapter';
 export * from './canonicalSceneExecutionPlan';
 export * from './canonicalTransitionPlan';
+export * from './brandingRenderBuilder';
 export * from './encodingContract';
 export * from './subtitleRenderBuilder';
 
