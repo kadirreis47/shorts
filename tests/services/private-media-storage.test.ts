@@ -50,6 +50,21 @@ describe('private media renderer boundary', () => {
     expect(mocks.createSignedUrl).toHaveBeenCalledWith(uploadedPath, PRIVATE_MEDIA_SIGNED_URL_TTL_SECONDS);
   });
 
+  it('stores JPEG scene images with the fixed private .jpg extension', async () => {
+    const result = await uploadPrivateMedia(new Blob(['jpeg'], { type: 'image/jpeg' }), 'generated-images');
+    const uploadedPath = mocks.upload.mock.calls[0][0] as string;
+    expect(uploadedPath).toMatch(/^11111111-1111-4111-8111-111111111111\/generated-images\/[0-9a-f-]+\.jpg$/i);
+    expect(result).toMatchObject({ media: { bucket: 'media', objectPath: uploadedPath }, imageUrl: 'https://signed.example/media' });
+    await expect(createPrivateMediaSignedUrl({ bucket: 'media', objectPath: uploadedPath })).resolves.toBe('https://signed.example/media');
+  });
+
+  it('retains the fixed private .png extension for PNG scene images', async () => {
+    const result = await uploadPrivateMedia(new Blob(['png'], { type: 'image/png' }), 'generated-images');
+    const uploadedPath = mocks.upload.mock.calls[0][0] as string;
+    expect(uploadedPath).toMatch(/^11111111-1111-4111-8111-111111111111\/generated-images\/[0-9a-f-]+\.png$/i);
+    expect(result).toMatchObject({ media: { bucket: 'media', objectPath: uploadedPath }, imageUrl: 'https://signed.example/media' });
+  });
+
   it('accepts only a validated owner-scoped voiceover identity', async () => {
     const result = await uploadPrivateMedia(new Blob(['audio'], { type: 'audio/mpeg' }), 'voiceovers');
     const uploadedPath = mocks.upload.mock.calls[0][0] as string;
@@ -78,6 +93,7 @@ describe('private media renderer boundary', () => {
 
   it('does not accept arbitrary renderer media classes or object paths', async () => {
     await expect(uploadPrivateMedia(new Blob(['video'], { type: 'video/webm' }), 'other' as never)).rejects.toThrow(/class is not supported/i);
+    await expect(uploadPrivateMedia(new Blob(['jpeg'], { type: 'image/jpeg' }), 'voiceovers')).rejects.toThrow(/media type is not supported/i);
     await expect(createPrivateMediaSignedUrl({
       bucket: 'media',
       objectPath: '11111111-1111-4111-8111-111111111111/../../foreign-object',

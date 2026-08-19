@@ -12,6 +12,7 @@ import { Studio } from '@/views/Studio';
 
 const mocks = vi.hoisted(() => ({
   getProviderStatus: vi.fn(), searchImages: vi.fn(), searchVideos: vi.fn(),
+  researchFootage: vi.fn(), uploadMedia: vi.fn(),
   aiService: {
     generateScript: vi.fn(), generateHooks: vi.fn(), generateSEO: vi.fn(), analyzeScript: vi.fn(),
   },
@@ -25,8 +26,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/supabase', () => ({ isSupabaseConfigured: false, supabase: { from: mocks.from } }));
 vi.mock('@/lib/api', () => ({
-  getProviderStatus: mocks.getProviderStatus, generateVoiceover: vi.fn(), listVoices: vi.fn(async () => []), uploadMedia: vi.fn(),
-  searchImages: mocks.searchImages, searchVideos: mocks.searchVideos, generateAIImage: vi.fn(), researchFootage: vi.fn(),
+  getProviderStatus: mocks.getProviderStatus, generateVoiceover: vi.fn(), listVoices: vi.fn(async () => []), uploadMedia: mocks.uploadMedia,
+  searchImages: mocks.searchImages, searchVideos: mocks.searchVideos, generateAIImage: vi.fn(), researchFootage: mocks.researchFootage,
   generateSRT: vi.fn(() => '1\\n00:00:00,000 --> 00:00:05,000\\nScene'), translateSubtitles: mocks.translateSubtitles,
 }));
 vi.mock('@/core/di', () => ({ applicationContainer: { resolve: () => mocks.aiService }, dependencyTokens: { aiApplicationService: Symbol('ai'), mediaEngine: Symbol('media') } }));
@@ -169,6 +170,136 @@ describe('Studio provider availability', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it('uploads a selected image as a private scene identity without retaining its signed preview URL in the draft', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.uploadMedia.mockResolvedValue({
+      imageUrl: 'https://signed.example/imported.png?token=transient',
+      media: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000000.png' },
+    });
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]');
+    expect(input).toBeDefined();
+    const selected = pngFile();
+    Object.defineProperty(input!, 'files', { configurable: true, value: [selected] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+
+    expect(mocks.uploadMedia).toHaveBeenCalledWith(selected, 'generated-images');
+    expect(container?.querySelector('img')?.getAttribute('src')).toContain('https://signed.example/imported.png');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('accepts a selected JPEG through the same bounded private scene import path', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.uploadMedia.mockResolvedValue({
+      imageUrl: 'https://signed.example/imported.jpg?token=transient',
+      media: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000003.jpg' },
+    });
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]');
+    const selected = jpegFile();
+    Object.defineProperty(input!, 'files', { configurable: true, value: [selected] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+
+    expect(mocks.uploadMedia).toHaveBeenCalledWith(selected, 'generated-images');
+    expect(container?.querySelector('img')?.getAttribute('src')).toContain('imported.jpg');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('shows a localized validation error and never uploads an unsupported scene file', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]');
+    Object.defineProperty(input!, 'files', {
+      configurable: true,
+      value: [{ ...pngFile(), type: 'image/webp' }],
+    });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+
+    expect(mocks.uploadMedia).not.toHaveBeenCalled();
+    expect(container?.textContent).toContain('Only PNG or JPEG images can be imported.');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('does not let a stale owner import attach to the next owner scene', async () => {
+    const pending = deferred<{ imageUrl: string; media: { bucket: 'media'; objectPath: string } }>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.uploadMedia.mockReturnValueOnce(pending.promise);
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]');
+    Object.defineProperty(input!, 'files', { configurable: true, value: [pngFile()] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+    setValidatedOwnerId('studio-user-b');
+    advanceValidatedOwnerGeneration();
+    await act(async () => { pending.resolve({ imageUrl: 'https://signed.example/a.png', media: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000000.png' } }); });
+
+    expect(container?.querySelector('img')).toBeNull();
+    await act(async () => { root.unmount(); });
+  });
+
+  it('does not let a superseded PNG upload overwrite the newer scene selection', async () => {
+    const first = deferred<{ imageUrl: string; media: { bucket: 'media'; objectPath: string } }>();
+    const second = deferred<{ imageUrl: string; media: { bucket: 'media'; objectPath: string } }>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.uploadMedia.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]');
+    Object.defineProperty(input!, 'files', { configurable: true, value: [pngFile()] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+    Object.defineProperty(input!, 'files', { configurable: true, value: [pngFile()] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+    await act(async () => { second.resolve({ imageUrl: 'https://signed.example/new.png', media: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000002.png' } }); });
+    await act(async () => { first.resolve({ imageUrl: 'https://signed.example/old.png', media: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000001.png' } }); });
+
+    expect(container?.querySelector('img')?.getAttribute('src')).toContain('new.png');
+    await act(async () => { root.unmount(); });
+  });
+
+  it.each([
+    ['Auto-fetch images', 'searchImages', [{ id: 1, url: 'https://images.pexels.com/a.png' }]],
+    ['Auto-fetch B-roll', 'searchVideos', [{ id: 1, fileUrl: 'https://videos.pexels.com/a.mp4', preview: 'https://images.pexels.com/a.jpg' }]],
+  ] as const)('does not apply stale prior-owner %s results', async (label, method, value) => {
+    const pending = deferred<typeof value>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks[method].mockReturnValueOnce(pending.promise);
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    await clickButton(label);
+    setValidatedOwnerId('studio-user-b');
+    advanceValidatedOwnerGeneration();
+    await act(async () => { pending.resolve(value); });
+
+    expect(container?.querySelector('img')).toBeNull();
+    expect(container?.textContent).not.toContain('Unable to complete');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('does not apply stale prior-owner footage research results', async () => {
+    const pending = deferred<Array<{ sceneIndex: number; imageUrl: string }>>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.researchFootage.mockReturnValueOnce(pending.promise);
+    saveStudioDraft({ ...draft('style'), visualMode: 'real_footage' });
+    const root = await renderStudio();
+    await clickButton('Research Real Footage');
+    setValidatedOwnerId('studio-user-b');
+    advanceValidatedOwnerGeneration();
+    await act(async () => { pending.resolve([{ sceneIndex: 0, imageUrl: 'https://images.pexels.com/a.png' }]); });
+
+    expect(container?.querySelector('img')).toBeNull();
+    expect(container?.textContent).not.toContain('Unable to complete footage research');
+    await act(async () => { root.unmount(); });
+  });
+
   it('does not apply a stale prior-owner character profile query after an A to B transition', async () => {
     const pendingA = deferred<{ data: Array<{ id: string; user_id: string; name: string; description: null; appearance: null; art_style: string; reference_url: null; created_at: string }> }>();
     mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
@@ -265,6 +396,31 @@ function deferred<T>() {
   let reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((next, fail) => { resolve = next; reject = fail; });
   return { promise, resolve, reject };
+}
+
+function pngFile() {
+  return imageFile(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/png');
+}
+
+function jpegFile() {
+  return imageFile(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x08, 0x4a, 0x46, 0x49, 0x46, 0xff, 0xd9]), 'image/jpeg');
+}
+
+function imageFile(bytes: Uint8Array, type: 'image/png' | 'image/jpeg') {
+  // jsdom's Blob lacks arrayBuffer(); model the browser File surface consumed
+  // by the image validator while the service tests cover real Blob byte parsing.
+  return {
+    type,
+    size: bytes.byteLength,
+    slice: (start = 0, end = bytes.byteLength) => {
+      const selection = bytes.slice(start, end);
+      return { arrayBuffer: async () => selection.buffer.slice(selection.byteOffset, selection.byteOffset + selection.byteLength) };
+    },
+  } as unknown as File;
+}
+
+async function flush() {
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 }
 
 function profile(id: string, userId: string, name: string) {

@@ -33,10 +33,11 @@ export function assertCurrentMediaOwnerContext(context: ValidatedMediaOwnerConte
   }
 }
 
-function extensionForBlob(file: Blob): string {
-  if (file.type === 'video/webm') return 'webm';
-  if (file.type === 'image/png') return 'png';
-  if (file.type === 'audio/mpeg') return 'mp3';
+function extensionForBlob(file: Blob, mediaClass: PrivateMediaClass): string {
+  if (mediaClass === 'videos' && file.type === 'video/webm') return 'webm';
+  if (mediaClass === 'generated-images' && file.type === 'image/png') return 'png';
+  if (mediaClass === 'generated-images' && file.type === 'image/jpeg') return 'jpg';
+  if ((mediaClass === 'voiceovers' || mediaClass === 'music') && file.type === 'audio/mpeg') return 'mp3';
   throw new Error('This media type is not supported for private upload.');
 }
 
@@ -49,7 +50,7 @@ function ownerPath(context: ValidatedMediaOwnerContext, mediaClass: PrivateMedia
 
 function assertOwnedMediaIdentity(identity: MediaStorageObject, context: ValidatedMediaOwnerContext): void {
   const escapedOwner = context.ownerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const boundedPath = new RegExp(`^${escapedOwner}/(?:videos/[0-9a-f-]+\\.webm|generated-images/[0-9a-f-]+\\.png|voiceovers/[0-9a-f-]+\\.mp3|music/[0-9a-f-]+\\.mp3)$`, 'i');
+  const boundedPath = new RegExp(`^${escapedOwner}/(?:videos/[0-9a-f-]+\\.webm|generated-images/[0-9a-f-]+\\.(?:png|jpg)|voiceovers/[0-9a-f-]+\\.mp3|music/[0-9a-f-]+\\.mp3)$`, 'i');
   if (identity.bucket !== PRIVATE_MEDIA_BUCKET || !boundedPath.test(identity.objectPath)) {
     throw new Error('Private media is not available for the authenticated user.');
   }
@@ -68,7 +69,10 @@ export function assertCurrentOwnerMediaIdentity(identity: unknown): asserts iden
 
 export async function uploadPrivateMedia(file: Blob, mediaClass: PrivateMediaClass): Promise<PrivateMediaUpload> {
   const context = captureValidatedMediaOwnerContext();
-  const objectPath = ownerPath(context, mediaClass, extensionForBlob(file));
+  if (mediaClass !== 'videos' && mediaClass !== 'generated-images' && mediaClass !== 'voiceovers' && mediaClass !== 'music') {
+    throw new Error('This private media class is not supported.');
+  }
+  const objectPath = ownerPath(context, mediaClass, extensionForBlob(file, mediaClass));
   const { error } = await supabase.storage.from(PRIVATE_MEDIA_BUCKET).upload(objectPath, file, {
     contentType: file.type,
     upsert: false,

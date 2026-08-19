@@ -104,6 +104,34 @@ describe('StudioProductionRecipeV1', () => {
     expect(() => normalizeStudioProductionRecipeV1(blob, ownerContext())).toThrow(/durable private identity|trusted HTTPS/i);
   });
 
+  it('accepts an authenticated owner JPEG private image and rejects foreign or malformed JPEG identities', () => {
+    const ownJpeg = recipeInput();
+    ownJpeg.scenes = [{
+      ...ownJpeg.scenes[0],
+      imageStorage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000001.jpg' },
+    }];
+    const normalized = normalizeStudioProductionRecipeV1(ownJpeg, ownerContext());
+    expect(normalized.recipe.scenes[0].media).toEqual({
+      type: 'image',
+      storage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000001.jpg' },
+      sourceUrl: null,
+    });
+
+    const foreignJpeg = recipeInput();
+    foreignJpeg.scenes = [{
+      ...foreignJpeg.scenes[0],
+      imageStorage: { bucket: 'media', objectPath: 'owner-b/generated-images/00000000-0000-4000-8000-000000000001.jpg' },
+    }];
+    expect(() => normalizeStudioProductionRecipeV1(foreignJpeg, ownerContext())).toThrow(/not owned/i);
+
+    const malformedJpeg = recipeInput();
+    malformedJpeg.scenes = [{
+      ...malformedJpeg.scenes[0],
+      imageStorage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000001.jpeg' },
+    }];
+    expect(() => normalizeStudioProductionRecipeV1(malformedJpeg, ownerContext())).toThrow(/identity is invalid/i);
+  });
+
   it('rejects a stale owner context before it can compile an A recipe for B', () => {
     const staleA = ownerContext();
     setValidatedOwnerId('owner-b');

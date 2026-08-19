@@ -42,6 +42,11 @@ import {
 } from '@/lib/mediaStorage';
 import { isCurrentValidatedOwnerContext } from '@/auth/identity';
 import { isApprovedCatalogMusicUrl, isValidCatalogMusicBlob, isValidCatalogMusicResponse, MUSIC_TRACKS } from '@/lib/catalogMusic';
+import {
+  isManualSceneImageImportError,
+  requireOneManualSceneImage,
+  validateManualSceneImage,
+} from '@/lib/manualSceneImageImport';
 import { useAuthSessionStore } from '@/auth/session';
 
 interface StudioProps {
@@ -193,6 +198,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [watermarkText, setWatermarkText] = useState('');
   const [watermarkPosition, setWatermarkPosition] = useState('bottom-right');
   const [generatingSceneImage, setGeneratingSceneImage] = useState<number | null>(null);
+  const [importingSceneImage, setImportingSceneImage] = useState<number | null>(null);
+  const sceneImportGenerations = useRef(new Map<number, number>());
+  const pexelsRequestGenerations = useRef({ images: 0, broll: 0, research: 0 });
 
   // New AI tools & subtitle state
   const [showSubtitles, setShowSubtitles] = useState(true);
@@ -636,8 +644,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     if (!hasPexels) { setError('Pexels footage research is not configured. Contact an administrator.'); return; }
     setResearchingFootage(true);
     setError('');
+    const ownerContext = captureValidatedMediaOwnerContext();
+    const requestGeneration = ++pexelsRequestGenerations.current.research;
     try {
       const results = await researchFootage({ topic: title || script.slice(0, 100), scenes, mode: visualMode });
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (pexelsRequestGenerations.current.research !== requestGeneration) return;
       const updatedScenes = [...scenes];
       let resolved = 0;
       for (const result of results) {
@@ -652,12 +664,22 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           };
         }
       }
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (pexelsRequestGenerations.current.research !== requestGeneration) return;
       setScenes(updatedScenes);
       if (resolved === 0) setError('No footage could be found for the current scenes. Try refining the visual descriptions.');
     } catch (researchError) {
-      setError(providerActionError('footage research', researchError));
+      if (
+        pexelsRequestGenerations.current.research === requestGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+      ) {
+        setError(providerActionError('footage research', researchError));
+      }
     } finally {
-      setResearchingFootage(false);
+      if (
+        pexelsRequestGenerations.current.research === requestGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+      ) setResearchingFootage(false);
     }
   }
 
@@ -784,6 +806,61 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
   }
 
+  function sceneImportError(error: unknown): string {
+    if (!isManualSceneImageImportError(error)) return t('studio.imageImportUploadFailed');
+    switch (error.code) {
+      case 'selection': return t('studio.imageImportSelectionInvalid');
+      case 'mime': return t('studio.imageImportSupportedTypes');
+      case 'empty': return t('studio.imageImportEmpty');
+      case 'too-large': return t('studio.imageImportTooLarge');
+      case 'signature': return t('studio.imageImportInvalidImage');
+    }
+  }
+
+  async function handleImportSceneImage(sceneIndex: number, files: readonly File[]) {
+    const selectionGeneration = (sceneImportGenerations.current.get(sceneIndex) ?? 0) + 1;
+    sceneImportGenerations.current.set(sceneIndex, selectionGeneration);
+    const targetScene = scenes[sceneIndex];
+    if (!targetScene) return;
+    const ownerContext = captureValidatedMediaOwnerContext();
+    setImportingSceneImage(sceneIndex);
+    setError('');
+    try {
+      const file = requireOneManualSceneImage(files);
+      await validateManualSceneImage(file);
+      assertCurrentMediaOwnerContext(ownerContext);
+      const upload = await uploadMedia(file, 'generated-images');
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration) return;
+      setScenes((current) => {
+        if (
+          !isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+          || sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration
+          || current[sceneIndex] !== targetScene
+        ) return current;
+        const updated = [...current];
+        updated[sceneIndex] = {
+          ...targetScene,
+          imageUrl: upload.imageUrl,
+          imageStorage: upload.media,
+          videoUrl: undefined,
+          videoStorage: undefined,
+        };
+        return updated;
+      });
+    } catch (importError) {
+      if (
+        sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+      ) setError(sceneImportError(importError));
+    } finally {
+      if (
+        sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+      ) setImportingSceneImage(null);
+    }
+  }
+
   async function handleGenerateVoiceover() {
     setGeneratingVoice(true);
     setError('');
@@ -839,6 +916,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     if (!hasPexels) { setError('Pexels image search is not configured. Contact an administrator.'); return; }
     setFetchingImages(true);
     setError('');
+    const ownerContext = captureValidatedMediaOwnerContext();
+    const requestGeneration = ++pexelsRequestGenerations.current.images;
     try {
       const updatedScenes = [...scenes];
       let succeeded = 0;
@@ -850,18 +929,28 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         const query = scene.visual || scene.keywords?.[0] || topic;
         try {
           const images = await searchImages(query, 1);
+          assertCurrentMediaOwnerContext(ownerContext);
+          if (pexelsRequestGenerations.current.images !== requestGeneration) return;
           if (images.length > 0) {
             updatedScenes[i] = { ...scene, imageUrl: images[0].url, imageStorage: undefined, videoUrl: undefined, videoStorage: undefined };
             succeeded += 1;
           } else unresolved += 1;
         } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
       }
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (pexelsRequestGenerations.current.images !== requestGeneration) return;
       setScenes(updatedScenes);
       if (failed || unresolved || succeeded === 0) setError(succeeded ? `${succeeded} scene images were found; some scenes could not be updated.` : failed ? providerActionError('images', firstFailure) : 'No images could be found. Check provider availability and try again.');
     } catch (e) {
-      setError(providerActionError('images', e));
+      if (
+        pexelsRequestGenerations.current.images === requestGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+      ) setError(providerActionError('images', e));
     } finally {
-      setFetchingImages(false);
+      if (
+        pexelsRequestGenerations.current.images === requestGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+      ) setFetchingImages(false);
     }
   }
 
@@ -869,6 +958,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     if (!hasPexels) { setError('Pexels video search is not configured. Contact an administrator.'); return; }
     setFetchingVideos(true);
     setError('');
+    const ownerContext = captureValidatedMediaOwnerContext();
+    const requestGeneration = ++pexelsRequestGenerations.current.broll;
     try {
       const updatedScenes = [...scenes];
       let succeeded = 0;
@@ -880,18 +971,28 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         const query = scene.visual || scene.keywords?.[0] || topic;
         try {
           const videos = await searchVideos(query, 1);
+          assertCurrentMediaOwnerContext(ownerContext);
+          if (pexelsRequestGenerations.current.broll !== requestGeneration) return;
           if (videos.length > 0 && videos[0].fileUrl) {
             updatedScenes[i] = { ...scene, videoUrl: videos[0].fileUrl, videoStorage: undefined, imageUrl: videos[0].preview, imageStorage: undefined };
             succeeded += 1;
           } else unresolved += 1;
         } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
       }
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (pexelsRequestGenerations.current.broll !== requestGeneration) return;
       setScenes(updatedScenes);
       if (failed || unresolved || succeeded === 0) setError(succeeded ? `${succeeded} scene video clips were found; some scenes could not be updated.` : failed ? providerActionError('video clips', firstFailure) : 'No video clips could be found. Check provider availability and try again.');
     } catch (e) {
-      setError(providerActionError('video clips', e));
+      if (
+        pexelsRequestGenerations.current.broll === requestGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+      ) setError(providerActionError('video clips', e));
     } finally {
-      setFetchingVideos(false);
+      if (
+        pexelsRequestGenerations.current.broll === requestGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+      ) setFetchingVideos(false);
     }
   }
 
@@ -1429,6 +1530,21 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                         {generatingSceneImage === i ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
                         {t('studio.generateImage')}
                       </button>
+                      <label className="flex cursor-pointer items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100">
+                        {importingSceneImage === i ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
+                        {importingSceneImage === i ? t('studio.importingImage') : t('studio.importImage')}
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg"
+                          className="sr-only"
+                          disabled={importingSceneImage === i}
+                          onChange={(event) => {
+                            const files = Array.from(event.currentTarget.files ?? []);
+                            event.currentTarget.value = '';
+                            void handleImportSceneImage(i, files);
+                          }}
+                        />
+                      </label>
                       <select
                         value={s.visualMode ?? ''}
                         onChange={(e) => {
