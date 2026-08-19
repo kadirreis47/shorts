@@ -34,4 +34,46 @@ describe('canonical narration FFmpeg binding', () => {
     expect(filterGraph.endsWith(';')).toBe(false);
     expect(filterGraph.split(';').every(Boolean)).toBe(true);
   });
+
+  it('binds durable music after narration, loops only music, and applies bounded narration-priority ducking', () => {
+    const manifest = {
+      assets: [
+        { id: 'voice-asset', type: 'voice', source: 'https://signed.example/voice.mp3', metadata: {} },
+        { id: 'music-asset', type: 'music', source: 'https://signed.example/music.mp3', metadata: {} },
+      ],
+      audio: {
+        narrationMode: 'required',
+        voice: [{ id: 'voice', type: 'voice', assetId: 'voice-asset', startMs: 0, endMs: 30_000, durationMs: 30_000, gain: 1, fadeInMs: 0, fadeOutMs: 0, metadata: {} }],
+        music: [{ id: 'music', type: 'music', assetId: 'music-asset', startMs: 0, endMs: 30_000, durationMs: 30_000, gain: .25, fadeInMs: 900, fadeOutMs: 1200, metadata: {} }],
+        sfx: [], settings: { masterGain: 1, voiceGain: 1, musicGain: .25, sfxGain: .72, duckingGain: .32, duckingAttackMs: 120, duckingReleaseMs: 260, musicFadeInMs: 900, musicFadeOutMs: 1200, targetLufs: -14 },
+      },
+    } as unknown as RenderManifest;
+
+    const plan = buildAudioMixCommand(manifest, 3);
+    expect(plan.inputArgs).toEqual(['-i', 'https://signed.example/voice.mp3', '-stream_loop', '-1', '-i', 'https://signed.example/music.mp3']);
+    expect(plan.voiceInputCount).toBe(1);
+    expect(plan.musicInputCount).toBe(1);
+    expect(plan.filterComplex).toContain('[3:a]atrim=duration=30.000');
+    expect(plan.filterComplex).toContain('[4:a]atrim=duration=30.000');
+    expect(plan.filterComplex).toContain('sidechaincompress=threshold=0.025:ratio=8');
+    expect(plan.filterComplex).toContain('[audioout]');
+  });
+
+  it('keeps Browser TTS/silent canonical output valid while allowing durable music as the only real audio input', () => {
+    const manifest = {
+      assets: [{ id: 'music-asset', type: 'music', source: 'https://signed.example/music.mp3', metadata: {} }],
+      audio: {
+        narrationMode: 'silent', voice: [],
+        music: [{ id: 'music', type: 'music', assetId: 'music-asset', startMs: 0, endMs: 12_000, durationMs: 12_000, gain: .25, fadeInMs: 900, fadeOutMs: 1200, metadata: {} }],
+        sfx: [], settings: { masterGain: 1, voiceGain: 1, musicGain: .25, sfxGain: .72, duckingGain: .32, duckingAttackMs: 120, duckingReleaseMs: 260, musicFadeInMs: 900, musicFadeOutMs: 1200, targetLufs: -14 },
+      },
+    } as unknown as RenderManifest;
+
+    const plan = buildAudioMixCommand(manifest, 2);
+    expect(plan.inputArgs).toEqual(['-stream_loop', '-1', '-i', 'https://signed.example/music.mp3']);
+    expect(plan.voiceInputCount).toBe(0);
+    expect(plan.musicInputCount).toBe(1);
+    expect(plan.filterComplex).not.toContain('sidechaincompress');
+    expect(plan.filterComplex).toContain('[2:a]atrim=duration=12.000');
+  });
 });

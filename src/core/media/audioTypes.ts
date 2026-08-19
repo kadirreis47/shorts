@@ -64,6 +64,8 @@ export interface AudioBuildOptions {
   narrationMode?: AudioNarrationMode;
   settings?: Partial<AudioMixSettings>;
   musicAssetId?: string;
+  /** Recipe V1 supplies an explicit durable music decision; legacy callers retain their placeholder planning behavior. */
+  canonicalMusicEnabled?: boolean;
   voiceAssetIdsByScene?: Readonly<Record<string, string>>;
   narrationAssetId?: string;
 }

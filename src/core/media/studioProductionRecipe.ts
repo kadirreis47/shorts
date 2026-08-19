@@ -27,7 +27,7 @@ export interface StudioProductionRecipeV1 {
   readonly audio: {
     readonly narrationMode: StudioRecipeVoiceMode;
     readonly narration: StudioRecipeNarrationV1 | null;
-    readonly music: { readonly id: string; readonly volume: number; readonly beatSync: boolean } | null;
+    readonly music: StudioRecipeMusicV1 | null;
   };
   readonly branding: {
     readonly watermark: { readonly text: string; readonly position: StudioRecipeWatermarkPosition } | null;
@@ -77,6 +77,14 @@ export interface StudioRecipeNarrationV1 {
   readonly voiceId: string;
 }
 
+/** Durable background music only. Preview blobs and playback URLs are excluded. */
+export interface StudioRecipeMusicV1 {
+  readonly storage: MediaStorageObject;
+  readonly volume: number;
+  /** Persisted preview intent; beat synchronization is not canonical in V1.1. */
+  readonly beatSync: boolean;
+}
+
 export type StudioRecipeWatermarkPosition = CanonicalWatermarkPosition;
 
 export interface StudioProductionRecipeInput {
@@ -92,6 +100,7 @@ export interface StudioProductionRecipeInput {
   voiceoverMode: StudioRecipeVoiceMode;
   narration: StudioRecipeNarrationV1 | null;
   musicId: string;
+  musicStorage?: MediaStorageObject | null;
   musicVolume: number;
   beatSync: boolean;
   watermarkText: string;
@@ -128,7 +137,7 @@ export const STUDIO_PRODUCTION_RECIPE_V1_EXPORT_CAPABILITIES: StudioProductionRe
   motion: 'supported',
   transitions: 'partial',
   watermark: 'supported',
-  music: 'unsupported',
+  music: 'partial',
 });
 
 const CAPTION_STYLES = new Set<StudioRecipeCaptionStyle>(['karaoke', 'highlight', 'classic', 'minimal']);
@@ -137,7 +146,7 @@ const MOTIONS = new Set<StudioRecipeMotion>(['kenburns', 'pan', 'zoom_in', 'zoom
 const VOICE_MODES = new Set<StudioRecipeVoiceMode>(['elevenlabs', 'browser', 'none']);
 const VISUAL_MODES = new Set<VisualMode>(['auto', 'ai_cartoon', 'ai_realistic', 'ai_anime', 'ai_horror', 'real_footage', 'mixed']);
 const WATERMARK_POSITIONS = new Set<StudioRecipeWatermarkPosition>(['top-left', 'top-right', 'bottom-left', 'bottom-right']);
-const PRIVATE_PATH = /^(?<owner>[^/]+)\/(?:videos\/[0-9a-f-]+\.webm|generated-images\/[0-9a-f-]+\.png|voiceovers\/[0-9a-f-]+\.mp3)$/i;
+const PRIVATE_PATH = /^(?<owner>[^/]+)\/(?:videos\/[0-9a-f-]+\.webm|generated-images\/[0-9a-f-]+\.png|voiceovers\/[0-9a-f-]+\.mp3|music\/[0-9a-f-]+\.mp3)$/i;
 const TRANSIENT_SOURCE = /^(?:blob:|data:)|\/storage\/v1\/object\/sign\//i;
 
 export function normalizeStudioProductionRecipeV1(
@@ -169,7 +178,7 @@ export function normalizeStudioProductionRecipeV1(
     audio: {
       narrationMode: voiceMode,
       narration,
-      music: normalizeMusic(input.musicId, input.musicVolume, input.beatSync),
+      music: normalizeMusic(input.musicId, input.musicStorage ?? null, input.musicVolume, input.beatSync, safeOwnerId),
     },
     branding: {
       watermark: normalizeWatermark(input.watermarkText, input.watermarkPosition),
@@ -206,9 +215,11 @@ export function compileStudioProductionRecipeV1(
       resolution: { width: recipe.output.width, height: recipe.output.height },
       fps: recipe.output.fps,
     },
-    audio: {
-      narrationMode: recipe.audio.narrationMode === 'elevenlabs' && narration ? 'required' : 'silent',
-    },
+    audio: { narrationMode: recipe.audio.narrationMode === 'elevenlabs' && narration ? 'required' : 'silent' },
+    music: recipe.audio.music ? {
+      storage: recipe.audio.music.storage,
+      volume: recipe.audio.music.volume,
+    } : undefined,
     narration: narration ? {
       storage: narration.storage,
       durationMs: narration.durationMs,
@@ -353,9 +364,13 @@ function assertOwnedStorage(storage: MediaStorageObject, ownerId: string): void 
   }
 }
 
-function normalizeMusic(id: string, volume: number, beatSync: boolean): StudioProductionRecipeV1['audio']['music'] {
+function normalizeMusic(id: string, storage: MediaStorageObject | null, volume: number, beatSync: boolean, ownerId: string): StudioProductionRecipeV1['audio']['music'] {
   const safeId = optionalText(id);
-  return safeId ? { id: safeId, volume: boundedNumber(volume, 0, 1, 'Music volume'), beatSync: Boolean(beatSync) } : null;
+  if (!safeId) return null;
+  if (!storage) throw new Error('Selected background music requires a durable private media identity.');
+  assertOwnedStorage(storage, ownerId);
+  if (!/\/music\/[0-9a-f-]+\.mp3$/i.test(storage.objectPath)) throw new Error('Production recipe music identity is invalid.');
+  return { storage: cloneStorage(storage), volume: boundedNumber(volume, 0, 1, 'Music volume'), beatSync: Boolean(beatSync) };
 }
 
 function normalizeWatermark(text: string, position: string): StudioProductionRecipeV1['branding']['watermark'] {

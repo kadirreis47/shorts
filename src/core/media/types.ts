@@ -177,6 +177,10 @@ export interface CreateMediaProjectInput {
   tags?: string[];
   settings?: Partial<MediaProjectSettings>;
   audio?: AudioBuildOptions;
+  music?: {
+    storage: MediaStorageObject;
+    volume: number;
+  };
   narration?: {
     storage: MediaStorageObject;
     durationMs: number;

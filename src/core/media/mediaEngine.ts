@@ -73,6 +73,18 @@ export function createMediaEngine(
         },
       } : null;
       if (narrationAsset) assets.push(narrationAsset);
+      const musicAsset = input.music ? {
+        id: createId('asset-music'),
+        type: 'music' as const,
+        source: privateStorageSource(input.music.storage),
+        mimeType: 'audio/mpeg',
+        metadata: {
+          storageBucket: input.music.storage.bucket,
+          storageObjectPath: input.music.storage.objectPath,
+          source: 'canonical-background-music',
+        },
+      } : null;
+      if (musicAsset) assets.push(musicAsset);
       const subtitleTimeline = buildSubtitleTimeline(scenes, settings, {
         canonical: input.subtitles,
       });
@@ -80,7 +92,15 @@ export function createMediaEngine(
         scenes,
         timelinePlan.markers,
         timelinePlan.durationMs,
-        { ...input.audio, narrationAssetId: narrationAsset?.id },
+        {
+          ...input.audio,
+          canonicalMusicEnabled: input.productionRecipe ? Boolean(input.music) : input.audio?.canonicalMusicEnabled,
+          narrationAssetId: narrationAsset?.id,
+          musicAssetId: musicAsset?.id,
+          settings: input.music
+            ? { ...input.audio?.settings, musicGain: input.music.volume }
+            : input.audio?.settings,
+        },
       );
       const tracks = composeTracks(scenes, subtitleTimeline, audioTimeline);
       const project: MediaProject = {

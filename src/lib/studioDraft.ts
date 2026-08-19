@@ -27,6 +27,8 @@ export interface StudioDraft {
   motionStyle: MotionStyle;
   useBroll: boolean;
   musicId: string;
+  /** Stable private identity only; legacy Blob/object-URL selections are intentionally not restored. */
+  musicStorage?: MediaStorageObject;
   musicVolume: number;
   visualMode: VisualMode;
   selectedStyleId: string;
@@ -100,6 +102,7 @@ export function studioProductionRecipeInputFromDraft(draft: StudioDraft): Studio
     voiceoverMode: draft.voiceoverMode,
     narration: draft.narration ?? null,
     musicId: draft.musicId,
+    musicStorage: draft.musicStorage ?? null,
     musicVolume: draft.musicVolume,
     beatSync: draft.beatSync,
     watermarkText: draft.watermarkText,

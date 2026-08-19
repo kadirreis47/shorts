@@ -7,7 +7,7 @@ import { mediaStorageIdentityFromMetadata } from '@/core/media/storageIdentity';
 export const PRIVATE_MEDIA_BUCKET = 'media' as const;
 export const PRIVATE_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
-export type PrivateMediaClass = 'videos' | 'generated-images' | 'voiceovers';
+export type PrivateMediaClass = 'videos' | 'generated-images' | 'voiceovers' | 'music';
 
 export interface ValidatedMediaOwnerContext {
   readonly ownerId: string;
@@ -41,7 +41,7 @@ function extensionForBlob(file: Blob): string {
 }
 
 function ownerPath(context: ValidatedMediaOwnerContext, mediaClass: PrivateMediaClass, extension: string): string {
-  if (mediaClass !== 'videos' && mediaClass !== 'generated-images' && mediaClass !== 'voiceovers') {
+  if (mediaClass !== 'videos' && mediaClass !== 'generated-images' && mediaClass !== 'voiceovers' && mediaClass !== 'music') {
     throw new Error('This private media class is not supported.');
   }
   return `${context.ownerId}/${mediaClass}/${crypto.randomUUID()}.${extension}`;
@@ -49,7 +49,7 @@ function ownerPath(context: ValidatedMediaOwnerContext, mediaClass: PrivateMedia
 
 function assertOwnedMediaIdentity(identity: MediaStorageObject, context: ValidatedMediaOwnerContext): void {
   const escapedOwner = context.ownerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const boundedPath = new RegExp(`^${escapedOwner}/(?:videos/[0-9a-f-]+\\.webm|generated-images/[0-9a-f-]+\\.png|voiceovers/[0-9a-f-]+\\.mp3)$`, 'i');
+  const boundedPath = new RegExp(`^${escapedOwner}/(?:videos/[0-9a-f-]+\\.webm|generated-images/[0-9a-f-]+\\.png|voiceovers/[0-9a-f-]+\\.mp3|music/[0-9a-f-]+\\.mp3)$`, 'i');
   if (identity.bucket !== PRIVATE_MEDIA_BUCKET || !boundedPath.test(identity.objectPath)) {
     throw new Error('Private media is not available for the authenticated user.');
   }
@@ -80,7 +80,7 @@ export async function uploadPrivateMedia(file: Blob, mediaClass: PrivateMediaCla
   const signedUrl = await createPrivateMediaSignedUrl(media, context);
   return mediaClass === 'videos'
     ? { videoUrl: signedUrl, media }
-    : mediaClass === 'voiceovers'
+    : mediaClass === 'voiceovers' || mediaClass === 'music'
       ? { audioUrl: signedUrl, media }
       : { imageUrl: signedUrl, media };
 }

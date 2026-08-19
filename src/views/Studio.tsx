@@ -41,6 +41,7 @@ import {
   toDurableScenes,
 } from '@/lib/mediaStorage';
 import { isCurrentValidatedOwnerContext } from '@/auth/identity';
+import { isApprovedCatalogMusicUrl, isValidCatalogMusicBlob, isValidCatalogMusicResponse, MUSIC_TRACKS } from '@/lib/catalogMusic';
 import { useAuthSessionStore } from '@/auth/session';
 
 interface StudioProps {
@@ -132,13 +133,6 @@ const VISUAL_MODES: { key: VisualMode; labelKey: string; descKey: string; icon: 
   { key: 'mixed', labelKey: 'studio.modeMixed', descKey: 'studio.modeMixedDesc', icon: Search },
 ];
 
-const MUSIC_TRACKS: { id: string; name: string; url: string; mood: string }[] = [
-  { id: 'upbeat', name: 'Upbeat Energy', url: 'https://cdn.pixabay.com/audio/2024/02/05/audio_3311b036f5.mp3', mood: 'Energetic, fast-paced' },
-  { id: 'chill', name: 'Chill Lo-Fi', url: 'https://cdn.pixabay.com/audio/2023/12/26/audio_8d61de4c2e.mp3', mood: 'Calm, focused' },
-  { id: 'cinematic', name: 'Cinematic', url: 'https://cdn.pixabay.com/audio/2022/10/25/audio_9a88ce0c7e.mp3', mood: 'Dramatic, epic' },
-  { id: 'corporate', name: 'Corporate', url: 'https://cdn.pixabay.com/audio/2023/06/19/audio_3f8ee2a0a7.mp3', mood: 'Professional, clean' },
-];
-
 export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: StudioProps) {
   const { t } = useI18n();
   const authenticatedUserId = useAuthSessionStore((state) => state.user?.id ?? null);
@@ -176,9 +170,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [motionStyle, setMotionStyle] = useState<MotionStyle>('kenburns');
   const [useBroll, setUseBroll] = useState(false);
   const [musicId, setMusicId] = useState<string>('');
+  const [musicStorage, setMusicStorage] = useState<MediaStorageObject | null>(null);
   const [musicBlob, setMusicBlob] = useState<Blob | null>(null);
   const [musicVolume, setMusicVolume] = useState(0.25);
   const [loadingMusic, setLoadingMusic] = useState(false);
+  const musicSelectionGeneration = useRef(0);
+  const musicFetchAbort = useRef<AbortController | null>(null);
 
   // Pro Features state
   const [visualMode, setVisualMode] = useState<VisualMode>('auto');
@@ -249,11 +246,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
   const canonicalStudioRevision = useMemo(() => JSON.stringify({
     title, hook, script, cta, scenes: toDurableScenes(scenes), captionStyle, transitionStyle,
-    motionStyle, useBroll, musicId, musicVolume, visualMode, selectedStyleId, characterName,
+    motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
     characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
     showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice,
     narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : null,
-  }), [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
+  }), [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
 
   const currentCompletedExport = completedExport?.revision === canonicalStudioRevision && isVerifiedExportJob(completedExport.job)
     ? completedExport.job
@@ -312,7 +309,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setTransitionStyle(draft.transitionStyle);
       setMotionStyle(draft.motionStyle);
       setUseBroll(draft.useBroll);
-      setMusicId(draft.musicId);
+      // Legacy drafts only persisted a transient track id/object URL. They
+      // cannot be revived as canonical audio until the bounded track is
+      // selected again and uploaded under the current owner.
+      setMusicId(draft.musicStorage ? draft.musicId : '');
+      setMusicStorage(draft.musicStorage ?? null);
       setMusicVolume(draft.musicVolume);
       setVisualMode(draft.visualMode);
       setSelectedStyleId(draft.selectedStyleId);
@@ -378,6 +379,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     motionStyle,
     useBroll,
     musicId,
+    musicStorage: musicStorage ?? undefined,
     musicVolume,
     visualMode,
     selectedStyleId,
@@ -396,7 +398,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     targetLanguage,
     narration: narration ?? undefined,
   }), [directorProjectId, step, channelId, unavailableRestoredChannelId, topic, niche, tone, duration, title, hook, script, cta, scenes,
-    captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicVolume, visualMode,
+    captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode,
     selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId,
     watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor,
     beatSync, voiceoverMode, selectedVoice, targetLanguage, narration]);
@@ -440,6 +442,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setUnavailableRestoredChannelId(null);
     setMusicBlob(null);
     setMusicId('');
+    setMusicStorage(null);
     setDraftSavedAt('');
     setDraftStatus('empty');
   }
@@ -893,24 +896,49 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleLoadMusic(trackId: string) {
+    const selectionGeneration = ++musicSelectionGeneration.current;
+    musicFetchAbort.current?.abort();
+    musicFetchAbort.current = null;
+    setError('');
     setMusicId(trackId);
+    setMusicStorage(null);
     if (!trackId) {
       setMusicBlob(null);
+      setLoadingMusic(false);
       return;
     }
     const track = MUSIC_TRACKS.find(t => t.id === trackId);
-    if (!track) return;
+    if (!track || !isApprovedCatalogMusicUrl(track.url)) {
+      setMusicId('');
+      setLoadingMusic(false);
+      return;
+    }
     setLoadingMusic(true);
+    const ownerContext = captureValidatedMediaOwnerContext();
+    const controller = new AbortController();
+    musicFetchAbort.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 20_000);
     try {
-      const res = await fetch(track.url);
-      if (!res.ok) throw new Error('Failed to load music');
+      const res = await fetch(track.url, { redirect: 'error', signal: controller.signal });
+      if (!isValidCatalogMusicResponse(res.url || track.url, res.status, res.headers.get('content-type'), res.headers.get('content-length'))) throw new Error('Selected music is not a supported catalog MP3 track.');
       const blob = await res.blob();
+      if (!isValidCatalogMusicBlob(blob)) throw new Error('Selected music is not a supported MP3 track.');
+      assertCurrentMediaOwnerContext(ownerContext);
+      const upload = await uploadMedia(blob, 'music');
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (selectionGeneration !== musicSelectionGeneration.current) return;
       setMusicBlob(blob);
+      setMusicStorage(upload.media);
     } catch {
+      if (selectionGeneration !== musicSelectionGeneration.current || !isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) return;
       setMusicBlob(null);
       setMusicId('');
+      setMusicStorage(null);
+      setError(t('studio.musicLoadFailed'));
     } finally {
-      setLoadingMusic(false);
+      window.clearTimeout(timeout);
+      if (musicFetchAbort.current === controller) musicFetchAbort.current = null;
+      if (selectionGeneration === musicSelectionGeneration.current && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) setLoadingMusic(false);
     }
   }
 
@@ -1099,6 +1127,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           voiceId: narration.voiceId,
         } : null,
         musicId,
+        musicStorage,
         musicVolume,
         beatSync,
         watermarkText,

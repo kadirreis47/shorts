@@ -222,6 +222,30 @@ describe('full and incremental canonical execution parity', () => {
     expect(concat.args).toContain('[audioout]');
   });
 
+  it('derives voice and looping-music input indices from each crossfade composition input count', () => {
+    const value = manifest({
+      assets: [
+        { id: 'voice-asset', type: 'voice', source: 'https://signed.example/voice.mp3', metadata: {} },
+        { id: 'music-asset', type: 'music', source: 'https://signed.example/music.mp3', metadata: {} },
+      ],
+      audio: {
+        ...manifest().audio,
+        narrationMode: 'required',
+        voice: [{ id: 'voice', type: 'voice', assetId: 'voice-asset', startMs: 0, endMs: 9_000, durationMs: 9_000, gain: 1, fadeInMs: 0, fadeOutMs: 0, metadata: {} }],
+        music: [{ id: 'music', type: 'music', assetId: 'music-asset', startMs: 0, endMs: 9_000, durationMs: 9_000, gain: .25, fadeInMs: 900, fadeOutMs: 1200, metadata: {} }],
+      },
+    });
+    const full = buildFFmpegCommand({ manifest: value, preset });
+    const incremental = buildSegmentConcatCommand({ manifest: value, preset, segmentPaths: ['one.mp4', 'two.mp4'] });
+
+    expect(full.args).toEqual(expect.arrayContaining(['-i', 'https://signed.example/voice.mp3', '-stream_loop', '-1', '-i', 'https://signed.example/music.mp3']));
+    expect(incremental.args).toEqual(expect.arrayContaining(['-i', 'https://signed.example/voice.mp3', '-stream_loop', '-1', '-i', 'https://signed.example/music.mp3']));
+    expect(filter(full)).toContain('[2:a]atrim=duration=9.000');
+    expect(filter(full)).toContain('[3:a]atrim=duration=9.000');
+    expect(filter(incremental)).toContain('[2:a]atrim=duration=9.000');
+    expect(filter(incremental)).toContain('[3:a]atrim=duration=9.000');
+  });
+
   it('keeps intentional silent output valid and shares AV1 output selection', () => {
     const value = manifest();
     const av1 = { ...preset, videoCodec: 'av1' as const, container: 'webm' as const };

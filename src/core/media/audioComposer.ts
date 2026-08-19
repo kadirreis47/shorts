@@ -35,7 +35,9 @@ export function buildAudioTimeline(
     : options.narrationAssetId
       ? [buildCanonicalNarrationSegment(durationMs, settings, options.narrationAssetId)]
       : buildVoiceSegments(scenes, settings, options.voiceAssetIdsByScene);
-  const music = buildMusicSegments(durationMs, settings, options.musicAssetId);
+  const music = options.canonicalMusicEnabled === false
+    ? []
+    : buildMusicSegments(durationMs, settings, options.musicAssetId);
   const sfx = buildSfxSegments(scenes, markers, settings);
   const automation = buildDuckingAutomation(voice, settings);
 

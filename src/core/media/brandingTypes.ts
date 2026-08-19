@@ -3,12 +3,19 @@ import type { CanonicalBrandingConfiguration, CanonicalWatermarkPosition } from 
 const WATERMARK_POSITIONS = new Set<CanonicalWatermarkPosition>(['top-left', 'top-right', 'bottom-left', 'bottom-right']);
 export const MAX_CANONICAL_WATERMARK_CHARACTERS = 20;
 
+function hasUnsafeControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1F || codePoint === 0x7F);
+  });
+}
+
 /** The existing UI is a single-line watermark field, not a caption editor. */
 export function normalizeCanonicalWatermarkText(value: unknown): string | null {
   if (typeof value !== 'string') throw new Error('Canonical watermark text is invalid.');
   const text = value.replace(/\r\n|\r/g, '\n').trim();
   if (!text) return null;
-  if (/[\u0000-\u001F\u007F]/u.test(text)) throw new Error('Canonical watermark text contains unsupported control characters.');
+  if (hasUnsafeControlCharacter(text)) throw new Error('Canonical watermark text contains unsupported control characters.');
   if (Array.from(text).length > MAX_CANONICAL_WATERMARK_CHARACTERS) {
     throw new Error(`Canonical watermark text must be ${MAX_CANONICAL_WATERMARK_CHARACTERS} characters or fewer.`);
   }

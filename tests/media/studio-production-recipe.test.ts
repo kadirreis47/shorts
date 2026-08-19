@@ -127,6 +127,39 @@ describe('StudioProductionRecipeV1', () => {
     });
   });
 
+  it('compiles only owner-scoped durable music into the existing canonical audio timeline', async () => {
+    const normalized = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
+    const compiled = compileStudioProductionRecipeV1(normalized);
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const build = await createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject(compiled);
+
+    expect(compiled.music).toEqual({
+      storage: { bucket: 'media', objectPath: 'owner-a/music/00000000-0000-4000-8000-000000000000.mp3' },
+      volume: .25,
+    });
+    expect(build.manifest.assets).toContainEqual(expect.objectContaining({
+      type: 'music', metadata: expect.objectContaining({ storageObjectPath: 'owner-a/music/00000000-0000-4000-8000-000000000000.mp3' }),
+    }));
+    expect(build.manifest.audio.music).toMatchObject([{ assetId: expect.any(String), gain: .25, startMs: 0, endMs: build.manifest.durationMs }]);
+  });
+
+  it('rejects selected transient or foreign music before it can become canonical media', () => {
+    const missing = recipeInput();
+    delete missing.musicStorage;
+    expect(() => normalizeStudioProductionRecipeV1(missing, ownerContext())).toThrow(/durable private media identity/i);
+
+    const foreign = recipeInput();
+    foreign.musicStorage = { bucket: 'media', objectPath: 'owner-b/music/00000000-0000-4000-8000-000000000000.mp3' };
+    expect(() => normalizeStudioProductionRecipeV1(foreign, ownerContext())).toThrow(/not owned/i);
+  });
+
+  it('changes final recipe identity for music-only edits while leaving scene segment semantics music-neutral', () => {
+    const baseline = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
+    const changed = recipeInput();
+    changed.musicVolume = .4;
+    expect(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity).not.toBe(baseline.identity);
+  });
+
   it('compiles bounded Recipe V1 subtitle intent into canonical media input', () => {
     const input = recipeInput();
     input.captionStyle = 'minimal';
@@ -287,7 +320,7 @@ describe('StudioProductionRecipeV1', () => {
     expect(compiled.audio).toEqual({ narrationMode: 'silent' });
     expect(compiled.narration).toBeUndefined();
     expect(normalized.exportSupport).toMatchObject({
-      browserSpeech: 'preview-only', motion: 'supported', transitions: 'partial', watermark: 'supported', music: 'unsupported',
+      browserSpeech: 'preview-only', motion: 'supported', transitions: 'partial', watermark: 'supported', music: 'partial',
     });
   });
 
@@ -379,7 +412,7 @@ function recipeInput(): StudioProductionRecipeInput {
       storage: { bucket: 'media', objectPath: 'owner-a/voiceovers/00000000-0000-4000-8000-000000000000.mp3' },
       durationMs: 25_000, scriptRevision: 'script-revision', voiceId: 'voice-a',
     },
-    musicId: 'ambient', musicVolume: .25, beatSync: true,
+    musicId: 'ambient', musicStorage: { bucket: 'media', objectPath: 'owner-a/music/00000000-0000-4000-8000-000000000000.mp3' }, musicVolume: .25, beatSync: true,
     watermarkText: '', watermarkPosition: 'bottom-right', visualMode: 'auto', selectedStyleId: '', characterProfileId: '',
     useBroll: false, characterName: '', characterAppearance: '', characterArtStyle: 'realistic',
   };
