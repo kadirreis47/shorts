@@ -35,6 +35,7 @@ export function assertCurrentMediaOwnerContext(context: ValidatedMediaOwnerConte
 
 function extensionForBlob(file: Blob, mediaClass: PrivateMediaClass): string {
   if (mediaClass === 'videos' && file.type === 'video/webm') return 'webm';
+  if (mediaClass === 'videos' && file.type === 'video/mp4') return 'mp4';
   if (mediaClass === 'generated-images' && file.type === 'image/png') return 'png';
   if (mediaClass === 'generated-images' && file.type === 'image/jpeg') return 'jpg';
   if ((mediaClass === 'voiceovers' || mediaClass === 'music') && file.type === 'audio/mpeg') return 'mp3';
@@ -50,7 +51,7 @@ function ownerPath(context: ValidatedMediaOwnerContext, mediaClass: PrivateMedia
 
 function assertOwnedMediaIdentity(identity: MediaStorageObject, context: ValidatedMediaOwnerContext): void {
   const escapedOwner = context.ownerId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const boundedPath = new RegExp(`^${escapedOwner}/(?:videos/[0-9a-f-]+\\.webm|generated-images/[0-9a-f-]+\\.(?:png|jpg)|voiceovers/[0-9a-f-]+\\.mp3|music/[0-9a-f-]+\\.mp3)$`, 'i');
+  const boundedPath = new RegExp(`^${escapedOwner}/(?:videos/[0-9a-f-]+\\.(?:webm|mp4)|generated-images/[0-9a-f-]+\\.(?:png|jpg)|voiceovers/[0-9a-f-]+\\.mp3|music/[0-9a-f-]+\\.mp3)$`, 'i');
   if (identity.bucket !== PRIVATE_MEDIA_BUCKET || !boundedPath.test(identity.objectPath)) {
     throw new Error('Private media is not available for the authenticated user.');
   }

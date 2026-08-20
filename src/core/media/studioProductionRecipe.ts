@@ -146,7 +146,7 @@ const MOTIONS = new Set<StudioRecipeMotion>(['kenburns', 'pan', 'zoom_in', 'zoom
 const VOICE_MODES = new Set<StudioRecipeVoiceMode>(['elevenlabs', 'browser', 'none']);
 const VISUAL_MODES = new Set<VisualMode>(['auto', 'ai_cartoon', 'ai_realistic', 'ai_anime', 'ai_horror', 'real_footage', 'mixed']);
 const WATERMARK_POSITIONS = new Set<StudioRecipeWatermarkPosition>(['top-left', 'top-right', 'bottom-left', 'bottom-right']);
-const PRIVATE_PATH = /^(?<owner>[^/]+)\/(?:videos\/[0-9a-f-]+\.webm|generated-images\/[0-9a-f-]+\.(?:png|jpg)|voiceovers\/[0-9a-f-]+\.mp3|music\/[0-9a-f-]+\.mp3)$/i;
+const PRIVATE_PATH = /^(?<owner>[^/]+)\/(?:videos\/[0-9a-f-]+\.(?:webm|mp4)|generated-images\/[0-9a-f-]+\.(?:png|jpg)|voiceovers\/[0-9a-f-]+\.mp3|music\/[0-9a-f-]+\.mp3)$/i;
 const TRANSIENT_SOURCE = /^(?:blob:|data:)|\/storage\/v1\/object\/sign\//i;
 
 export function normalizeStudioProductionRecipeV1(

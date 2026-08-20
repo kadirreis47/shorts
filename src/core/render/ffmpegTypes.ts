@@ -52,6 +52,7 @@ export interface VerifiedExportActionResult {
 
 export interface FFmpegBridge {
   getCapabilities(forceRefresh?: boolean): Promise<FFmpegCapabilities>;
+  probeManualMp4?(bytes: ArrayBuffer): Promise<{ container: 'mp4'; codec: 'h264'; width: number; height: number; fps: number; durationMs: number; hasAudio: boolean }>;
   run(request: FFmpegRunRequest): Promise<FFmpegRunResult>;
   cancel(jobId: string): Promise<boolean>;
   fileExists(path: string): Promise<boolean>;

@@ -50,6 +50,12 @@ describe('private media renderer boundary', () => {
     expect(mocks.createSignedUrl).toHaveBeenCalledWith(uploadedPath, PRIVATE_MEDIA_SIGNED_URL_TTL_SECONDS);
   });
 
+  it('keeps legacy WebM and bounded MP4 private video identities distinct and owner-scoped', async () => {
+    const mp4 = await uploadPrivateMedia(new Blob(['video'], { type: 'video/mp4' }), 'videos');
+    expect(mp4.media.objectPath).toMatch(/^11111111-1111-4111-8111-111111111111\/videos\/[0-9a-f-]+\.mp4$/i);
+    await expect(createPrivateMediaSignedUrl({ bucket: 'media', objectPath: '11111111-1111-4111-8111-111111111111/videos/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.mov' })).rejects.toThrow(/not available/i);
+  });
+
   it('stores JPEG scene images with the fixed private .jpg extension', async () => {
     const result = await uploadPrivateMedia(new Blob(['jpeg'], { type: 'image/jpeg' }), 'generated-images');
     const uploadedPath = mocks.upload.mock.calls[0][0] as string;

@@ -5,6 +5,7 @@ const ALLOWED_FFMPEG_API_KEYS = Object.freeze([
   'segmentExists', 'getSegmentCacheStats', 'clearSegmentCache', 'analyzeOutput',
   'artifactDigest', 'verifyArtifactSnapshot', 'revalidateArtifact', 'onProgress',
   'pickOutputPath', 'openVerifiedExport', 'revealVerifiedExport', 'saveVerifiedExportAs',
+  'probeManualMp4',
 ]);
 
 const ALLOWED_YOUTUBE_API_KEYS = Object.freeze([
@@ -90,6 +91,9 @@ function createYouTubeBridge(ipcRenderer) {
 function createFFmpegBridge(ipcRenderer) {
   return Object.freeze({
     getCapabilities: (forceRefresh = false) => ipcRenderer.invoke('ffmpeg:capabilities', forceRefresh),
+    probeManualMp4: (bytes) => bytes instanceof ArrayBuffer && bytes.byteLength > 0 && bytes.byteLength <= 75 * 1024 * 1024
+      ? ipcRenderer.invoke('manual-video:probe-mp4', bytes)
+      : Promise.reject(new TypeError('Invalid manual video payload.')),
     run: (request) => ipcRenderer.invoke('ffmpeg:run', request),
     cancel: (jobId) => ipcRenderer.invoke('ffmpeg:cancel', jobId),
     fileExists: (targetPath) => ipcRenderer.invoke('ffmpeg:file-exists', targetPath),

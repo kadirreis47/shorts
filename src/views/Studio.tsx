@@ -47,6 +47,12 @@ import {
   requireOneManualSceneImage,
   validateManualSceneImage,
 } from '@/lib/manualSceneImageImport';
+import {
+  ManualSceneVideoImportError,
+  isManualSceneVideoImportError,
+  requireOneManualSceneVideo,
+  validateManualSceneVideo,
+} from '@/lib/manualSceneVideoImport';
 import { useAuthSessionStore } from '@/auth/session';
 
 interface StudioProps {
@@ -198,7 +204,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [watermarkText, setWatermarkText] = useState('');
   const [watermarkPosition, setWatermarkPosition] = useState('bottom-right');
   const [generatingSceneImage, setGeneratingSceneImage] = useState<number | null>(null);
-  const [importingSceneImage, setImportingSceneImage] = useState<number | null>(null);
+  const [importingSceneImages, setImportingSceneImages] = useState<ReadonlySet<number>>(() => new Set());
+  const [importingSceneVideos, setImportingSceneVideos] = useState<ReadonlySet<number>>(() => new Set());
   const sceneImportGenerations = useRef(new Map<number, number>());
   const pexelsRequestGenerations = useRef({ images: 0, broll: 0, research: 0 });
 
@@ -823,7 +830,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const targetScene = scenes[sceneIndex];
     if (!targetScene) return;
     const ownerContext = captureValidatedMediaOwnerContext();
-    setImportingSceneImage(sceneIndex);
+    setImportingSceneImages((current) => new Set(current).add(sceneIndex));
+    setImportingSceneVideos((current) => { const next = new Set(current); next.delete(sceneIndex); return next; });
     setError('');
     try {
       const file = requireOneManualSceneImage(files);
@@ -857,7 +865,59 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (
         sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-      ) setImportingSceneImage(null);
+      ) setImportingSceneImages((current) => { const next = new Set(current); next.delete(sceneIndex); return next; });
+    }
+  }
+
+  function sceneVideoImportError(error: unknown): string {
+    if (!isManualSceneVideoImportError(error)) return t('studio.videoImportProbeFailed');
+    switch (error.code) {
+      case 'selection': return t('studio.videoImportSelectionInvalid');
+      case 'mime': return t('studio.videoImportMp4Required');
+      case 'empty': return t('studio.videoImportEmpty');
+      case 'too-large': return t('studio.videoImportTooLarge');
+      case 'signature': return t('studio.videoImportInvalidMp4');
+      default: return t('studio.videoImportProbeFailed');
+    }
+  }
+
+  async function handleImportSceneVideo(sceneIndex: number, files: readonly File[]) {
+    const selectionGeneration = (sceneImportGenerations.current.get(sceneIndex) ?? 0) + 1;
+    sceneImportGenerations.current.set(sceneIndex, selectionGeneration);
+    const targetScene = scenes[sceneIndex];
+    if (!targetScene) return;
+    const ownerContext = captureValidatedMediaOwnerContext();
+    setImportingSceneVideos((current) => new Set(current).add(sceneIndex));
+    setImportingSceneImages((current) => { const next = new Set(current); next.delete(sceneIndex); return next; });
+    setError('');
+    try {
+      const file = requireOneManualSceneVideo(files);
+      await validateManualSceneVideo(file);
+      assertCurrentMediaOwnerContext(ownerContext);
+      const bridge = window.electronAPI?.ffmpeg;
+      if (!bridge?.probeManualMp4) throw new ManualSceneVideoImportError('probe');
+      await bridge.probeManualMp4(await file.arrayBuffer());
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration) return;
+      const upload = await uploadMedia(file, 'videos');
+      assertCurrentMediaOwnerContext(ownerContext);
+      if (sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration) return;
+      setScenes((current) => {
+        if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+          || sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration
+          || current[sceneIndex] !== targetScene) return current;
+        const updated = [...current];
+        updated[sceneIndex] = { ...targetScene, videoUrl: upload.videoUrl, videoStorage: upload.media, imageUrl: undefined, imageStorage: undefined };
+        return updated;
+      });
+    } catch (importError) {
+      if (sceneImportGenerations.current.get(sceneIndex) === selectionGeneration && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+        setError(sceneVideoImportError(importError));
+      }
+    } finally {
+      if (sceneImportGenerations.current.get(sceneIndex) === selectionGeneration && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+        setImportingSceneVideos((current) => { const next = new Set(current); next.delete(sceneIndex); return next; });
+      }
     }
   }
 
@@ -1512,7 +1572,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     {s.videoUrl && (
                       <div className="mt-2 flex items-center gap-2 rounded-lg bg-blue-50 p-2">
                         <Video size={14} className="shrink-0 text-blue-500" />
-                        <span className="text-xs text-blue-600">{t('studio.brollAttached')}</span>
+                        <span className="text-xs text-blue-600">{t('studio.brollAttached')} {s.videoStorage ? t('studio.videoImportAudioNotice') : ''}</span>
                       </div>
                     )}
                     {s.imageUrl && !s.videoUrl && (
@@ -1531,17 +1591,32 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                         {t('studio.generateImage')}
                       </button>
                       <label className="flex cursor-pointer items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100">
-                        {importingSceneImage === i ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
-                        {importingSceneImage === i ? t('studio.importingImage') : t('studio.importImage')}
+                        {importingSceneImages.has(i) ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
+                        {importingSceneImages.has(i) ? t('studio.importingImage') : t('studio.importImage')}
                         <input
                           type="file"
                           accept="image/png,image/jpeg"
                           className="sr-only"
-                          disabled={importingSceneImage === i}
+                          disabled={importingSceneImages.has(i)}
                           onChange={(event) => {
                             const files = Array.from(event.currentTarget.files ?? []);
                             event.currentTarget.value = '';
                             void handleImportSceneImage(i, files);
+                          }}
+                        />
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100">
+                        {importingSceneVideos.has(i) ? <Loader2 size={12} className="animate-spin" /> : <Video size={12} />}
+                        {importingSceneVideos.has(i) ? t('studio.importingVideo') : t('studio.importVideo')}
+                        <input
+                          type="file"
+                          accept="video/mp4"
+                          className="sr-only"
+                          disabled={importingSceneVideos.has(i)}
+                          onChange={(event) => {
+                            const files = Array.from(event.currentTarget.files ?? []);
+                            event.currentTarget.value = '';
+                            void handleImportSceneVideo(i, files);
                           }}
                         />
                       </label>
