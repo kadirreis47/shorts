@@ -41,6 +41,37 @@ describe('StudioProductionRecipeV1', () => {
     expect(JSON.stringify(first.recipe)).not.toContain('blob:');
   });
 
+  it('keeps bounded Pexels provenance separate from Recipe V1 output identity', async () => {
+    const firstInput = recipeInput();
+    firstInput.scenes = [{
+      ...firstInput.scenes[0],
+      imageProvenance: { provider: 'pexels', providerMediaId: 42, originalSourceUrl: 'https://images.pexels.com/photos/42/original.jpg', creator: 'Creator', providerPageUrl: 'https://www.pexels.com/photo/42/', query: 'first query' },
+    }];
+    const changedProvenance = structuredClone(firstInput);
+    changedProvenance.scenes[0].imageProvenance!.query = 'changed query';
+    const first = normalizeStudioProductionRecipeV1(firstInput, ownerContext());
+    const second = normalizeStudioProductionRecipeV1(changedProvenance, ownerContext());
+
+    expect(first.recipe.scenes[0].media).toMatchObject({ type: 'image', storage: firstInput.scenes[0].imageStorage, sourceUrl: null, provenance: { providerMediaId: 42 } });
+    expect(first.identity).toBe(second.identity);
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const media = createMediaEngine(bus, createAssetProviderEngine(bus));
+    const firstBuild = await media.buildProject(compileStudioProductionRecipeV1(first));
+    const provenanceOnlyManifest = structuredClone(firstBuild.manifest);
+    provenanceOnlyManifest.assets[0].metadata = { ...provenanceOnlyManifest.assets[0].metadata, providerProvenance: second.recipe.scenes[0].media?.provenance };
+    provenanceOnlyManifest.timeline.scenes[0].sourceScene.imageProvenance = second.recipe.scenes[0].media?.provenance ?? undefined;
+    const embeddedRecipe = provenanceOnlyManifest.metadata.productionRecipe as unknown as { recipe: { scenes: Array<{ media: { provenance?: unknown } | null }> } } | undefined;
+    if (embeddedRecipe?.recipe.scenes[0].media) {
+      embeddedRecipe.recipe.scenes[0].media.provenance = second.recipe.scenes[0].media?.provenance;
+    }
+    expect(await createRenderFingerprint({ manifest: firstBuild.manifest, preset: RENDER_PRESET, adapterId: 'ffmpeg' }))
+      .toBe(await createRenderFingerprint({ manifest: provenanceOnlyManifest, preset: RENDER_PRESET, adapterId: 'ffmpeg' }));
+
+    const replaced = structuredClone(firstInput);
+    replaced.scenes[0].imageStorage!.objectPath = 'owner-a/generated-images/00000000-0000-4000-8000-000000000099.png';
+    expect(normalizeStudioProductionRecipeV1(replaced, ownerContext()).identity).not.toBe(first.identity);
+  });
+
   it('changes recipe identity for approved production decisions', () => {
     const baseline = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
     const changed = recipeInput();

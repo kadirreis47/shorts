@@ -10,7 +10,7 @@ import type { MediaStorageObject, Scene, Voice, PexelsVideo, VisualMode, VisualS
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
-  searchImages, searchVideos,
+  searchImages, searchVideos, ingestPexelsImage,
   generateAIImage, researchFootage, generateSRT, translateSubtitles,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
@@ -167,6 +167,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [hasElevenLabs, setHasElevenLabs] = useState(false);
   const [providerStatusError, setProviderStatusError] = useState('');
   const [fetchingImages, setFetchingImages] = useState(false);
+  const [ingestingPexelsImages, setIngestingPexelsImages] = useState<Set<number>>(new Set());
   const [fetchingVideos, setFetchingVideos] = useState(false);
   const [voiceoverMode, setVoiceoverMode] = useState<StudioVoiceoverMode>('none');
 
@@ -260,7 +261,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   );
 
   const canonicalStudioRevision = useMemo(() => JSON.stringify({
-    title, hook, script, cta, scenes: toDurableScenes(scenes), captionStyle, transitionStyle,
+    title, hook, script, cta, scenes: toDurableScenes(scenes).map(({ imageProvenance: _imageProvenance, ...scene }) => scene), captionStyle, transitionStyle,
     motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
     characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
     showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice,
@@ -979,28 +980,56 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const ownerContext = captureValidatedMediaOwnerContext();
     const requestGeneration = ++pexelsRequestGenerations.current.images;
     try {
-      const updatedScenes = [...scenes];
       let succeeded = 0;
       let failed = 0;
       let unresolved = 0;
       let firstFailure: unknown;
-      for (let i = 0; i < updatedScenes.length; i++) {
-        const scene = updatedScenes[i];
+      for (let i = 0; i < scenes.length; i++) {
+        const scene = scenes[i];
+        const selectionGeneration = (sceneImportGenerations.current.get(i) ?? 0) + 1;
+        sceneImportGenerations.current.set(i, selectionGeneration);
         const query = scene.visual || scene.keywords?.[0] || topic;
         try {
           const images = await searchImages(query, 1);
           assertCurrentMediaOwnerContext(ownerContext);
           if (pexelsRequestGenerations.current.images !== requestGeneration) return;
+          if (sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
           if (images.length > 0) {
-            updatedScenes[i] = { ...scene, imageUrl: images[0].url, imageStorage: undefined, videoUrl: undefined, videoStorage: undefined };
+            setIngestingPexelsImages((current) => new Set(current).add(i));
+            const ingested = await ingestPexelsImage(images[0].id, query);
+            assertCurrentMediaOwnerContext(ownerContext);
+            if (pexelsRequestGenerations.current.images !== requestGeneration || sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
+            let attached = false;
+            setScenes((current) => {
+              if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+                || sceneImportGenerations.current.get(i) !== selectionGeneration
+                || current[i] !== scene) return current;
+              const next = [...current];
+              next[i] = {
+                ...scene,
+                imageStorage: ingested.media,
+                imageUrl: ingested.previewUrl,
+                imageProvenance: ingested.provenance,
+                videoStorage: undefined,
+                videoUrl: undefined,
+              };
+              attached = true;
+              return next;
+            });
+            if (!attached) continue;
             succeeded += 1;
           } else unresolved += 1;
         } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
+        finally {
+          if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+            && sceneImportGenerations.current.get(i) === selectionGeneration) {
+            setIngestingPexelsImages((current) => { const next = new Set(current); next.delete(i); return next; });
+          }
+        }
       }
       assertCurrentMediaOwnerContext(ownerContext);
       if (pexelsRequestGenerations.current.images !== requestGeneration) return;
-      setScenes(updatedScenes);
-      if (failed || unresolved || succeeded === 0) setError(succeeded ? `${succeeded} scene images were found; some scenes could not be updated.` : failed ? providerActionError('images', firstFailure) : 'No images could be found. Check provider availability and try again.');
+      if (failed || unresolved || succeeded === 0) setError(succeeded ? `${succeeded} scene images were ingested; some scenes could not be updated.` : failed ? providerActionError('Pexels image ingestion', firstFailure) : 'No images could be found. Check provider availability and try again.');
     } catch (e) {
       if (
         pexelsRequestGenerations.current.images === requestGeneration
@@ -1579,6 +1608,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                       <div className="mt-2 overflow-hidden rounded-lg">
                         <img src={s.imageUrl} alt="Scene visual" className="h-24 w-full object-cover" />
                       </div>
+                    )}
+                    {ingestingPexelsImages.has(i) && (
+                      <div className="mt-2 flex items-center gap-1 text-xs text-blue-600"><Loader2 size={12} className="animate-spin" /> Ingesting Pexels image…</div>
                     )}
                     {/* Per-scene AI image generation */}
                     <div className="mt-2 flex flex-wrap items-center gap-2">

@@ -30,8 +30,11 @@ export async function createRenderFingerprint(
 
 function normalizeManifest(manifest: RenderManifest): unknown {
   return {
-    ...manifest,
-    assets: (manifest.assets ?? []).map((asset) => ({ ...asset, source: canonicalMediaAssetSource(asset) })),
+    ...(stripProviderProvenance(manifest) as RenderManifest),
+    assets: (manifest.assets ?? []).map((asset) => {
+      const { providerProvenance: _providerProvenance, ...metadata } = asset.metadata;
+      return { ...asset, source: canonicalMediaAssetSource(asset), metadata };
+    }),
     validation: manifest.validation
       ? {
           valid: manifest.validation.valid,
@@ -46,6 +49,20 @@ function normalizeManifest(manifest: RenderManifest): unknown {
         }
       : null,
   };
+}
+
+function stripProviderProvenance(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripProviderProvenance);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key, nested]) => key !== 'imageProvenance'
+      && key !== 'providerProvenance'
+      && !(key === 'provenance' && isProviderMediaProvenance(nested)))
+    .map(([key, nested]) => [key, stripProviderProvenance(nested)]));
+  return value;
+}
+
+function isProviderMediaProvenance(value: unknown): boolean {
+  return Boolean(value && typeof value === 'object' && (value as Record<string, unknown>).provider === 'pexels');
 }
 
 function stableStringify(value: unknown): string {

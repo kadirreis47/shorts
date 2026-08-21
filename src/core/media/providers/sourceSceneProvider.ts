@@ -35,6 +35,7 @@ export function createSourceSceneProvider(sceneMap: ReadonlyMap<string, MediaSce
             storageBucket: storageIdentity.bucket,
             storageObjectPath: storageIdentity.objectPath,
           } : {}),
+          ...(scene.sourceScene.imageStorage && scene.sourceScene.imageProvenance ? { providerProvenance: scene.sourceScene.imageProvenance } : {}),
         },
       }];
     },

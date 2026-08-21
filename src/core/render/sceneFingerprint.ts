@@ -12,14 +12,10 @@ export async function createSceneFingerprint(
   const assets = scene.assetIds
     .map((assetId) => manifest.assets.find((asset) => asset.id === assetId))
     .filter((asset): asset is MediaAsset => Boolean(asset))
-    .map((asset) => ({
-      id: asset.id,
-      type: asset.type,
-      source: canonicalMediaAssetSource(asset),
-      durationMs: asset.durationMs ?? null,
-      mimeType: asset.mimeType ?? null,
-      metadata: asset.metadata,
-    }));
+    .map((asset) => {
+      const { providerProvenance: _providerProvenance, ...metadata } = asset.metadata;
+      return { id: asset.id, type: asset.type, source: canonicalMediaAssetSource(asset), durationMs: asset.durationMs ?? null, mimeType: asset.mimeType ?? null, metadata };
+    });
 
   const videoClips = manifest.timeline.tracks
     .filter((track) => track.type === 'video')

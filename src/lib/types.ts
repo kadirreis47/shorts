@@ -7,6 +7,17 @@ export interface MediaStorageObject {
   objectPath: string;
 }
 
+/** Informational provider record. It is never a render source. */
+export interface ProviderMediaProvenance {
+  provider: 'pexels';
+  providerMediaId: number;
+  originalSourceUrl: string;
+  creator?: string;
+  providerPageUrl?: string;
+  previewUrl?: string;
+  query?: string;
+}
+
 export interface Scene {
   text: string;
   duration: number;
@@ -16,6 +27,8 @@ export interface Scene {
   videoUrl?: string;
   imageStorage?: MediaStorageObject;
   videoStorage?: MediaStorageObject;
+  /** Applies only to imageStorage and is excluded from render identity. */
+  imageProvenance?: ProviderMediaProvenance;
   imagePrompt?: string;
   visualMode?: VisualMode;
   overlayText?: string;

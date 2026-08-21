@@ -9,6 +9,7 @@ import type {
   Voice,
   PexelsImage,
   PexelsVideo,
+  ProviderMediaProvenance,
   BulkJob,
   TrendTopic,
   Thumbnail,
@@ -94,6 +95,12 @@ interface ImageSearchResponse {
 
 interface VideoSearchResponse {
   videos?: PexelsVideo[];
+}
+
+interface PexelsImageIngestResponse {
+  media?: unknown;
+  previewUrl?: unknown;
+  provenance?: unknown;
 }
 
 export async function generateScript(params: {
@@ -314,6 +321,52 @@ export async function generateAIImage(params: {
   if (typeof result.imageUrl !== 'string' || !result.imageUrl) throw new Error('Generated image returned no private viewing URL.');
   assertCurrentOwnerMediaIdentity(result.media);
   return { ...result, media: result.media };
+}
+
+export async function ingestPexelsImage(
+  mediaId: number,
+  query: string,
+): Promise<{ media: MediaStorageObject; previewUrl: string; provenance: ProviderMediaProvenance }> {
+  if (!Number.isSafeInteger(mediaId) || mediaId <= 0) throw new Error('Pexels image candidate is invalid.');
+  if (!query.trim() || query.length > 500) throw new Error('Pexels image query is invalid.');
+  const result = await apiClient.post<PexelsImageIngestResponse>(
+    'ingest-pexels-image',
+    { mediaId, query },
+    { retryCount: 0, timeoutMs: 60_000 },
+  );
+  assertCurrentOwnerMediaIdentity(result.media);
+  if (!isSafePreviewUrl(result.previewUrl)) throw new Error('Pexels image ingestion returned an invalid preview URL.');
+  if (!isPexelsImageProvenance(result.provenance, mediaId)) throw new Error('Pexels image ingestion returned invalid provenance.');
+  return { media: result.media, previewUrl: result.previewUrl, provenance: result.provenance };
+}
+
+function isSafePreviewUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 4_096) return false;
+  try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.hash; } catch { return false; }
+}
+
+function isPexelsImageProvenance(value: unknown, mediaId: number): value is ProviderMediaProvenance {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Partial<ProviderMediaProvenance>;
+  if (candidate.provider !== 'pexels' || candidate.providerMediaId !== mediaId || !isPexelsCdnUrl(candidate.originalSourceUrl)) return false;
+  return isBoundedProviderText(candidate.creator, 500)
+    && (candidate.providerPageUrl === undefined || isPexelsPageUrl(candidate.providerPageUrl))
+    && (candidate.previewUrl === undefined || isPexelsCdnUrl(candidate.previewUrl))
+    && isBoundedProviderText(candidate.query, 500);
+}
+
+function isBoundedProviderText(value: unknown, max: number): boolean {
+  return value === undefined || (typeof value === 'string' && value.length > 0 && value.length <= max && ![...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127));
+}
+
+function isPexelsCdnUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 2_000) return false;
+  try { const url = new URL(value); return url.protocol === 'https:' && url.hostname === 'images.pexels.com' && !url.username && !url.password && !url.hash; } catch { return false; }
+}
+
+function isPexelsPageUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 2_000) return false;
+  try { const url = new URL(value); return url.protocol === 'https:' && url.hostname === 'www.pexels.com' && !url.username && !url.password && !url.hash; } catch { return false; }
 }
 
 // ============================================================

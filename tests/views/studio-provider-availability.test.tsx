@@ -12,6 +12,7 @@ import { Studio } from '@/views/Studio';
 
 const mocks = vi.hoisted(() => ({
   getProviderStatus: vi.fn(), searchImages: vi.fn(), searchVideos: vi.fn(),
+  ingestPexelsImage: vi.fn(),
   researchFootage: vi.fn(), uploadMedia: vi.fn(),
   aiService: {
     generateScript: vi.fn(), generateHooks: vi.fn(), generateSEO: vi.fn(), analyzeScript: vi.fn(),
@@ -27,7 +28,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/supabase', () => ({ isSupabaseConfigured: false, supabase: { from: mocks.from } }));
 vi.mock('@/lib/api', () => ({
   getProviderStatus: mocks.getProviderStatus, generateVoiceover: vi.fn(), listVoices: vi.fn(async () => []), uploadMedia: mocks.uploadMedia,
-  searchImages: mocks.searchImages, searchVideos: mocks.searchVideos, generateAIImage: vi.fn(), researchFootage: mocks.researchFootage,
+  searchImages: mocks.searchImages, searchVideos: mocks.searchVideos, ingestPexelsImage: mocks.ingestPexelsImage, generateAIImage: vi.fn(), researchFootage: mocks.researchFootage,
   generateSRT: vi.fn(() => '1\\n00:00:00,000 --> 00:00:05,000\\nScene'), translateSubtitles: mocks.translateSubtitles,
 }));
 vi.mock('@/core/di', () => ({ applicationContainer: { resolve: () => mocks.aiService }, dependencyTokens: { aiApplicationService: Symbol('ai'), mediaEngine: Symbol('media') } }));
@@ -107,7 +108,36 @@ describe('Studio provider availability', () => {
     const fetchImages = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Auto-fetch images'));
     expect(Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('Auto-fetch B-roll'))).toBeDefined();
     await act(async () => { fetchImages?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(container.textContent).toContain('Unable to complete images');
+    expect(container.textContent).toContain('Unable to complete Pexels image ingestion');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('attaches only server-returned private Pexels image media after ingestion', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.searchImages.mockResolvedValue([{ id: 42, url: 'https://images.pexels.com/transient.jpg' }]);
+    mocks.ingestPexelsImage.mockResolvedValue({
+      media: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000042.jpg' },
+      previewUrl: 'https://signed.example/private-42.jpg',
+      provenance: { provider: 'pexels', providerMediaId: 42, originalSourceUrl: 'https://images.pexels.com/photos/42/original.jpg', query: 'Visual' },
+    });
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    await clickButton('Auto-fetch images');
+    expect(mocks.ingestPexelsImage).toHaveBeenCalledWith(42, 'Visual');
+    expect(container?.querySelector('img')?.getAttribute('src')).toContain('private-42.jpg');
+    expect(container?.querySelector('img')?.getAttribute('src')).not.toContain('transient.jpg');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('does not attach a direct Pexels URL when durable ingestion fails', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.searchImages.mockResolvedValue([{ id: 42, url: 'https://images.pexels.com/transient.jpg' }]);
+    mocks.ingestPexelsImage.mockRejectedValue(new Error('download failed'));
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    await clickButton('Auto-fetch images');
+    expect(container?.querySelector('img')).toBeNull();
+    expect(container?.textContent).toContain('Unable to complete Pexels image ingestion');
     await act(async () => { root.unmount(); });
   });
 

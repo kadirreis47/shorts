@@ -34,6 +34,7 @@ export const V1_EDGE_FUNCTIONS = [
   'generate-seo',
   'analyze-script',
   'generate-image',
+  'ingest-pexels-image',
   'generate-voiceover',
   'list-voices',
   'research-footage',
