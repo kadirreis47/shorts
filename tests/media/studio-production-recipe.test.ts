@@ -72,6 +72,26 @@ describe('StudioProductionRecipeV1', () => {
     expect(normalizeStudioProductionRecipeV1(replaced, ownerContext()).identity).not.toBe(first.identity);
   });
 
+  it('keeps durable Pexels video provenance informational while rejecting its quarantine as canonical media', () => {
+    const input = recipeInput();
+    input.scenes = [{
+      text: 'Video scene', duration: 4, visual: 'Visual', keywords: ['visual'],
+      videoStorage: { bucket: 'media', objectPath: 'owner-a/videos/00000000-0000-4000-8000-000000000042.mp4' },
+      videoUrl: 'https://signed.example/private-video.mp4?token=rotated',
+      videoProvenance: { provider: 'pexels', providerMediaId: 42, originalSourceUrl: 'https://www.pexels.com/video/42/', creator: 'Creator', providerPageUrl: 'https://www.pexels.com/video/42/', query: 'first query' },
+    }];
+    const changed = structuredClone(input);
+    changed.scenes[0].videoProvenance!.query = 'changed query';
+    expect(normalizeStudioProductionRecipeV1(input, ownerContext()).identity)
+      .toBe(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity);
+    expect(normalizeStudioProductionRecipeV1(input, ownerContext()).recipe.scenes[0].media)
+      .toMatchObject({ type: 'video', storage: input.scenes[0].videoStorage, sourceUrl: null, provenance: { providerMediaId: 42 } });
+
+    const quarantine = structuredClone(input);
+    quarantine.scenes[0].videoStorage!.objectPath = 'owner-a/pexels-video-quarantine/00000000-0000-4000-8000-000000000042.mp4';
+    expect(() => normalizeStudioProductionRecipeV1(quarantine, ownerContext())).toThrow(/identity is invalid/i);
+  });
+
   it('changes recipe identity for approved production decisions', () => {
     const baseline = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
     const changed = recipeInput();

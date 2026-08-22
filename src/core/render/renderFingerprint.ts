@@ -54,7 +54,7 @@ function normalizeManifest(manifest: RenderManifest): unknown {
 function stripProviderProvenance(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripProviderProvenance);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .filter(([key, nested]) => key !== 'imageProvenance'
+    .filter(([key, nested]) => key !== 'imageProvenance' && key !== 'videoProvenance'
       && key !== 'providerProvenance'
       && !(key === 'provenance' && isProviderMediaProvenance(nested)))
     .map(([key, nested]) => [key, stripProviderProvenance(nested)]));

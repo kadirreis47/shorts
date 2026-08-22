@@ -8,6 +8,7 @@ export const PRIVATE_MEDIA_BUCKET = 'media' as const;
 export const PRIVATE_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 export type PrivateMediaClass = 'videos' | 'generated-images' | 'voiceovers' | 'music';
+export const PEXELS_VIDEO_QUARANTINE_PREFIX = 'pexels-video-quarantine';
 
 export interface ValidatedMediaOwnerContext {
   readonly ownerId: string;
@@ -130,6 +131,12 @@ export async function resolvePrivateSceneMedia(scenes: readonly Scene[]): Promis
 
 export async function materializePrivateManifestMedia(manifest: RenderManifest): Promise<RenderManifest> {
   const privateAssets = manifest.assets.filter((asset) => mediaStorageIdentityFromMetadata(asset.metadata));
+  const hasInvalidPrivateAsset = manifest.assets.some((asset) => {
+    const metadata = asset.metadata;
+    return (metadata.storageBucket !== undefined || metadata.storageObjectPath !== undefined)
+      && !mediaStorageIdentityFromMetadata(metadata);
+  });
+  if (hasInvalidPrivateAsset) throw new Error('Private media manifest identity is invalid.');
   if (privateAssets.length === 0) return manifest;
   const context = captureValidatedMediaOwnerContext();
   const assets = await Promise.all(manifest.assets.map(async (asset) => {

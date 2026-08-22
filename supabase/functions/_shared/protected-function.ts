@@ -15,6 +15,7 @@ export const FUNCTION_POLICIES = {
   "analyze-script": { operationClass: "medium", burstMax: 10, dailyMax: 200 },
   "generate-image": { operationClass: "high", burstMax: 8, dailyMax: 25 },
   "ingest-pexels-image": { operationClass: "high", burstMax: 8, dailyMax: 50 },
+  "ingest-pexels-video": { operationClass: "high", burstMax: 4, dailyMax: 25 },
   "generate-voiceover": { operationClass: "high", burstMax: 3, dailyMax: 25 },
   "list-voices": { operationClass: "low", burstMax: 30, dailyMax: 1_000 },
   "research-footage": { operationClass: "high", burstMax: 2, dailyMax: 20 },

@@ -10,7 +10,7 @@ import type { MediaStorageObject, Scene, Voice, PexelsVideo, VisualMode, VisualS
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
-  searchImages, searchVideos, ingestPexelsImage,
+  searchImages, searchVideos, ingestPexelsImage, ingestPexelsVideo, discardPexelsVideoQuarantine,
   generateAIImage, researchFootage, generateSRT, translateSubtitles,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
@@ -169,6 +169,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [fetchingImages, setFetchingImages] = useState(false);
   const [ingestingPexelsImages, setIngestingPexelsImages] = useState<Set<number>>(new Set());
   const [fetchingVideos, setFetchingVideos] = useState(false);
+  const [ingestingPexelsVideos, setIngestingPexelsVideos] = useState<Set<number>>(new Set());
   const [voiceoverMode, setVoiceoverMode] = useState<StudioVoiceoverMode>('none');
 
   const [title, setTitle] = useState('');
@@ -261,7 +262,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   );
 
   const canonicalStudioRevision = useMemo(() => JSON.stringify({
-    title, hook, script, cta, scenes: toDurableScenes(scenes).map(({ imageProvenance: _imageProvenance, ...scene }) => scene), captionStyle, transitionStyle,
+    title, hook, script, cta, scenes: toDurableScenes(scenes).map(({ imageProvenance: _imageProvenance, videoProvenance: _videoProvenance, ...scene }) => scene), captionStyle, transitionStyle,
     motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
     characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
     showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice,
@@ -628,6 +629,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             imageStorage: result.media,
             videoUrl: undefined,
             videoStorage: undefined,
+            imageProvenance: undefined,
+            videoProvenance: undefined,
             imagePrompt: result.revisedPrompt || prompt,
           };
           succeeded += 1;
@@ -669,6 +672,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             videoUrl: result.videoUrl ?? updatedScenes[result.sceneIndex].videoUrl,
             ...(result.imageUrl ? { imageStorage: undefined } : {}),
             ...(result.videoUrl ? { videoStorage: undefined } : {}),
+            ...(result.imageUrl ? { imageProvenance: undefined } : {}),
+            ...(result.videoUrl ? { videoProvenance: undefined } : {}),
           };
         }
       }
@@ -785,6 +790,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const scene = scenes[sceneIndex];
     if (!scene) return;
     if (!hasOpenAI) { setError('OpenAI image generation is not configured. Contact an administrator.'); return; }
+    const selectionGeneration = (sceneImportGenerations.current.get(sceneIndex) ?? 0) + 1;
+    sceneImportGenerations.current.set(sceneIndex, selectionGeneration);
     setGeneratingSceneImage(sceneIndex);
     const ownerContext = captureValidatedMediaOwnerContext();
     try {
@@ -799,18 +806,33 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         sceneContext: scene.text,
       });
       assertCurrentMediaOwnerContext(ownerContext);
-      setScenes(prev => prev.map((s, i) => i === sceneIndex ? {
-        ...s,
-        imageUrl: result.imageUrl,
-        imageStorage: result.media,
-        videoUrl: undefined,
-        videoStorage: undefined,
-        imagePrompt: result.revisedPrompt || s.imagePrompt,
-      } : s));
+      setScenes((current) => {
+        if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+          || sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration
+          || current[sceneIndex] !== scene) return current;
+        const next = [...current];
+        next[sceneIndex] = {
+          ...scene,
+          imageUrl: result.imageUrl,
+          imageStorage: result.media,
+          videoUrl: undefined,
+          videoStorage: undefined,
+          imageProvenance: undefined,
+          videoProvenance: undefined,
+          imagePrompt: result.revisedPrompt || scene.imagePrompt,
+        };
+        return next;
+      });
     } catch (generationError) {
-      setError(providerActionError('this scene image', generationError));
+      if (sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+        setError(providerActionError('this scene image', generationError));
+      }
     } finally {
-      setGeneratingSceneImage(null);
+      if (sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+        setGeneratingSceneImage((current) => current === sceneIndex ? null : current);
+      }
     }
   }
 
@@ -854,6 +876,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           imageStorage: upload.media,
           videoUrl: undefined,
           videoStorage: undefined,
+          imageProvenance: undefined,
+          videoProvenance: undefined,
         };
         return updated;
       });
@@ -908,7 +932,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           || sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration
           || current[sceneIndex] !== targetScene) return current;
         const updated = [...current];
-        updated[sceneIndex] = { ...targetScene, videoUrl: upload.videoUrl, videoStorage: upload.media, imageUrl: undefined, imageStorage: undefined };
+        updated[sceneIndex] = {
+          ...targetScene,
+          videoUrl: upload.videoUrl,
+          videoStorage: upload.media,
+          imageUrl: undefined,
+          imageStorage: undefined,
+          imageProvenance: undefined,
+          videoProvenance: undefined,
+        };
         return updated;
       });
     } catch (importError) {
@@ -1012,6 +1044,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 imageProvenance: ingested.provenance,
                 videoStorage: undefined,
                 videoUrl: undefined,
+                videoProvenance: undefined,
               };
               attached = true;
               return next;
@@ -1050,28 +1083,74 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const ownerContext = captureValidatedMediaOwnerContext();
     const requestGeneration = ++pexelsRequestGenerations.current.broll;
     try {
-      const updatedScenes = [...scenes];
       let succeeded = 0;
       let failed = 0;
       let unresolved = 0;
       let firstFailure: unknown;
-      for (let i = 0; i < updatedScenes.length; i++) {
-        const scene = updatedScenes[i];
+      for (let i = 0; i < scenes.length; i++) {
+        const scene = scenes[i];
+        const selectionGeneration = (sceneImportGenerations.current.get(i) ?? 0) + 1;
+        sceneImportGenerations.current.set(i, selectionGeneration);
         const query = scene.visual || scene.keywords?.[0] || topic;
         try {
           const videos = await searchVideos(query, 1);
           assertCurrentMediaOwnerContext(ownerContext);
           if (pexelsRequestGenerations.current.broll !== requestGeneration) return;
-          if (videos.length > 0 && videos[0].fileUrl) {
-            updatedScenes[i] = { ...scene, videoUrl: videos[0].fileUrl, videoStorage: undefined, imageUrl: videos[0].preview, imageStorage: undefined };
-            succeeded += 1;
+          if (sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
+          if (videos.length > 0) {
+            setIngestingPexelsVideos((current) => new Set(current).add(i));
+            const ingested = await ingestPexelsVideo(videos[0].id, query);
+            const quarantineId = ingested.quarantineId;
+            try {
+              assertCurrentMediaOwnerContext(ownerContext);
+              if (pexelsRequestGenerations.current.broll !== requestGeneration || sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
+              const response = await fetch(ingested.quarantineUrl, { signal: AbortSignal.timeout(60_000) });
+              if (!response.ok) throw new Error('Pexels video quarantine could not be opened.');
+              const bytes = await response.arrayBuffer();
+              assertCurrentMediaOwnerContext(ownerContext);
+              if (bytes.byteLength === 0 || bytes.byteLength > 50 * 1024 * 1024) throw new Error('Pexels video quarantine is invalid.');
+              const bridge = window.electronAPI?.ffmpeg;
+              if (!bridge?.probeManualMp4) throw new ManualSceneVideoImportError('probe');
+              await bridge.probeManualMp4(bytes);
+              assertCurrentMediaOwnerContext(ownerContext);
+              if (pexelsRequestGenerations.current.broll !== requestGeneration || sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
+              const upload = await uploadMedia(new Blob([bytes], { type: 'video/mp4' }), 'videos');
+              assertCurrentMediaOwnerContext(ownerContext);
+              if (!upload.videoUrl) throw new Error('Pexels video could not be opened after validation.');
+              let attached = false;
+              setScenes((current) => {
+                if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+                  || sceneImportGenerations.current.get(i) !== selectionGeneration
+                  || current[i] !== scene) return current;
+                const next = [...current];
+                next[i] = {
+                  ...scene,
+                  videoStorage: upload.media,
+                  videoUrl: upload.videoUrl,
+                  videoProvenance: ingested.provenance,
+                  imageStorage: undefined,
+                  imageUrl: undefined,
+                  imageProvenance: undefined,
+                };
+                attached = true;
+                return next;
+              });
+              if (attached) succeeded += 1;
+            } finally {
+              if (quarantineId) void Promise.resolve(discardPexelsVideoQuarantine(quarantineId)).catch(() => undefined);
+            }
           } else unresolved += 1;
         } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
+        finally {
+          if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+            && sceneImportGenerations.current.get(i) === selectionGeneration) {
+            setIngestingPexelsVideos((current) => { const next = new Set(current); next.delete(i); return next; });
+          }
+        }
       }
       assertCurrentMediaOwnerContext(ownerContext);
       if (pexelsRequestGenerations.current.broll !== requestGeneration) return;
-      setScenes(updatedScenes);
-      if (failed || unresolved || succeeded === 0) setError(succeeded ? `${succeeded} scene video clips were found; some scenes could not be updated.` : failed ? providerActionError('video clips', firstFailure) : 'No video clips could be found. Check provider availability and try again.');
+      if (failed || unresolved || succeeded === 0) setError(succeeded ? `${succeeded} scene video clips were privately prepared; some scenes could not be updated.` : failed ? providerActionError('Pexels B-roll ingestion', firstFailure) : 'No compatible Pexels video clips could be prepared. Check provider availability and try again.');
     } catch (e) {
       if (
         pexelsRequestGenerations.current.broll === requestGeneration
@@ -1611,6 +1690,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     )}
                     {ingestingPexelsImages.has(i) && (
                       <div className="mt-2 flex items-center gap-1 text-xs text-blue-600"><Loader2 size={12} className="animate-spin" /> Ingesting Pexels image…</div>
+                    )}
+                    {ingestingPexelsVideos.has(i) && (
+                      <div className="mt-2 flex items-center gap-1 text-xs text-blue-600"><Loader2 size={12} className="animate-spin" /> {t('studio.preparingPexelsBroll')}</div>
                     )}
                     {/* Per-scene AI image generation */}
                     <div className="mt-2 flex flex-wrap items-center gap-2">

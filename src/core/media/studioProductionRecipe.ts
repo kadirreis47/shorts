@@ -305,9 +305,11 @@ function normalizeSceneMedia(scene: Scene, ownerId: string): StudioRecipeVisualM
   const sourceUrl = scene.videoUrl ?? scene.imageUrl ?? null;
   if (storage) {
     assertOwnedStorage(storage, ownerId);
+    const mediaType = scene.videoStorage ? 'video' : 'image';
+    const provenance = scene.imageStorage ? scene.imageProvenance : scene.videoProvenance;
     return {
-      type: scene.videoStorage ? 'video' : 'image', storage: cloneStorage(storage), sourceUrl: null,
-      ...(scene.imageStorage && scene.imageProvenance ? { provenance: normalizeImageProvenance(scene.imageProvenance) } : {}),
+      type: mediaType, storage: cloneStorage(storage), sourceUrl: null,
+      ...(provenance ? { provenance: normalizePexelsProvenance(provenance, mediaType) } : {}),
     };
   }
   if (!sourceUrl) return null;
@@ -355,6 +357,7 @@ function recipeSceneToScene(scene: StudioProductionRecipeSceneV1): Scene {
     ...(scene.media?.type === 'video' ? {
       videoStorage: scene.media.storage ?? undefined,
       videoUrl: scene.media.sourceUrl ?? undefined,
+      videoProvenance: scene.media.provenance ?? undefined,
     } : scene.media?.type === 'image' ? {
       imageStorage: scene.media.storage ?? undefined,
       imageUrl: scene.media.sourceUrl ?? undefined,
@@ -363,24 +366,25 @@ function recipeSceneToScene(scene: StudioProductionRecipeSceneV1): Scene {
   };
 }
 
-function normalizeImageProvenance(value: ProviderMediaProvenance): ProviderMediaProvenance {
-  if (value.provider !== 'pexels' || !Number.isSafeInteger(value.providerMediaId) || value.providerMediaId <= 0 || !trustedPexelsUrl(value.originalSourceUrl, 'images.pexels.com')) throw new Error('Pexels image provenance is invalid.');
+function normalizePexelsProvenance(value: ProviderMediaProvenance, mediaType: 'image' | 'video'): ProviderMediaProvenance {
+  const sourceHost = mediaType === 'image' ? 'images.pexels.com' : 'www.pexels.com';
+  if (value.provider !== 'pexels' || !Number.isSafeInteger(value.providerMediaId) || value.providerMediaId <= 0 || !trustedPexelsUrl(value.originalSourceUrl, sourceHost)) throw new Error('Pexels media provenance is invalid.');
   const optionalTextValue = (input: string | undefined, max: number) => input === undefined ? undefined : boundedProvenanceText(input, max);
   const creator = optionalTextValue(value.creator, 500);
   const page = value.providerPageUrl === undefined ? undefined : trustedPexelsUrl(value.providerPageUrl, 'www.pexels.com');
-  const preview = value.previewUrl === undefined ? undefined : trustedPexelsUrl(value.previewUrl, 'images.pexels.com');
+  const preview = value.previewUrl === undefined ? undefined : trustedPexelsUrl(value.previewUrl, sourceHost);
   const query = optionalTextValue(value.query, 500);
   return { provider: 'pexels', providerMediaId: value.providerMediaId, originalSourceUrl: value.originalSourceUrl, ...(creator ? { creator } : {}), ...(page ? { providerPageUrl: page } : {}), ...(preview ? { previewUrl: preview } : {}), ...(query ? { query } : {}) };
 }
 
 function boundedProvenanceText(value: string, max: number): string {
-  if (typeof value !== 'string' || value.trim().length < 1 || value.trim().length > max || [...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) throw new Error('Pexels image provenance is invalid.');
+  if (typeof value !== 'string' || value.trim().length < 1 || value.trim().length > max || [...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) throw new Error('Pexels media provenance is invalid.');
   return value.trim();
 }
 
 function trustedPexelsUrl(value: string, host: string): string {
-  if (typeof value !== 'string' || value.length > 2_000) throw new Error('Pexels image provenance is invalid.');
-  try { const url = new URL(value); if (url.protocol !== 'https:' || url.hostname !== host || url.username || url.password || url.hash) throw new Error(); return value; } catch { throw new Error('Pexels image provenance is invalid.'); }
+  if (typeof value !== 'string' || value.length > 2_000) throw new Error('Pexels media provenance is invalid.');
+  try { const url = new URL(value); if (url.protocol !== 'https:' || url.hostname !== host || url.username || url.password || url.hash) throw new Error(); return value; } catch { throw new Error('Pexels media provenance is invalid.'); }
 }
 
 function assertOwnedStorage(storage: MediaStorageObject, ownerId: string): void {

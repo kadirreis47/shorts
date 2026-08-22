@@ -1,6 +1,6 @@
 import type { AssetProvider } from '../assetProviderTypes';
 import type { MediaScene } from '../types';
-import { privateStorageSource } from '../storageIdentity';
+import { isCanonicalPrivateMediaIdentity, privateStorageSource } from '../storageIdentity';
 
 export function createSourceSceneProvider(sceneMap: ReadonlyMap<string, MediaScene>): AssetProvider {
   return {
@@ -15,6 +15,7 @@ export function createSourceSceneProvider(sceneMap: ReadonlyMap<string, MediaSce
       if (!scene) return [];
       const isVideo = Boolean(scene.sourceScene.videoUrl || scene.sourceScene.videoStorage);
       const storageIdentity = isVideo ? scene.sourceScene.videoStorage : scene.sourceScene.imageStorage;
+      if (storageIdentity && !isCanonicalPrivateMediaIdentity(storageIdentity)) return [];
       const source = storageIdentity
         ? privateStorageSource(storageIdentity)
         : scene.sourceScene.videoUrl || scene.sourceScene.imageUrl;
@@ -35,7 +36,7 @@ export function createSourceSceneProvider(sceneMap: ReadonlyMap<string, MediaSce
             storageBucket: storageIdentity.bucket,
             storageObjectPath: storageIdentity.objectPath,
           } : {}),
-          ...(scene.sourceScene.imageStorage && scene.sourceScene.imageProvenance ? { providerProvenance: scene.sourceScene.imageProvenance } : {}),
+          ...((scene.sourceScene.imageStorage ? scene.sourceScene.imageProvenance : scene.sourceScene.videoProvenance) ? { providerProvenance: scene.sourceScene.imageStorage ? scene.sourceScene.imageProvenance : scene.sourceScene.videoProvenance } : {}),
         },
       }];
     },

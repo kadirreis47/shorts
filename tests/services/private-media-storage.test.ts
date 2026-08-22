@@ -112,6 +112,21 @@ describe('private media renderer boundary', () => {
     })).toThrow(/not available/i);
   });
 
+  it('rejects quarantine identities before source selection, signing, and manifest materialization', async () => {
+    const quarantine = '11111111-1111-4111-8111-111111111111/pexels-video-quarantine/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.mp4';
+    await expect(createPrivateMediaSignedUrl({ bucket: 'media', objectPath: quarantine })).rejects.toThrow(/not available/i);
+
+    const provider = createSourceSceneProvider(new Map([['scene-1', {
+      id: 'scene-1', durationMs: 3_000,
+      sourceScene: { text: 'scene', duration: 3, visual: 'visual', videoStorage: { bucket: 'media', objectPath: quarantine } },
+    } as never]]));
+    await expect(provider.search({ sceneId: 'scene-1' } as never, { limit: 1 })).resolves.toEqual([]);
+
+    const manifest = { assets: [{ id: 'asset-1', type: 'video', source: `shortsflow-storage://media/${quarantine}`, metadata: { storageBucket: 'media', storageObjectPath: quarantine } }], validation: null } as unknown as RenderManifest;
+    await expect(materializePrivateManifestMedia(manifest)).rejects.toThrow(/manifest identity is invalid/i);
+    expect(mocks.createSignedUrl).not.toHaveBeenCalled();
+  });
+
   it('does not return an A upload to B after an owner-generation change', async () => {
     const pendingUpload = deferred<{ error: null }>();
     mocks.upload.mockReturnValueOnce(pendingUpload.promise);

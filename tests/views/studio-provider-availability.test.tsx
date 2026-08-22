@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthSessionStore } from '@/auth/session';
 import { advanceValidatedOwnerGeneration, setValidatedOwnerId } from '@/auth/identity';
 import { I18nProvider } from '@/lib/i18n';
-import { saveStudioDraft, type StudioDraft } from '@/lib/studioDraft';
+import { loadStudioDraft, saveStudioDraft, type StudioDraft } from '@/lib/studioDraft';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import { reconcileCharacterProfileSelection } from '@/services/characterProfileSelection';
 import { useProjectStore } from '@/store';
@@ -12,7 +12,7 @@ import { Studio } from '@/views/Studio';
 
 const mocks = vi.hoisted(() => ({
   getProviderStatus: vi.fn(), searchImages: vi.fn(), searchVideos: vi.fn(),
-  ingestPexelsImage: vi.fn(),
+  ingestPexelsImage: vi.fn(), ingestPexelsVideo: vi.fn(), discardPexelsVideoQuarantine: vi.fn(),
   researchFootage: vi.fn(), uploadMedia: vi.fn(),
   aiService: {
     generateScript: vi.fn(), generateHooks: vi.fn(), generateSEO: vi.fn(), analyzeScript: vi.fn(),
@@ -28,7 +28,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/supabase', () => ({ isSupabaseConfigured: false, supabase: { from: mocks.from } }));
 vi.mock('@/lib/api', () => ({
   getProviderStatus: mocks.getProviderStatus, generateVoiceover: vi.fn(), listVoices: vi.fn(async () => []), uploadMedia: mocks.uploadMedia,
-  searchImages: mocks.searchImages, searchVideos: mocks.searchVideos, ingestPexelsImage: mocks.ingestPexelsImage, generateAIImage: vi.fn(), researchFootage: mocks.researchFootage,
+  searchImages: mocks.searchImages, searchVideos: mocks.searchVideos, ingestPexelsImage: mocks.ingestPexelsImage,
+  ingestPexelsVideo: mocks.ingestPexelsVideo, discardPexelsVideoQuarantine: mocks.discardPexelsVideoQuarantine,
+  generateAIImage: vi.fn(), researchFootage: mocks.researchFootage,
   generateSRT: vi.fn(() => '1\\n00:00:00,000 --> 00:00:05,000\\nScene'), translateSubtitles: mocks.translateSubtitles,
 }));
 vi.mock('@/core/di', () => ({ applicationContainer: { resolve: () => mocks.aiService }, dependencyTokens: { aiApplicationService: Symbol('ai'), mediaEngine: Symbol('media') } }));
@@ -138,6 +140,64 @@ describe('Studio provider availability', () => {
     await clickButton('Auto-fetch images');
     expect(container?.querySelector('img')).toBeNull();
     expect(container?.textContent).toContain('Unable to complete Pexels image ingestion');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('probes quarantined Pexels B-roll and attaches only the resulting private video identity', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.searchVideos.mockResolvedValue([{ id: 77, fileUrl: 'https://videos.pexels.com/transient.mp4' }]);
+    mocks.ingestPexelsVideo.mockResolvedValue({
+      quarantineId: '00000000-0000-4000-8000-000000000077', quarantineUrl: 'https://signed.example/quarantine-77.mp4',
+      provenance: { provider: 'pexels', providerMediaId: 77, originalSourceUrl: 'https://www.pexels.com/video/77/', providerPageUrl: 'https://www.pexels.com/video/77/', query: 'Visual' },
+    });
+    mocks.uploadMedia.mockResolvedValue({
+      videoUrl: 'https://signed.example/private-77.mp4',
+      media: { bucket: 'media', objectPath: 'studio-test-user/videos/00000000-0000-4000-8000-000000000077.mp4' },
+    });
+    const previousFetch = globalThis.fetch;
+    const previousElectron = window.electronAPI;
+    const quarantineBytes = new Uint8Array([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+    const probeManualMp4 = vi.fn(async () => ({ container: 'mp4' as const, codec: 'h264' as const, width: 1080, height: 1920, fps: 30, durationMs: 5_000, hasAudio: false }));
+    globalThis.fetch = vi.fn(async () => new Response(quarantineBytes, { status: 200 })) as typeof fetch;
+    window.electronAPI = { ...previousElectron, ffmpeg: { ...previousElectron?.ffmpeg, probeManualMp4 } } as typeof window.electronAPI;
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+
+    await clickButton('Auto-fetch B-roll');
+
+    expect(mocks.ingestPexelsVideo).toHaveBeenCalledWith(77, 'Visual');
+    expect(mocks.uploadMedia).toHaveBeenCalledWith(expect.any(Blob), 'videos');
+    const probeCalls = probeManualMp4.mock.calls as unknown as Array<[ArrayBuffer]>;
+    const uploadCalls = mocks.uploadMedia.mock.calls as unknown as Array<[Blob, string]>;
+    const probedBytes = probeCalls[0]?.[0];
+    const promotedBlob = uploadCalls[0]?.[0];
+    expect(new Uint8Array(probedBytes)).toEqual(quarantineBytes);
+    expect(promotedBlob.size).toBe(quarantineBytes.byteLength);
+    expect(container?.textContent).toContain('B-roll video attached');
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    const persisted = loadStudioDraft();
+    expect(persisted?.scenes[0]).toMatchObject({
+      videoStorage: { bucket: 'media', objectPath: 'studio-test-user/videos/00000000-0000-4000-8000-000000000077.mp4' },
+    });
+    expect(persisted?.scenes[0].videoUrl).toBeUndefined();
+    expect(mocks.discardPexelsVideoQuarantine).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000077');
+    globalThis.fetch = previousFetch;
+    window.electronAPI = previousElectron;
+    await act(async () => { root.unmount(); });
+  });
+
+  it('does not replace an existing canonical image when durable Pexels B-roll ingestion fails', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.searchVideos.mockResolvedValue([{ id: 77, fileUrl: 'https://videos.pexels.com/transient.mp4' }]);
+    mocks.ingestPexelsVideo.mockRejectedValue(new Error('provider failed'));
+    saveStudioDraft({ ...draft('script'), scenes: [{ ...draft('script').scenes[0], imageUrl: 'https://images.pexels.com/old.png' }] });
+    const root = await renderStudio();
+
+    await clickButton('Auto-fetch B-roll');
+
+    expect(container?.querySelector('img')?.getAttribute('src')).toContain('old.png');
+    expect(container?.querySelector('video')).toBeNull();
+    expect(container?.textContent).toContain('Unable to complete Pexels B-roll ingestion');
     await act(async () => { root.unmount(); });
   });
 

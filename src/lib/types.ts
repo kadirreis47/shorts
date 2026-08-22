@@ -29,6 +29,8 @@ export interface Scene {
   videoStorage?: MediaStorageObject;
   /** Applies only to imageStorage and is excluded from render identity. */
   imageProvenance?: ProviderMediaProvenance;
+  /** Applies only to videoStorage and is excluded from render identity. */
+  videoProvenance?: ProviderMediaProvenance;
   imagePrompt?: string;
   visualMode?: VisualMode;
   overlayText?: string;

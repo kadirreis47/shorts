@@ -18,7 +18,7 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
   it('protects exactly the approved active functions before request/provider work', () => {
     expect(manifest.active).toEqual([
       'provider-status', 'generate-script', 'generate-hooks', 'generate-seo',
-      'analyze-script', 'generate-image', 'ingest-pexels-image', 'generate-voiceover', 'list-voices',
+      'analyze-script', 'generate-image', 'ingest-pexels-image', 'ingest-pexels-video', 'generate-voiceover', 'list-voices',
       'research-footage', 'search-images', 'search-videos', 'translate-subtitles',
     ]);
 
@@ -52,6 +52,7 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(protectedSource).toContain('"generate-script": { operationClass: "medium", burstMax: 10, dailyMax: 200 }');
     expect(protectedSource).toContain('"generate-image": { operationClass: "high", burstMax: 8, dailyMax: 25 }');
     expect(protectedSource).toContain('"ingest-pexels-image": { operationClass: "high", burstMax: 8, dailyMax: 50 }');
+    expect(protectedSource).toContain('"ingest-pexels-video": { operationClass: "high", burstMax: 4, dailyMax: 25 }');
     expect(protectedSource).toContain('"generate-voiceover": { operationClass: "high", burstMax: 3, dailyMax: 25 }');
     expect(protectedSource).toContain('"research-footage": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
     expect(protectedSource).toContain('Request limit reached. Please try again shortly.');

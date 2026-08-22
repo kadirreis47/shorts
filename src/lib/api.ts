@@ -103,6 +103,12 @@ interface PexelsImageIngestResponse {
   provenance?: unknown;
 }
 
+interface PexelsVideoIngestResponse {
+  quarantineId?: unknown;
+  quarantineUrl?: unknown;
+  provenance?: unknown;
+}
+
 export async function generateScript(params: {
   topic: string;
   niche?: string;
@@ -340,6 +346,28 @@ export async function ingestPexelsImage(
   return { media: result.media, previewUrl: result.previewUrl, provenance: result.provenance };
 }
 
+export async function ingestPexelsVideo(
+  mediaId: number,
+  query: string,
+): Promise<{ quarantineId: string; quarantineUrl: string; provenance: ProviderMediaProvenance }> {
+  if (!Number.isSafeInteger(mediaId) || mediaId <= 0) throw new Error('Pexels video candidate is invalid.');
+  if (!query.trim() || query.length > 500) throw new Error('Pexels video query is invalid.');
+  const result = await apiClient.post<PexelsVideoIngestResponse>(
+    'ingest-pexels-video',
+    { mediaId, query },
+    { retryCount: 0, timeoutMs: 60_000 },
+  );
+  if (typeof result.quarantineId !== 'string' || !/^[0-9a-f-]{36}$/i.test(result.quarantineId)) throw new Error('Pexels video ingestion returned an invalid quarantine identity.');
+  if (!isSafePreviewUrl(result.quarantineUrl)) throw new Error('Pexels video ingestion returned an invalid private URL.');
+  if (!isPexelsVideoProvenance(result.provenance, mediaId)) throw new Error('Pexels video ingestion returned invalid provenance.');
+  return { quarantineId: result.quarantineId, quarantineUrl: result.quarantineUrl, provenance: result.provenance };
+}
+
+export async function discardPexelsVideoQuarantine(quarantineId: string): Promise<void> {
+  if (!/^[0-9a-f-]{36}$/i.test(quarantineId)) return;
+  await apiClient.post<{ cleared?: boolean }>('ingest-pexels-video', { quarantineId }, { retryCount: 0, timeoutMs: 15_000 });
+}
+
 function isSafePreviewUrl(value: unknown): value is string {
   if (typeof value !== 'string' || value.length > 4_096) return false;
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.hash; } catch { return false; }
@@ -352,6 +380,15 @@ function isPexelsImageProvenance(value: unknown, mediaId: number): value is Prov
   return isBoundedProviderText(candidate.creator, 500)
     && (candidate.providerPageUrl === undefined || isPexelsPageUrl(candidate.providerPageUrl))
     && (candidate.previewUrl === undefined || isPexelsCdnUrl(candidate.previewUrl))
+    && isBoundedProviderText(candidate.query, 500);
+}
+
+function isPexelsVideoProvenance(value: unknown, mediaId: number): value is ProviderMediaProvenance {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Partial<ProviderMediaProvenance>;
+  if (candidate.provider !== 'pexels' || candidate.providerMediaId !== mediaId || !isPexelsPageUrl(candidate.originalSourceUrl)) return false;
+  return isBoundedProviderText(candidate.creator, 500)
+    && candidate.providerPageUrl !== undefined && isPexelsPageUrl(candidate.providerPageUrl)
     && isBoundedProviderText(candidate.query, 500);
 }
 

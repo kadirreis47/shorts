@@ -44,7 +44,7 @@ vi.mock('@/lib/supabase', () => ({
 vi.mock('@/lib/api', () => ({
   generateVoiceover: vi.fn(), getProviderStatus: mocks.getProviderStatus, listVoices: vi.fn(async () => []), uploadMedia: mocks.uploadMedia,
   searchImages: vi.fn(async () => []),
-  searchVideos: vi.fn(async () => []), generateAIImage: vi.fn(), researchFootage: vi.fn(),
+  searchVideos: vi.fn(async () => []), ingestPexelsImage: vi.fn(), ingestPexelsVideo: vi.fn(), discardPexelsVideoQuarantine: vi.fn(), generateAIImage: vi.fn(), researchFootage: vi.fn(),
   generateSRT: vi.fn(), translateSubtitles: vi.fn(),
 }));
 vi.mock('@/lib/videoRenderer', () => ({ renderVideo: mocks.renderVideo }));
