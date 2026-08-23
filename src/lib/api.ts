@@ -410,32 +410,44 @@ function isPexelsPageUrl(value: unknown): value is string {
 // FOOTAGE RESEARCH (real images/videos for documentaries)
 // ============================================================
 
+export interface ResearchFootageResult {
+  sceneIndex: number;
+  kind: 'image' | 'video';
+  mediaId: number;
+  query: string;
+}
+
 export async function researchFootage(params: {
   topic: string;
   scenes: Scene[];
   mode?: string;
-}): Promise<
-  Array<{
-    sceneIndex: number;
-    imageUrl?: string;
-    videoUrl?: string;
-    query: string;
-  }>
-> {
+}): Promise<ResearchFootageResult[]> {
   const data = await apiClient.post<{
-    results?: Array<{
-      sceneIndex: number;
-      imageUrl?: string;
-      videoUrl?: string;
-      query: string;
-    }>;
+    results?: unknown;
   }>(
     'research-footage',
     params,
     { retryCount: 1, timeoutMs: 60_000 },
   );
 
-  return data.results ?? [];
+  if (!Array.isArray(data.results)) throw new Error('Footage research returned an invalid result set.');
+  const seenSceneIndexes = new Set<number>();
+  return data.results.map((value): ResearchFootageResult => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Footage research returned an invalid result.');
+    const result = value as Partial<ResearchFootageResult>;
+    const sceneIndex = result.sceneIndex;
+    const mediaId = result.mediaId;
+    const query = result.query;
+    if (typeof sceneIndex !== 'number' || !Number.isSafeInteger(sceneIndex) || sceneIndex < 0 || sceneIndex >= params.scenes.length
+      || (result.kind !== 'image' && result.kind !== 'video')
+      || typeof mediaId !== 'number' || !Number.isSafeInteger(mediaId) || mediaId <= 0 || mediaId > 2_147_483_647
+      || typeof query !== 'string' || !query.trim() || query.length > 500
+      || seenSceneIndexes.has(sceneIndex)) {
+      throw new Error('Footage research returned an invalid result.');
+    }
+    seenSceneIndexes.add(sceneIndex);
+    return { sceneIndex, kind: result.kind, mediaId, query };
+  });
 }
 
 // ============================================================

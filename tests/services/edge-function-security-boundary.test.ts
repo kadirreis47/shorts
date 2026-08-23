@@ -15,7 +15,7 @@ function sourceFor(name: string): string {
 }
 
 describe('V1 Edge Function authorization and abuse boundary', () => {
-  it('protects exactly the approved active functions before request/provider work', () => {
+  it('protects exactly the approved active functions before provider work', () => {
     expect(manifest.active).toEqual([
       'provider-status', 'generate-script', 'generate-hooks', 'generate-seo',
       'analyze-script', 'generate-image', 'ingest-pexels-image', 'ingest-pexels-video', 'generate-voiceover', 'list-voices',
@@ -27,9 +27,13 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
       const authCall = `await authorizeProtectedFunction(req, "${name}")`;
       expect(source, name).toContain(authCall);
       const authIndex = source.indexOf(authCall);
-      for (const protectedOperation of ['readBoundedJson<', '.from("api_keys")', 'fetch(']) {
+      for (const protectedOperation of ['.from("api_keys")', 'fetch(']) {
         const operationIndex = source.indexOf(protectedOperation);
         if (operationIndex >= 0) expect(authIndex, `${name}: ${protectedOperation}`).toBeLessThan(operationIndex);
+      }
+      if (name !== 'ingest-pexels-video') {
+        const bodyIndex = source.indexOf('readBoundedJson<');
+        if (bodyIndex >= 0) expect(authIndex, `${name}: readBoundedJson`).toBeLessThan(bodyIndex);
       }
       expect(source, name).not.toContain('JSON.stringify({ error: err.message })');
       expect(source, name).not.toContain('response.text()');
@@ -52,7 +56,8 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(protectedSource).toContain('"generate-script": { operationClass: "medium", burstMax: 10, dailyMax: 200 }');
     expect(protectedSource).toContain('"generate-image": { operationClass: "high", burstMax: 8, dailyMax: 25 }');
     expect(protectedSource).toContain('"ingest-pexels-image": { operationClass: "high", burstMax: 8, dailyMax: 50 }');
-    expect(protectedSource).toContain('"ingest-pexels-video": { operationClass: "high", burstMax: 4, dailyMax: 25 }');
+    expect(protectedSource).toContain('"ingest-pexels-video": { operationClass: "high", burstMax: 12, dailyMax: 25 }');
+    expect(protectedSource).toContain('"ingest-pexels-video-cleanup": { operationClass: "low", burstMax: 12, dailyMax: 50 }');
     expect(protectedSource).toContain('"generate-voiceover": { operationClass: "high", burstMax: 3, dailyMax: 25 }');
     expect(protectedSource).toContain('"research-footage": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
     expect(protectedSource).toContain('Request limit reached. Please try again shortly.');
@@ -74,6 +79,31 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(protectedSource).toContain('p_burst_max_requests: limit.burstMax');
     expect(protectedSource).toContain('p_daily_max_requests: limit.dailyMax');
     expect(protectedSource).not.toMatch(/p_(?:burst|daily)_max_requests:\s*(?:body|payload|request)\./);
+  });
+
+  it('allows one bounded multi-scene Research video promotion batch without charging cleanup as acquisition', () => {
+    const researchPolicy = /"research-footage": \{ operationClass: "high", burstMax: (\d+), dailyMax: (\d+) \}/.exec(protectedSource);
+    const videoPolicy = /"ingest-pexels-video": \{ operationClass: "high", burstMax: (\d+), dailyMax: (\d+) \}/.exec(protectedSource);
+    const cleanupPolicy = /"ingest-pexels-video-cleanup": \{ operationClass: "low", burstMax: (\d+), dailyMax: (\d+) \}/.exec(protectedSource);
+    expect(researchPolicy?.slice(1).map(Number)).toEqual([2, 20]);
+    expect(videoPolicy?.slice(1).map(Number)).toEqual([12, 25]);
+    expect(cleanupPolicy?.slice(1).map(Number)).toEqual([12, 50]);
+    expect(sourceFor('research-footage')).toContain('scenes.length > 12');
+
+    // A single bounded Research action can select one video per scene. Its
+    // promotion and subsequent best-effort cleanup therefore consume distinct
+    // server-owned slots rather than making one successful acquisition count
+    // twice against the expensive provider-download bucket.
+    const maxResearchScenes = 12;
+    expect(maxResearchScenes).toBeLessThanOrEqual(Number(videoPolicy?.[1]));
+    expect(maxResearchScenes).toBeLessThanOrEqual(Number(cleanupPolicy?.[1]));
+    expect(maxResearchScenes * 2).toBeGreaterThan(Number(videoPolicy?.[1]));
+
+    const ingestSource = sourceFor('ingest-pexels-video');
+    expect(ingestSource).toContain('await authorizeProtectedFunction(req, "ingest-pexels-video-cleanup")');
+    expect(ingestSource).toContain('await authorizeProtectedFunction(req, "ingest-pexels-video")');
+    expect(ingestSource.indexOf('"ingest-pexels-video-cleanup"')).toBeLessThan(ingestSource.indexOf('return discardQuarantine'));
+    expect(ingestSource.indexOf('"ingest-pexels-video"')).toBeLessThan(ingestSource.indexOf('return ingest('));
   });
 
   it('accounts parallel calls atomically and denies client counter access', () => {

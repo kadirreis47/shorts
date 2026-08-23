@@ -19,11 +19,18 @@ interface PexelsVideo { id?: unknown; url?: unknown; user?: { name?: unknown }; 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 200, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey" } });
   if (req.method !== "POST") return safeFailure("Method not allowed.", 405);
-  const authorization = await authorizeProtectedFunction(req, "ingest-pexels-video");
-  if ("response" in authorization) return authorization.response;
+  // This bounded syntax classification is deliberately the only work before
+  // authentication. It chooses a server-owned quota class; all provider and
+  // Storage work remains after authenticated owner derivation.
   const parsed = await readBoundedJson<IngestRequest | DiscardRequest>(req, 2_048);
   if ("response" in parsed) return parsed.response;
-  if ("quarantineId" in parsed.value) return discardQuarantine(parsed.value, authorization.userId);
+  if ("quarantineId" in parsed.value) {
+    const authorization = await authorizeProtectedFunction(req, "ingest-pexels-video-cleanup");
+    if ("response" in authorization) return authorization.response;
+    return discardQuarantine(parsed.value, authorization.userId);
+  }
+  const authorization = await authorizeProtectedFunction(req, "ingest-pexels-video");
+  if ("response" in authorization) return authorization.response;
   return ingest(parsed.value, authorization.userId);
 });
 

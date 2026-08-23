@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAuthSessionStore } from '@/auth/session';
 import { setValidatedOwnerId } from '@/auth/identity';
 import { I18nProvider } from '@/lib/i18n';
-import { saveStudioDraft, type StudioDraft } from '@/lib/studioDraft';
+import { loadStudioDraft, saveStudioDraft, type StudioDraft } from '@/lib/studioDraft';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import { useMediaStore, useProjectStore, usePublishingStore, useUIStore } from '@/store';
 import { Studio } from '@/views/Studio';
@@ -106,6 +106,76 @@ describe('Studio canonical silent export', () => {
     expect(mocks.planActiveExport).toHaveBeenCalledWith('youtube-shorts');
     expect(mocks.enqueueActiveExport).toHaveBeenCalledWith(expect.anything(), 'C:/exports/silent.mp4');
     expect(mocks.waitForActiveExport).toHaveBeenCalledWith('verified-export');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('blocks an ambiguous Browser TTS final export before the canonical engine', async () => {
+    saveStudioDraft({ ...silentDraft(), step: 'render', voiceoverMode: 'browser' });
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const render = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Render Video'));
+    await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    expect(container.textContent).toContain('Browser TTS is for local preview only. Use ElevenLabs narration or choose Export without narration before rendering.');
+    expect(container.textContent).toContain('Export without narration');
+    expect(mocks.buildProject).not.toHaveBeenCalled();
+    expect(mocks.planActiveExport).not.toHaveBeenCalled();
+    await act(async () => { root.unmount(); });
+  });
+
+  it('labels Browser TTS as preview-only without the misleading unlimited export claim', async () => {
+    saveStudioDraft({ ...silentDraft(), step: 'voice', voiceoverMode: 'browser' });
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    expect(container.textContent).toContain('Browser Text-to-Speech (Local preview)');
+    expect(container.textContent).toContain('Speaks locally for preview. It is not included in verified or final exports.');
+    expect(container.textContent).toContain('For final export, use ElevenLabs narration or explicitly export without narration.');
+    expect(container.textContent).not.toContain('Free, Unlimited');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('permits an explicitly acknowledged Browser TTS no-narration export without persisting browser audio', async () => {
+    const fixture = await editingFixture();
+    const validBuild = {
+      ...fixture,
+      renderReady: true,
+      validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 },
+    };
+    mocks.buildProject.mockResolvedValue(validBuild);
+    mocks.loadExportCapabilities.mockResolvedValue(undefined);
+    mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
+    mocks.enqueueActiveExport.mockResolvedValue(verifiedExportJob());
+    mocks.waitForActiveExport.mockResolvedValue(verifiedExportJob());
+    window.electronAPI = {
+      ...window.electronAPI,
+      ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/browser-preview-only.mp4') },
+    } as typeof window.electronAPI;
+    saveStudioDraft({ ...silentDraft(), step: 'render', voiceoverMode: 'browser', browserTtsFinalIntent: 'without-narration' });
+
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const render = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Render Video'));
+    await act(async () => { render?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    expect(mocks.buildProject).toHaveBeenCalledWith(expect.objectContaining({
+      audio: { narrationMode: 'silent' },
+      narration: undefined,
+    }));
+    const persisted = loadStudioDraft();
+    expect(persisted).toMatchObject({ voiceoverMode: 'browser', browserTtsFinalIntent: 'without-narration' });
+    expect(JSON.stringify(persisted)).not.toContain('audioUrl');
+    expect(JSON.stringify(persisted)).not.toContain('audioBlob');
     await act(async () => { root.unmount(); });
   });
 

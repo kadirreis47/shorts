@@ -46,6 +46,8 @@ describe('Pexels video ingest candidate boundary', () => {
 
   it('keeps provider resolution, bounded diagnostics, and non-canonical quarantine in the Edge boundary', () => {
     expect(edgeSource).toContain('await authorizeProtectedFunction(req, "ingest-pexels-video")');
+    expect(edgeSource).toContain('await authorizeProtectedFunction(req, "ingest-pexels-video-cleanup")');
+    expect(edgeSource.indexOf('await authorizeProtectedFunction(req, "ingest-pexels-video-cleanup")')).toBeLessThan(edgeSource.indexOf('return discardQuarantine'));
     expect(edgeSource).toContain('selectPexelsVideoCandidate(video, mediaId)');
     expect(edgeSource).toContain('candidateCount: Math.min(rawFiles.length, 100)');
     expect(edgeSource).toContain('rawFiles.slice(0, 10).map(describeCandidate)');

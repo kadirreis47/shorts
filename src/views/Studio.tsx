@@ -6,7 +6,7 @@ import {
   Activity, Languages, Eye, EyeOff, ZoomIn, ZoomOut, Save, RotateCcw, FolderOpen, ExternalLink,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import type { MediaStorageObject, Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
+import type { MediaStorageObject, ProviderMediaProvenance, Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
@@ -21,7 +21,7 @@ import { Card, Button } from '@/components/ui';
 import { AIPipelineMonitor } from '@/components/AIPipelineMonitor';
 import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
-import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
+import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { compileStudioProductionRecipeV1, normalizeStudioProductionRecipeV1 } from '@/core/media';
@@ -71,6 +71,98 @@ function providerActionError(action: string, error: unknown): string {
   const message = error instanceof Error ? error.message : '';
   if (/not configured|not available/i.test(message)) return `The provider for ${action} is not configured. Contact an administrator.`;
   return `Unable to complete ${action}. Check your connection and try again.`;
+}
+
+class StaleVisualSelectionError extends Error {}
+
+type ResearchClientDiagnosticCode =
+  | 'RESEARCH_EMPTY'
+  | 'RESEARCH_RESPONSE_INVALID'
+  | 'RESEARCH_STALE'
+  | 'RESEARCH_IMAGE_INGEST_FAILED'
+  | 'RESEARCH_VIDEO_INGEST_FAILED'
+  | 'RESEARCH_VIDEO_PREPARED'
+  | 'RESEARCH_VIDEO_STALE'
+  | 'RESEARCH_VIDEO_ATTACHED'
+  | 'RESEARCH_REQUEST_FAILED';
+
+function researchClientDiagnostic(code: ResearchClientDiagnosticCode, detail: { resultCount?: number; sceneIndex?: number } = {}): void {
+  console.info('[research-footage]', { code, ...detail });
+}
+
+type PexelsVideoPrepareDiagnosticCode =
+  | 'PEXELS_VIDEO_EDGE_INGEST_FAILED'
+  | 'PEXELS_VIDEO_EDGE_INGEST_SUCCEEDED'
+  | 'PEXELS_VIDEO_QUARANTINE_FETCH_FAILED'
+  | 'PEXELS_VIDEO_QUARANTINE_FETCH_SUCCEEDED'
+  | 'PEXELS_VIDEO_PROBE_FAILED'
+  | 'PEXELS_VIDEO_PROBE_SUCCEEDED'
+  | 'PEXELS_VIDEO_CANONICAL_PROMOTION_FAILED'
+  | 'PEXELS_VIDEO_SIGN_FAILED'
+  | 'PEXELS_VIDEO_PREPARE_SUCCEEDED'
+  | 'PEXELS_VIDEO_QUARANTINE_CLEANUP_FAILED';
+
+function pexelsVideoPrepareDiagnostic(code: PexelsVideoPrepareDiagnosticCode): void {
+  console.info('[pexels-video-prepare]', { code });
+}
+
+async function prepareDurablePexelsVideo(
+  mediaId: number,
+  query: string,
+  assertCurrent: () => void,
+): Promise<{ storage: MediaStorageObject; previewUrl: string; provenance: ProviderMediaProvenance }> {
+  let ingested: Awaited<ReturnType<typeof ingestPexelsVideo>>;
+  try {
+    ingested = await ingestPexelsVideo(mediaId, query);
+    pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_EDGE_INGEST_SUCCEEDED');
+  } catch (error) {
+    pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_EDGE_INGEST_FAILED');
+    throw error;
+  }
+  const quarantineId = ingested.quarantineId;
+  try {
+    assertCurrent();
+    let bytes: ArrayBuffer;
+    try {
+      const response = await fetch(ingested.quarantineUrl, { signal: AbortSignal.timeout(60_000) });
+      if (!response.ok) throw new Error('Pexels video quarantine could not be opened.');
+      bytes = await response.arrayBuffer();
+      if (bytes.byteLength === 0 || bytes.byteLength > 50 * 1024 * 1024) throw new Error('Pexels video quarantine is invalid.');
+      pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_QUARANTINE_FETCH_SUCCEEDED');
+    } catch (error) {
+      pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_QUARANTINE_FETCH_FAILED');
+      throw error;
+    }
+    assertCurrent();
+    try {
+      const bridge = window.electronAPI?.ffmpeg;
+      if (!bridge?.probeManualMp4) throw new ManualSceneVideoImportError('probe');
+      await bridge.probeManualMp4(bytes);
+      pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_PROBE_SUCCEEDED');
+    } catch (error) {
+      pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_PROBE_FAILED');
+      throw error;
+    }
+    assertCurrent();
+    let upload: Awaited<ReturnType<typeof uploadMedia>>;
+    try {
+      upload = await uploadMedia(new Blob([bytes], { type: 'video/mp4' }), 'videos');
+    } catch (error) {
+      pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_CANONICAL_PROMOTION_FAILED');
+      throw error;
+    }
+    assertCurrent();
+    if (!upload.videoUrl) {
+      pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_SIGN_FAILED');
+      throw new Error('Pexels video could not be opened after validation.');
+    }
+    pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_PREPARE_SUCCEEDED');
+    return { storage: upload.media, previewUrl: upload.videoUrl, provenance: ingested.provenance };
+  } finally {
+    if (quarantineId) void Promise.resolve(discardPexelsVideoQuarantine(quarantineId)).catch(() => {
+      pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_QUARANTINE_CLEANUP_FAILED');
+    });
+  }
 }
 
 function narrationRevision(text: string): string {
@@ -171,6 +263,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [fetchingVideos, setFetchingVideos] = useState(false);
   const [ingestingPexelsVideos, setIngestingPexelsVideos] = useState<Set<number>>(new Set());
   const [voiceoverMode, setVoiceoverMode] = useState<StudioVoiceoverMode>('none');
+  const [browserTtsFinalIntent, setBrowserTtsFinalIntent] = useState<BrowserTtsFinalIntent | null>(null);
 
   const [title, setTitle] = useState('');
   const [hook, setHook] = useState('');
@@ -201,6 +294,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [characterProfiles, setCharacterProfiles] = useState<CharacterProfile[]>([]);
   const [generatingVisuals, setGeneratingVisuals] = useState(false);
   const [researchingFootage, setResearchingFootage] = useState(false);
+  const [researchingSceneMedia, setResearchingSceneMedia] = useState<ReadonlySet<number>>(() => new Set());
   const [generatingSEOState, setGeneratingSEOState] = useState(false);
   const [seoResult, setSeoResult] = useState<{ optimizedTitle: string; optimizedDescription: string; tags: string[]; hashtags: string[]; thumbnailText: string } | null>(null);
   const [watermarkText, setWatermarkText] = useState('');
@@ -277,6 +371,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
   useEffect(() => {
     invalidateNarration();
+    setBrowserTtsFinalIntent(null);
     setCompletedExport(null);
     setPostRenderNotice(null);
     setPostRenderAction(null);
@@ -345,6 +440,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setCaptionHighlightColor(draft.captionHighlightColor);
       setBeatSync(draft.beatSync);
       setVoiceoverMode(draft.voiceoverMode);
+      setBrowserTtsFinalIntent(draft.voiceoverMode === 'browser' && draft.browserTtsFinalIntent === 'without-narration'
+        ? 'without-narration'
+        : null);
       setSelectedVoice(draft.selectedVoice);
       if (draft.narration && Number.isSafeInteger(draft.narration.durationMs) && draft.narration.durationMs > 0) {
         try {
@@ -411,6 +509,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     captionHighlightColor,
     beatSync,
     voiceoverMode,
+    browserTtsFinalIntent: browserTtsFinalIntent ?? undefined,
     selectedVoice,
     targetLanguage,
     narration: narration ?? undefined,
@@ -418,7 +517,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode,
     selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId,
     watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor,
-    beatSync, voiceoverMode, selectedVoice, targetLanguage, narration]);
+    beatSync, voiceoverMode, browserTtsFinalIntent, selectedVoice, targetLanguage, narration]);
 
   useEffect(() => {
     if (!draftHydratedRef.current) return;
@@ -657,31 +756,86 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setError('');
     const ownerContext = captureValidatedMediaOwnerContext();
     const requestGeneration = ++pexelsRequestGenerations.current.research;
+    const targetScenes = [...scenes];
+    const selectionGenerations = new Map<number, number>();
+    for (let index = 0; index < targetScenes.length; index += 1) {
+      const generation = (sceneImportGenerations.current.get(index) ?? 0) + 1;
+      sceneImportGenerations.current.set(index, generation);
+      selectionGenerations.set(index, generation);
+    }
+    setResearchingSceneMedia(new Set(selectionGenerations.keys()));
     try {
       const results = await researchFootage({ topic: title || script.slice(0, 100), scenes, mode: visualMode });
       assertCurrentMediaOwnerContext(ownerContext);
-      if (pexelsRequestGenerations.current.research !== requestGeneration) return;
-      const updatedScenes = [...scenes];
-      let resolved = 0;
+      if (pexelsRequestGenerations.current.research !== requestGeneration) {
+        researchClientDiagnostic('RESEARCH_STALE');
+        return;
+      }
+      if (results.length === 0) researchClientDiagnostic('RESEARCH_EMPTY', { resultCount: 0 });
+      let succeeded = 0;
+      let failed = 0;
+      let firstFailure: unknown;
       for (const result of results) {
-        if (result.sceneIndex < updatedScenes.length) {
-          if (result.imageUrl || result.videoUrl) resolved += 1;
-          updatedScenes[result.sceneIndex] = {
-            ...updatedScenes[result.sceneIndex],
-            imageUrl: result.imageUrl ?? updatedScenes[result.sceneIndex].imageUrl,
-            videoUrl: result.videoUrl ?? updatedScenes[result.sceneIndex].videoUrl,
-            ...(result.imageUrl ? { imageStorage: undefined } : {}),
-            ...(result.videoUrl ? { videoStorage: undefined } : {}),
-            ...(result.imageUrl ? { imageProvenance: undefined } : {}),
-            ...(result.videoUrl ? { videoProvenance: undefined } : {}),
-          };
+        const index = result.sceneIndex;
+        const scene = targetScenes[index];
+        const selectionGeneration = selectionGenerations.get(index);
+        if (!scene || selectionGeneration === undefined) continue;
+        const assertCurrent = () => {
+          assertCurrentMediaOwnerContext(ownerContext);
+          if (pexelsRequestGenerations.current.research !== requestGeneration
+            || sceneImportGenerations.current.get(index) !== selectionGeneration) throw new StaleVisualSelectionError();
+        };
+        try {
+          assertCurrent();
+          if (result.kind === 'image') {
+            const ingested = await ingestPexelsImage(result.mediaId, result.query);
+            assertCurrent();
+            setScenes((current) => {
+              if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+                || sceneImportGenerations.current.get(index) !== selectionGeneration || current[index] !== scene) return current;
+              const next = [...current];
+              next[index] = { ...scene, imageStorage: ingested.media, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance, videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined };
+              return next;
+            });
+            succeeded += 1;
+          } else {
+            const prepared = await prepareDurablePexelsVideo(result.mediaId, result.query, assertCurrent);
+            researchClientDiagnostic('RESEARCH_VIDEO_PREPARED', { sceneIndex: index });
+            setScenes((current) => {
+              if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+                || sceneImportGenerations.current.get(index) !== selectionGeneration || current[index] !== scene) return current;
+              const next = [...current];
+              next[index] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined };
+              return next;
+            });
+            succeeded += 1;
+            researchClientDiagnostic('RESEARCH_VIDEO_ATTACHED', { sceneIndex: index });
+          }
+        } catch (error) {
+          if (error instanceof StaleVisualSelectionError) {
+            researchClientDiagnostic('RESEARCH_STALE', { sceneIndex: index });
+            if (result.kind === 'video') researchClientDiagnostic('RESEARCH_VIDEO_STALE', { sceneIndex: index });
+          } else if (sceneImportGenerations.current.get(index) === selectionGeneration) {
+            researchClientDiagnostic(result.kind === 'image' ? 'RESEARCH_IMAGE_INGEST_FAILED' : 'RESEARCH_VIDEO_INGEST_FAILED', { sceneIndex: index });
+            failed += 1;
+            firstFailure ??= error;
+          }
+        } finally {
+          if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+            && sceneImportGenerations.current.get(index) === selectionGeneration) {
+            setResearchingSceneMedia((current) => { const next = new Set(current); next.delete(index); return next; });
+          }
         }
       }
       assertCurrentMediaOwnerContext(ownerContext);
       if (pexelsRequestGenerations.current.research !== requestGeneration) return;
-      setScenes(updatedScenes);
-      if (resolved === 0) setError('No footage could be found for the current scenes. Try refining the visual descriptions.');
+      if (failed || succeeded === 0) setError(succeeded ? `${succeeded} scene media items were privately prepared; some scenes could not be updated.` : failed ? providerActionError('footage research', firstFailure) : 'No footage could be found for the current scenes. Try refining the visual descriptions.');
     } catch (researchError) {
+      researchClientDiagnostic(
+        researchError instanceof Error && /invalid result/i.test(researchError.message)
+          ? 'RESEARCH_RESPONSE_INVALID'
+          : 'RESEARCH_REQUEST_FAILED',
+      );
       if (
         pexelsRequestGenerations.current.research === requestGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
@@ -692,7 +846,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (
         pexelsRequestGenerations.current.research === requestGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-      ) setResearchingFootage(false);
+      ) { setResearchingFootage(false); setResearchingSceneMedia(new Set()); }
     }
   }
 
@@ -1099,48 +1253,22 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           if (sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
           if (videos.length > 0) {
             setIngestingPexelsVideos((current) => new Set(current).add(i));
-            const ingested = await ingestPexelsVideo(videos[0].id, query);
-            const quarantineId = ingested.quarantineId;
-            try {
+            const prepared = await prepareDurablePexelsVideo(videos[0].id, query, () => {
               assertCurrentMediaOwnerContext(ownerContext);
-              if (pexelsRequestGenerations.current.broll !== requestGeneration || sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
-              const response = await fetch(ingested.quarantineUrl, { signal: AbortSignal.timeout(60_000) });
-              if (!response.ok) throw new Error('Pexels video quarantine could not be opened.');
-              const bytes = await response.arrayBuffer();
-              assertCurrentMediaOwnerContext(ownerContext);
-              if (bytes.byteLength === 0 || bytes.byteLength > 50 * 1024 * 1024) throw new Error('Pexels video quarantine is invalid.');
-              const bridge = window.electronAPI?.ffmpeg;
-              if (!bridge?.probeManualMp4) throw new ManualSceneVideoImportError('probe');
-              await bridge.probeManualMp4(bytes);
-              assertCurrentMediaOwnerContext(ownerContext);
-              if (pexelsRequestGenerations.current.broll !== requestGeneration || sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
-              const upload = await uploadMedia(new Blob([bytes], { type: 'video/mp4' }), 'videos');
-              assertCurrentMediaOwnerContext(ownerContext);
-              if (!upload.videoUrl) throw new Error('Pexels video could not be opened after validation.');
-              let attached = false;
-              setScenes((current) => {
-                if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-                  || sceneImportGenerations.current.get(i) !== selectionGeneration
-                  || current[i] !== scene) return current;
-                const next = [...current];
-                next[i] = {
-                  ...scene,
-                  videoStorage: upload.media,
-                  videoUrl: upload.videoUrl,
-                  videoProvenance: ingested.provenance,
-                  imageStorage: undefined,
-                  imageUrl: undefined,
-                  imageProvenance: undefined,
-                };
-                attached = true;
-                return next;
-              });
-              if (attached) succeeded += 1;
-            } finally {
-              if (quarantineId) void Promise.resolve(discardPexelsVideoQuarantine(quarantineId)).catch(() => undefined);
-            }
+              if (pexelsRequestGenerations.current.broll !== requestGeneration || sceneImportGenerations.current.get(i) !== selectionGeneration) throw new StaleVisualSelectionError();
+            });
+            let attached = false;
+            setScenes((current) => {
+              if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+                || sceneImportGenerations.current.get(i) !== selectionGeneration || current[i] !== scene) return current;
+              const next = [...current];
+              next[i] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined };
+              attached = true;
+              return next;
+            });
+            if (attached) succeeded += 1;
           } else unresolved += 1;
-        } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
+        } catch (sceneError) { if (!(sceneError instanceof StaleVisualSelectionError)) { failed += 1; firstFailure ??= sceneError; } }
         finally {
           if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
             && sceneImportGenerations.current.get(i) === selectionGeneration) {
@@ -1217,6 +1345,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setStep('topic');
       return;
     }
+    if (!hasExplicitFinalAudioIntent()) return;
     setRendering(true);
     setRenderProgress(0);
     setError('');
@@ -1373,6 +1502,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setStep('topic');
       return;
     }
+    if (!hasExplicitFinalAudioIntent()) return;
     setPreparingPublish(true);
     setError('');
     const ownerContext = captureValidatedMediaOwnerContext();
@@ -1438,6 +1568,20 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     } finally {
       if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) setPreparingPublish(false);
     }
+  }
+
+  function hasExplicitFinalAudioIntent(): boolean {
+    if (voiceoverMode === 'browser' && browserTtsFinalIntent !== 'without-narration') {
+      setError(t('studio.browserTTSRenderBlocked'));
+      setStep('voice');
+      return false;
+    }
+    if (voiceoverMode === 'elevenlabs' && !hasCanonicalNarration) {
+      setError(t('studio.elevenLabsNarrationRenderBlocked'));
+      setStep('voice');
+      return false;
+    }
+    return true;
   }
 
   const canProceed = step === 'topic' ? topic.trim().length > 0 && channelId : true;
@@ -1693,6 +1837,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     )}
                     {ingestingPexelsVideos.has(i) && (
                       <div className="mt-2 flex items-center gap-1 text-xs text-blue-600"><Loader2 size={12} className="animate-spin" /> {t('studio.preparingPexelsBroll')}</div>
+                    )}
+                    {researchingSceneMedia.has(i) && !ingestingPexelsImages.has(i) && !ingestingPexelsVideos.has(i) && (
+                      <div className="mt-2 flex items-center gap-1 text-xs text-blue-600"><Loader2 size={12} className="animate-spin" /> {t('studio.researchingFootage')}</div>
                     )}
                     {/* Per-scene AI image generation */}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -2223,7 +2370,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           <div className="space-y-4">
             <div className="space-y-2">
               <button
-                onClick={() => { setVoiceoverMode('elevenlabs'); invalidateNarration(); }}
+                onClick={() => { setVoiceoverMode('elevenlabs'); setBrowserTtsFinalIntent(null); invalidateNarration(); }}
                 disabled={!hasElevenLabs}
                 className={classNames(
                   'flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors disabled:opacity-50',
@@ -2236,7 +2383,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 </div>
               </button>
               <button
-                onClick={() => { setVoiceoverMode('browser'); invalidateNarration(); }}
+                onClick={() => { setVoiceoverMode('browser'); setBrowserTtsFinalIntent(null); invalidateNarration(); }}
                 className={classNames(
                   'flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors',
                   voiceoverMode === 'browser' ? 'border-slate-900 bg-slate-50' : 'border-slate-200 hover:bg-slate-50',
@@ -2248,7 +2395,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 </div>
               </button>
               <button
-                onClick={() => { setVoiceoverMode('none'); invalidateNarration(); }}
+                onClick={() => { setVoiceoverMode('none'); setBrowserTtsFinalIntent(null); invalidateNarration(); }}
                 className={classNames(
                   'flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors',
                   voiceoverMode === 'none' ? 'border-slate-900 bg-slate-50' : 'border-slate-200 hover:bg-slate-50',
@@ -2260,6 +2407,24 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 </div>
               </button>
             </div>
+
+            {voiceoverMode === 'browser' && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950" role="status">
+                <p>{t('studio.browserTTSFinalNotice')}</p>
+                {browserTtsFinalIntent === 'without-narration' ? (
+                  <p className="mt-2 font-medium">{t('studio.browserTTSFinalIntentConfirmed')}</p>
+                ) : (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={() => { setVoiceoverMode('elevenlabs'); setBrowserTtsFinalIntent(null); invalidateNarration(); }} disabled={!hasElevenLabs}>
+                      {t('studio.browserTTSUseElevenLabs')}
+                    </Button>
+                    <Button onClick={() => setBrowserTtsFinalIntent('without-narration')}>
+                      {t('studio.browserTTSExportWithoutNarration')}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {voiceoverMode === 'elevenlabs' && hasElevenLabs && (
               <div>

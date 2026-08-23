@@ -143,6 +143,46 @@ describe('Studio provider availability', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it('records a safe client diagnostic and keeps existing media when Research durable ingestion fails', async () => {
+    const previousInfo = console.info;
+    const diagnostic = vi.fn();
+    console.info = diagnostic;
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.researchFootage.mockResolvedValue([{ sceneIndex: 0, kind: 'image', mediaId: 42, query: 'Visual' }]);
+    mocks.ingestPexelsImage.mockRejectedValue(new Error('provider URL must not leak'));
+    saveStudioDraft({ ...draft('style'), visualMode: 'real_footage', scenes: [{ ...draft('style').scenes[0], imageUrl: 'https://images.pexels.com/previous.jpg' }] });
+    const root = await renderStudio();
+    await clickButton('Research Real Footage');
+
+    expect(diagnostic).toHaveBeenCalledWith('[research-footage]', { code: 'RESEARCH_IMAGE_INGEST_FAILED', sceneIndex: 0 });
+    expect(diagnostic.mock.calls.flat().join(' ')).not.toContain('provider URL must not leak');
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    expect(loadStudioDraft()?.scenes[0].imageUrl).toBe('https://images.pexels.com/previous.jpg');
+    expect(container?.textContent).toContain('Unable to complete footage research');
+    console.info = previousInfo;
+    await act(async () => { root.unmount(); });
+  });
+
+  it('attaches Research image identities only through durable Pexels ingestion', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.researchFootage.mockResolvedValue([{ sceneIndex: 0, kind: 'image', mediaId: 42, query: 'Visual', imageUrl: 'https://images.pexels.com/never-authoritative.jpg' }]);
+    mocks.ingestPexelsImage.mockResolvedValue({
+      media: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000042.jpg' },
+      previewUrl: 'https://signed.example/research-private-42.jpg',
+      provenance: { provider: 'pexels', providerMediaId: 42, originalSourceUrl: 'https://images.pexels.com/photos/42/original.jpg', query: 'Visual' },
+    });
+    saveStudioDraft({ ...draft('style'), visualMode: 'real_footage' });
+    const root = await renderStudio();
+    await clickButton('Research Real Footage');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
+    expect(mocks.ingestPexelsImage).toHaveBeenCalledWith(42, 'Visual');
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    expect(loadStudioDraft()?.scenes[0]).toMatchObject({ imageStorage: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000042.jpg' } });
+    expect(loadStudioDraft()?.scenes[0].imageUrl).toBeUndefined();
+    expect(container?.querySelector('img')?.getAttribute('src') ?? '').not.toContain('never-authoritative.jpg');
+    await act(async () => { root.unmount(); });
+  });
+
   it('probes quarantined Pexels B-roll and attaches only the resulting private video identity', async () => {
     mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
     mocks.searchVideos.mockResolvedValue([{ id: 77, fileUrl: 'https://videos.pexels.com/transient.mp4' }]);
@@ -183,6 +223,49 @@ describe('Studio provider availability', () => {
     expect(mocks.discardPexelsVideoQuarantine).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000077');
     globalThis.fetch = previousFetch;
     window.electronAPI = previousElectron;
+    await act(async () => { root.unmount(); });
+  });
+
+  it('promotes Research video identities through the shared quarantine probe path', async () => {
+    const previousInfo = console.info;
+    const diagnostic = vi.fn();
+    console.info = diagnostic;
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.researchFootage.mockResolvedValue([{ sceneIndex: 0, kind: 'video', mediaId: 77, query: 'Visual' }]);
+    mocks.ingestPexelsVideo.mockResolvedValue({ quarantineId: '00000000-0000-4000-8000-000000000077', quarantineUrl: 'https://signed.example/research-quarantine.mp4', provenance: { provider: 'pexels', providerMediaId: 77, originalSourceUrl: 'https://www.pexels.com/video/77/', providerPageUrl: 'https://www.pexels.com/video/77/', query: 'Visual' } });
+    mocks.uploadMedia.mockResolvedValue({ videoUrl: 'https://signed.example/research-private-77.mp4', media: { bucket: 'media', objectPath: 'studio-test-user/videos/00000000-0000-4000-8000-000000000077.mp4' } });
+    const previousFetch = globalThis.fetch;
+    const previousElectron = window.electronAPI;
+    const bytes = new Uint8Array([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+    const probeManualMp4 = vi.fn(async () => ({ container: 'mp4' as const, codec: 'h264' as const, width: 1080, height: 1920, fps: 30, durationMs: 5_000, hasAudio: false }));
+    globalThis.fetch = vi.fn(async () => new Response(bytes, { status: 200 })) as typeof fetch;
+    window.electronAPI = { ...previousElectron, ffmpeg: { ...previousElectron?.ffmpeg, probeManualMp4 } } as typeof window.electronAPI;
+    saveStudioDraft({ ...draft('style'), visualMode: 'real_footage' });
+    const root = await renderStudio();
+    await clickButton('Research Real Footage');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 0)); });
+    expect(mocks.ingestPexelsVideo).toHaveBeenCalledWith(77, 'Visual');
+    expect(probeManualMp4).toHaveBeenCalledWith(expect.any(ArrayBuffer));
+    expect(mocks.uploadMedia).toHaveBeenCalledWith(expect.any(Blob), 'videos');
+    expect(mocks.discardPexelsVideoQuarantine).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000077');
+    const probedBytes = (probeManualMp4.mock.calls as unknown as Array<[ArrayBuffer]>)[0]?.[0];
+    const promotedBlob = (mocks.uploadMedia.mock.calls as unknown as Array<[Blob, string]>)[0]?.[0];
+    expect(new Uint8Array(probedBytes)).toEqual(bytes);
+    expect(promotedBlob.size).toBe(bytes.byteLength);
+    expect(diagnostic).toHaveBeenCalledWith('[pexels-video-prepare]', { code: 'PEXELS_VIDEO_EDGE_INGEST_SUCCEEDED' });
+    expect(diagnostic).toHaveBeenCalledWith('[pexels-video-prepare]', { code: 'PEXELS_VIDEO_QUARANTINE_FETCH_SUCCEEDED' });
+    expect(diagnostic).toHaveBeenCalledWith('[pexels-video-prepare]', { code: 'PEXELS_VIDEO_PROBE_SUCCEEDED' });
+    expect(diagnostic).toHaveBeenCalledWith('[pexels-video-prepare]', { code: 'PEXELS_VIDEO_PREPARE_SUCCEEDED' });
+    expect(diagnostic).toHaveBeenCalledWith('[research-footage]', { code: 'RESEARCH_VIDEO_PREPARED', sceneIndex: 0 });
+    expect(diagnostic).toHaveBeenCalledWith('[research-footage]', { code: 'RESEARCH_VIDEO_ATTACHED', sceneIndex: 0 });
+    expect(container?.textContent).not.toContain('Unable to complete footage research');
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    expect(loadStudioDraft()?.scenes[0].videoStorage).toMatchObject({
+      bucket: 'media', objectPath: 'studio-test-user/videos/00000000-0000-4000-8000-000000000077.mp4',
+    });
+    globalThis.fetch = previousFetch;
+    window.electronAPI = previousElectron;
+    console.info = previousInfo;
     await act(async () => { root.unmount(); });
   });
 
@@ -375,7 +458,7 @@ describe('Studio provider availability', () => {
   });
 
   it('does not apply stale prior-owner footage research results', async () => {
-    const pending = deferred<Array<{ sceneIndex: number; imageUrl: string }>>();
+    const pending = deferred<Array<{ sceneIndex: number; kind: 'image'; mediaId: number; query: string }>>();
     mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: true } });
     mocks.researchFootage.mockReturnValueOnce(pending.promise);
     saveStudioDraft({ ...draft('style'), visualMode: 'real_footage' });
@@ -383,7 +466,7 @@ describe('Studio provider availability', () => {
     await clickButton('Research Real Footage');
     setValidatedOwnerId('studio-user-b');
     advanceValidatedOwnerGeneration();
-    await act(async () => { pending.resolve([{ sceneIndex: 0, imageUrl: 'https://images.pexels.com/a.png' }]); });
+    await act(async () => { pending.resolve([{ sceneIndex: 0, kind: 'image', mediaId: 1, query: 'Visual' }]); });
 
     expect(container?.querySelector('img')).toBeNull();
     expect(container?.textContent).not.toContain('Unable to complete footage research');

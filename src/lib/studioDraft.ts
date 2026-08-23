@@ -6,6 +6,8 @@ import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScop
 
 export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'publish';
 export type StudioVoiceoverMode = 'elevenlabs' | 'browser' | 'none';
+/** Persisted UX acknowledgement only; Browser speech stays local preview-only. */
+export type BrowserTtsFinalIntent = 'without-narration';
 
 export interface StudioDraft {
   version: 1;
@@ -43,6 +45,7 @@ export interface StudioDraft {
   captionHighlightColor: string;
   beatSync: boolean;
   voiceoverMode: StudioVoiceoverMode;
+  browserTtsFinalIntent?: BrowserTtsFinalIntent;
   selectedVoice: string;
   targetLanguage: string;
   narration?: {

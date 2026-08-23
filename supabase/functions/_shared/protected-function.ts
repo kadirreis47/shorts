@@ -15,7 +15,15 @@ export const FUNCTION_POLICIES = {
   "analyze-script": { operationClass: "medium", burstMax: 10, dailyMax: 200 },
   "generate-image": { operationClass: "high", burstMax: 8, dailyMax: 25 },
   "ingest-pexels-image": { operationClass: "high", burstMax: 8, dailyMax: 50 },
-  "ingest-pexels-video": { operationClass: "high", burstMax: 4, dailyMax: 25 },
+  // Research can return up to twelve independent provider identities. Keep the
+  // expensive acquisition bucket aligned to that server-enforced batch bound;
+  // the daily cap remains the abuse/cost ceiling.
+  "ingest-pexels-video": { operationClass: "high", burstMax: 12, dailyMax: 25 },
+  // This is not a public function endpoint. It is the authenticated,
+  // owner-derived deletion of a previously issued video quarantine object.
+  // It never resolves a provider URL, downloads bytes, signs media, or creates
+  // canonical storage, so it must not consume an acquisition slot.
+  "ingest-pexels-video-cleanup": { operationClass: "low", burstMax: 12, dailyMax: 50 },
   "generate-voiceover": { operationClass: "high", burstMax: 3, dailyMax: 25 },
   "list-voices": { operationClass: "low", burstMax: 30, dailyMax: 1_000 },
   "research-footage": { operationClass: "high", burstMax: 2, dailyMax: 20 },
