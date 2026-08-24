@@ -2,6 +2,7 @@ import type { MediaStorageObject, ProviderMediaProvenance, Scene, VisualMode } f
 import { assertCurrentMediaOwnerContext, type ValidatedMediaOwnerContext } from '@/lib/mediaStorage';
 import type { CanonicalMotionMode, CanonicalTransitionType, CanonicalWatermarkPosition, CreateMediaProjectInput } from './types';
 import { normalizeCanonicalWatermarkText } from './brandingTypes';
+import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
@@ -77,6 +78,7 @@ export interface StudioRecipeNarrationV1 {
   readonly durationMs: number;
   readonly scriptRevision: string;
   readonly voiceId: string;
+  readonly alignment?: NarrationCharacterAlignment;
 }
 
 /** Durable background music only. Preview blobs and playback URLs are excluded. */
@@ -227,6 +229,7 @@ export function compileStudioProductionRecipeV1(
       durationMs: narration.durationMs,
       scriptRevision: narration.scriptRevision,
       voiceId: narration.voiceId,
+      ...(narration.alignment ? { alignment: narration.alignment } : {}),
     } : undefined,
     subtitles: {
       enabled: recipe.subtitles.enabled,
@@ -324,11 +327,15 @@ function normalizeNarration(value: StudioRecipeNarrationV1, ownerId: string): St
   if (!/\/voiceovers\/[0-9a-f-]+\.mp3$/i.test(value.storage.objectPath)) {
     throw new Error('Canonical narration must reference an owner-scoped voiceover MP3.');
   }
+  const durationMs = boundedInteger(value.durationMs, 1, 3_600_000, 'Narration duration');
+  const alignment = value.alignment === undefined ? undefined : normalizeNarrationCharacterAlignment(value.alignment, durationMs);
+  if (value.alignment !== undefined && !alignment) throw new Error('Narration alignment is invalid.');
   return {
     storage: cloneStorage(value.storage),
-    durationMs: boundedInteger(value.durationMs, 1, 3_600_000, 'Narration duration'),
+    durationMs,
     scriptRevision: requiredText(value.scriptRevision, 'Narration script revision is required.'),
     voiceId: requiredText(value.voiceId, 'Narration voice id is required.'),
+    ...(alignment ? { alignment } : {}),
   };
 }
 

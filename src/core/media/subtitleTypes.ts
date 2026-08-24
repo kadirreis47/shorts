@@ -1,4 +1,5 @@
 export type SubtitleAlignmentSource = 'estimated' | 'word-timestamps' | 'imported';
+import type { NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 export type SubtitleAnimation = 'none' | 'fade' | 'pop' | 'karaoke' | 'word-highlight' | 'bounce';
 
 export interface SubtitleWord {
@@ -83,4 +84,7 @@ export interface SubtitleBuildOptions {
   language?: string;
   style?: Partial<SubtitleStyle>;
   canonical?: CanonicalSubtitleConfiguration;
+  narrationAlignment?: NarrationCharacterAlignment;
+  /** Durable MP3 duration; distinct from frame-snapped visual timeline time. */
+  narrationDurationMs?: number;
 }

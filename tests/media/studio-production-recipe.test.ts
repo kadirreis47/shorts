@@ -206,6 +206,20 @@ describe('StudioProductionRecipeV1', () => {
     });
   });
 
+  it('keeps validated narration timing fingerprint-significant while legacy narration stays valid', () => {
+    const legacy = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
+    const alignedInput = recipeInput();
+    alignedInput.narration = {
+      ...alignedInput.narration!,
+      alignment: { characters: ['H', 'i'], characterStartTimesMs: [0, 80], characterEndTimesMs: [80, 160] },
+    };
+    const aligned = normalizeStudioProductionRecipeV1(alignedInput, ownerContext());
+    const changed = structuredClone(alignedInput);
+    changed.narration = { ...changed.narration!, alignment: { ...changed.narration!.alignment!, characterStartTimesMs: [0, 90] } };
+    expect(aligned.identity).not.toBe(legacy.identity);
+    expect(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity).not.toBe(aligned.identity);
+  });
+
   it('compiles only owner-scoped durable music into the existing canonical audio timeline', async () => {
     const normalized = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
     const compiled = compileStudioProductionRecipeV1(normalized);
@@ -362,6 +376,60 @@ describe('StudioProductionRecipeV1', () => {
     });
     expect(build.project.subtitles.cues.length).toBeGreaterThan(0);
     expect(build.project.scenes[0].cameraMotion).toBe('ken_burns');
+  });
+
+  it('derives unequal semantic scene windows from durable narration before subtitles are built', async () => {
+    const input = recipeInput();
+    input.transitionStyle = 'none';
+    input.scenes = ['One', 'Two', 'Three'].map((text, index) => ({
+      text, duration: 5, visual: 'Visual', keywords: ['visual'],
+      imageStorage: { bucket: 'media', objectPath: `owner-a/generated-images/00000000-0000-4000-8000-00000000000${index}.png` },
+    }));
+    const characters = [...'One Two Three'];
+    const starts = [0, 80, 160, 300, 1_000, 1_080, 1_160, 1_300, 2_000, 2_080, 2_160, 2_240, 2_320];
+    input.narration = {
+      ...input.narration!,
+      durationMs: 3_000,
+      alignment: { characters, characterStartTimesMs: starts, characterEndTimesMs: starts.map((time) => time + 40) },
+    };
+
+    const build = await createMediaEngine(new TypedEventBus<ApplicationEventMap>(), createAssetProviderEngine(new TypedEventBus<ApplicationEventMap>()))
+      .buildProject(compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(input, ownerContext())));
+
+    expect(build.project.scenes.map((scene) => [scene.startMs, scene.endMs])).toEqual([[0, 600], [600, 1_600], [1_600, 3_000]]);
+    expect(build.subtitleTimeline?.source).toBe('word-timestamps');
+    expect(build.subtitleTimeline?.words.map((word) => word.startMs)).toEqual([0, 1_000, 2_000]);
+  });
+
+  it('keeps the production-shaped scene-two onset inside a narration-informed crossfade window', async () => {
+    const input = recipeInput();
+    input.scenes = ['First', 'Second', 'Third'].map((text, index) => ({
+      text, duration: 5, visual: 'Visual', keywords: ['visual'],
+      imageStorage: { bucket: 'media', objectPath: `owner-a/generated-images/00000000-0000-4000-8000-00000000001${index}.png` },
+    }));
+    const characters = [...'First Second Third'];
+    const starts = characters.map((_, index) => {
+      if (index < 5) return index * 180;
+      if (index === 5) return 1_000;
+      if (index < 12) return 2_043 + (index - 6) * 180;
+      if (index === 12) return 3_500;
+      return 4_600 + (index - 13) * 180;
+    });
+    input.narration = {
+      ...input.narration!,
+      durationMs: 7_497,
+      alignment: { characters, characterStartTimesMs: starts, characterEndTimesMs: starts.map((time) => time + 160) },
+    };
+
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const build = await createMediaEngine(bus, createAssetProviderEngine(bus))
+      .buildProject(compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(input, ownerContext())));
+    const sceneTwo = build.project.scenes[1];
+    const semanticSubtitleSceneTwo = { ...sceneTwo, endMs: sceneTwo.endMs - sceneTwo.overlapAfterMs };
+
+    expect(semanticSubtitleSceneTwo.startMs).toBeLessThanOrEqual(2_043);
+    expect(semanticSubtitleSceneTwo.endMs).toBeGreaterThanOrEqual(2_345);
+    expect(build.subtitleTimeline?.source).toBe('word-timestamps');
   });
 
   it('compiles the existing bounded text watermark into canonical project state', async () => {

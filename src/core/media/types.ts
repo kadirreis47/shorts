@@ -5,6 +5,7 @@ import type { CanonicalSubtitleConfiguration, SubtitleTimeline } from './subtitl
 import type { AudioBuildOptions, AudioTimeline } from './audioTypes';
 import type { MediaValidationReport } from './validationTypes';
 import type { NormalizedStudioProductionRecipeV1 } from './studioProductionRecipe';
+import type { NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 
 export type MediaAssetType =
   | 'image' | 'video' | 'ai_image' | 'broll' | 'overlay' | 'logo'
@@ -186,6 +187,7 @@ export interface CreateMediaProjectInput {
     durationMs: number;
     scriptRevision: string;
     voiceId: string;
+    alignment?: NarrationCharacterAlignment;
   };
   subtitles?: CanonicalSubtitleConfiguration;
   motion?: CanonicalMotionConfiguration;

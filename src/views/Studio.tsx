@@ -24,7 +24,7 @@ import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
-import { compileStudioProductionRecipeV1, normalizeStudioProductionRecipeV1 } from '@/core/media';
+import { assessNarrationAlignment, compileStudioProductionRecipeV1, normalizeStudioProductionRecipeV1, resolveSubtitleTimingScenes } from '@/core/media';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
 import { enqueueActiveExport, loadExportCapabilities, planActiveExport, waitForActiveExport } from '@/services/exportIntelligenceController';
@@ -322,7 +322,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [selectedVoice, setSelectedVoice] = useState('');
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState('');
-  const [narration, setNarration] = useState<{ storage: MediaStorageObject; durationMs: number; scriptRevision: string; voiceId: string } | null>(null);
+  const [narration, setNarration] = useState<{ storage: MediaStorageObject; durationMs: number; scriptRevision: string; voiceId: string; alignment?: import('@/shared/voiceoverAlignment').NarrationCharacterAlignment } | null>(null);
   const [generatingVoice, setGeneratingVoice] = useState(false);
 
   const [renderProgress, setRenderProgress] = useState(0);
@@ -360,7 +360,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
     characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
     showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice,
-    narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : null,
+    narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId, ...(narration.alignment ? { alignment: narration.alignment } : {}) } : null,
   }), [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
 
   const currentCompletedExport = completedExport?.revision === canonicalStudioRevision && isVerifiedExportJob(completedExport.job)
@@ -1120,7 +1120,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         const ownerContext = captureValidatedMediaOwnerContext();
         const generated = await generateVoiceover(script, selectedVoice);
         assertCurrentMediaOwnerContext(ownerContext);
-        setNarration({ storage: generated.media, durationMs: generated.durationMs, scriptRevision: narrationRevision(script), voiceId: selectedVoice });
+        setNarration({ storage: generated.media, durationMs: generated.durationMs, scriptRevision: narrationRevision(script), voiceId: selectedVoice, ...(generated.alignment ? { alignment: generated.alignment } : {}) });
         setAudioUrl(generated.playbackUrl ?? await createPrivateMediaSignedUrl(generated.media, ownerContext));
         setAudioBlob(null);
         setStep('render');
@@ -1524,6 +1524,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           durationMs: narration.durationMs,
           scriptRevision: narration.scriptRevision,
           voiceId: narration.voiceId,
+          ...(narration.alignment ? { alignment: narration.alignment } : {}),
         } : null,
         musicId,
         musicStorage,
@@ -1542,6 +1543,23 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       const buildInput = compileStudioProductionRecipeV1(recipe);
       const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
       const build = await mediaEngine.buildProject(buildInput);
+      // Packaged-smoke diagnostic only: establishes whether provider alignment
+      // survived through the canonical timeline without exposing any script or
+      // private-media data.
+      const subtitleTimeline = build.subtitleTimeline ?? build.project.subtitles;
+      const audioTimeline = build.audioTimeline ?? build.project.audio;
+      const alignmentAssessment = assessNarrationAlignment(resolveSubtitleTimingScenes(build.project.scenes), build.project.settings, narration?.alignment, narration?.durationMs);
+      console.info('[subtitle-timing]', {
+        source: subtitleTimeline?.source ?? 'unavailable',
+        alignmentEntryCount: narration?.alignment?.characters.length ?? 0,
+        firstAlignedWordStartMs: subtitleTimeline?.words[0]?.startMs ?? null,
+        firstCueStartMs: subtitleTimeline?.cues[0]?.startMs ?? null,
+        firstSceneStartMs: build.project.scenes[0]?.startMs ?? null,
+        canonicalNarrationStartMs: audioTimeline?.voice[0]?.startMs ?? null,
+        alignmentFallbackReason: subtitleTimeline?.source === 'word-timestamps' ? null : alignmentAssessment.reason,
+        alignmentSceneWindow: subtitleTimeline?.source === 'word-timestamps' ? null : alignmentAssessment.sceneWindow ?? null,
+      });
+      console.info(`[subtitle-timing-result] source=${subtitleTimeline?.source ?? 'unavailable'} fallback=${subtitleTimeline?.source === 'word-timestamps' ? 'none' : alignmentAssessment.reason} window=${alignmentAssessment.sceneWindow?.detail ?? 'none'}`);
       if (!build.renderReady || build.validation.renderReady !== true) {
         throw new Error(canonicalMediaValidationError(build));
       }
@@ -2517,7 +2535,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                   )}
                   <div className="flex justify-between gap-2">
                     <Button variant="secondary" onClick={() => setStep('voice')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
-                    <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes, audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode, hasCanonicalNarration) }, narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId } : undefined } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={() => void prepareModernPublish()} disabled={!channel || preparingPublish}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
+                    <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes, audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode, hasCanonicalNarration) }, narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId, ...(narration.alignment ? { alignment: narration.alignment } : {}) } : undefined } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={() => void prepareModernPublish()} disabled={!channel || preparingPublish}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
                   </div>
                 </>
               )}

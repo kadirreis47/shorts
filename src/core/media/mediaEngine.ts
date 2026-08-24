@@ -4,7 +4,8 @@ import { normalizeMediaSettings } from './durationPlanner';
 import { buildRenderManifest, isRenderManifestReady } from './manifestBuilder';
 import { planScenes } from './scenePlanner';
 import { buildIntelligentTimeline } from './timelineIntelligence';
-import { buildSubtitleTimeline } from './subtitleSynchronizer';
+import { resolveTransitionOverlapMs } from './timelineIntelligence';
+import { buildSubtitleTimeline, deriveNarrationSemanticSceneWindows } from './subtitleSynchronizer';
 import { buildAudioTimeline } from './audioComposer';
 import { composeTracks } from './trackComposer';
 import { validateMediaProject } from './mediaValidator';
@@ -22,10 +23,7 @@ export function createMediaEngine(
     async buildProject(input) {
       const settings = normalizeMediaSettings(input.settings);
       const branding = normalizeCanonicalBrandingConfiguration(input.branding);
-      let plannedScenes = applyCanonicalMotion(
-        reconcileNarrationDuration(planScenes(input.scenes, settings), input.narration?.durationMs),
-        canonicalMotionMode(input.motion?.mode),
-      );
+      let plannedScenes = applyCanonicalMotion(planScenes(input.scenes, settings), canonicalMotionMode(input.motion?.mode));
       // Recipe-compiled projects always provide the bounded canonical
       // transition configuration. Preserve the legacy planner's transition
       // metadata for non-Recipe callers such as the editing audit pipeline;
@@ -37,6 +35,10 @@ export function createMediaEngine(
           settings.defaultTransitionMs,
         );
       }
+      const semanticWindows = deriveNarrationSemanticSceneWindows(plannedScenes, input.narration?.alignment, input.narration?.durationMs);
+      plannedScenes = semanticWindows
+        ? applyNarrationSemanticSceneWindows(plannedScenes, semanticWindows, settings) ?? reconcileNarrationDuration(plannedScenes, input.narration?.durationMs)
+        : reconcileNarrationDuration(plannedScenes, input.narration?.durationMs);
       let timelinePlan = buildIntelligentTimeline(plannedScenes, settings);
       for (let attempt = 0; input.narration && timelinePlan.durationMs < input.narration.durationMs && attempt < 3; attempt += 1) {
         const sum = plannedScenes.reduce((total, scene) => total + scene.durationMs, 0);
@@ -87,6 +89,8 @@ export function createMediaEngine(
       if (musicAsset) assets.push(musicAsset);
       const subtitleTimeline = buildSubtitleTimeline(scenes, settings, {
         canonical: input.subtitles,
+        narrationAlignment: input.narration?.alignment,
+        narrationDurationMs: input.narration?.durationMs,
       });
       const audioTimeline = buildAudioTimeline(
         scenes,
@@ -234,7 +238,11 @@ function applyCanonicalTransition(
 function reconcileNarrationDuration<T extends { durationMs: number }>(scenes: T[], narrationDurationMs: number | undefined): T[] {
   if (typeof narrationDurationMs !== 'number' || !Number.isSafeInteger(narrationDurationMs) || narrationDurationMs <= 0) return scenes;
   const total = scenes.reduce((sum, scene) => sum + scene.durationMs, 0);
-  if (narrationDurationMs <= total || total <= 0) return scenes;
+  // A durable narration is the canonical audio-duration authority. Reconcile
+  // in both directions before scene windows, subtitles, and render tracks are
+  // planned; otherwise real project-global word timing can be tested against
+  // stale authored five-second scene windows.
+  if (narrationDurationMs === total || total <= 0 || narrationDurationMs < scenes.length) return scenes;
   const target = narrationDurationMs;
   let allocated = 0;
   return scenes.map((scene, index) => {
@@ -244,6 +252,33 @@ function reconcileNarrationDuration<T extends { durationMs: number }>(scenes: T[
     allocated += durationMs;
     return { ...scene, durationMs, endMs: durationMs };
   });
+}
+
+/**
+ * Makes valid original-text alignment an upstream scene-planning input. The
+ * requested transition overlap is added to the outgoing planned clip so the
+ * eventual hard-cut subtitle windows remain exactly semantic and contiguous.
+ */
+function applyNarrationSemanticSceneWindows(
+  scenes: MediaScene[],
+  windows: readonly { startMs: number; endMs: number }[],
+  settings: Parameters<typeof resolveTransitionOverlapMs>[1],
+): MediaScene[] | null {
+  if (windows.length !== scenes.length || windows.length === 0 || windows[0].startMs !== 0) return null;
+  if (windows.at(-1)!.endMs <= 0 || windows.some((window, index) => window.endMs <= window.startMs || (index > 0 && window.startMs !== windows[index - 1].endMs))) return null;
+  const incomingOverlaps = scenes.map((scene, index) => index === 0
+    ? 0
+    : resolveTransitionOverlapMs(scene.transition, settings, Number.MAX_SAFE_INTEGER));
+  const planned = scenes.map((scene, index) => {
+    const effectiveDurationMs = windows[index].endMs - windows[index].startMs;
+    const durationMs = effectiveDurationMs + (incomingOverlaps[index + 1] ?? 0);
+    return { ...scene, durationMs, endMs: durationMs };
+  });
+  // If an extremely short aligned scene cannot accommodate its incoming
+  // transition, retain the established proportional fallback rather than
+  // silently changing transition semantics.
+  if (planned.some((scene, index) => scene.durationMs < incomingOverlaps[index])) return null;
+  return planned;
 }
 
 function createId(prefix: string): string {

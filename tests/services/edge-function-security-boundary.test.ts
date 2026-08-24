@@ -156,6 +156,16 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(source).not.toMatch(/(?:ownerId|objectPath|bucket)\s*:\s*parsedBody\.value/);
   });
 
+  it('uses one timestamp-capable ElevenLabs response without trusting normalized alignment', () => {
+    const source = sourceFor('generate-voiceover');
+    expect(source).toContain('/with-timestamps');
+    expect(source).toContain('audio_base64');
+    expect(source).toContain('parseElevenLabsOriginalAlignment(providerPayload.alignment, text, durationMs)');
+    expect(source).toContain('MAX_TIMESTAMP_RESPONSE_BYTES');
+    expect(source).toContain('response.body.getReader()');
+    expect(source).not.toContain('normalized_alignment');
+  });
+
   it('keeps retired YouTube functions deterministically fail closed', () => {
     expect(manifest.retiredFailClosed).toEqual(['youtube-auth', 'youtube-publish']);
     for (const name of manifest.retiredFailClosed) {

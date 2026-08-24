@@ -3,6 +3,7 @@ import type { GeneratedSEOResult } from '@/lib/ai';
 import { apiClient } from '@/lib/api/client';
 import { supabase } from '@/lib/supabase';
 import { assertCurrentOwnerMediaIdentity, uploadPrivateMedia, type PrivateMediaClass, type PrivateMediaUpload } from '@/lib/mediaStorage';
+import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 
 import type {
   Scene,
@@ -75,6 +76,7 @@ interface VoiceoverResponse {
   media: MediaStorageObject;
   durationMs: number;
   playbackUrl?: string;
+  alignment?: unknown;
 }
 
 interface VoiceListResponse {
@@ -124,7 +126,7 @@ export async function generateScript(params: {
 export async function generateVoiceover(
   text: string,
   voiceId?: string,
-): Promise<{ media: MediaStorageObject; durationMs: number; playbackUrl?: string }> {
+): Promise<{ media: MediaStorageObject; durationMs: number; playbackUrl?: string; alignment?: NarrationCharacterAlignment }> {
   const data = await apiClient.post<VoiceoverResponse>(
     'generate-voiceover',
     {
@@ -140,7 +142,9 @@ export async function generateVoiceover(
   if (!data.media) throw new Error('Voice audio was not returned by the server.');
   if (!Number.isSafeInteger(data.durationMs) || data.durationMs <= 0) throw new Error('Voice audio duration was invalid.');
   assertCurrentOwnerMediaIdentity(data.media);
-  return { media: data.media, durationMs: data.durationMs, playbackUrl: data.playbackUrl };
+  const alignment = data.alignment === undefined ? undefined : normalizeNarrationCharacterAlignment(data.alignment, data.durationMs);
+  // Optional provider timing is never accepted without bounded validation.
+  return { media: data.media, durationMs: data.durationMs, playbackUrl: data.playbackUrl, ...(alignment ? { alignment } : {}) };
 
 }
 

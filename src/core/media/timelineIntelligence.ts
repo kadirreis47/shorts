@@ -20,9 +20,7 @@ export function buildIntelligentTimeline(
 ): TimelineBuildResult {
   let cursorMs = 0;
   const scenes = plannedScenes.map((scene, index) => {
-    const overlapBeforeMs = index === 0
-      ? 0
-      : normalizeTransitionOverlap(scene.transition, calculateOverlap(scene.transition.durationMs, settings.transitionOverlap, settings.fps), scene.durationMs, settings.fps);
+    const overlapBeforeMs = index === 0 ? 0 : resolveTransitionOverlapMs(scene.transition, settings, scene.durationMs);
     const startMs = Math.max(0, cursorMs - overlapBeforeMs);
     const endMs = startMs + scene.durationMs;
     cursorMs = endMs;
@@ -37,6 +35,20 @@ export function buildIntelligentTimeline(
   const markers = buildMarkers(scenes, durationMs, settings);
   const metrics = calculateTimelineMetrics(scenes, durationMs);
   return { scenes, durationMs, markers, metrics };
+}
+
+/** Bounded overlap used by both canonical timeline and narration-informed planning. */
+export function resolveTransitionOverlapMs(
+  transition: MediaTransition,
+  settings: Pick<MediaProjectSettings, 'transitionOverlap' | 'fps'>,
+  sceneDurationMs: number,
+): number {
+  return normalizeTransitionOverlap(
+    transition,
+    calculateOverlap(transition.durationMs, settings.transitionOverlap, settings.fps),
+    sceneDurationMs,
+    settings.fps,
+  );
 }
 
 function buildMarkers(

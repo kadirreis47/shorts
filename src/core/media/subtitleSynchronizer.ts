@@ -8,6 +8,7 @@ import type {
   SubtitleTimeline,
   SubtitleWord,
 } from './subtitleTypes';
+import { canonicalizeNarrationLineEndings, normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 
 const DEFAULT_STYLE: SubtitleStyle = {
   fontFamily: 'Inter',
@@ -48,8 +49,9 @@ export function buildSubtitleTimeline(
   // Slice 4 executes overlaps as hard cuts: the outgoing scene loses the
   // following scene's overlap. Subtitle cues must use those same visual
   // boundaries or an outgoing cue can appear over the incoming scene.
-  const subtitleScenes = scenes.map(effectiveSubtitleScene);
-  const words = canonical?.enabled === false ? [] : subtitleScenes.flatMap((scene) => alignSceneWords(scene, settings));
+  const subtitleScenes = resolveSubtitleTimingScenes(scenes);
+  const alignedWords = canonical?.enabled === false ? null : alignNarrationWords(subtitleScenes, settings, options.narrationAlignment, options.narrationDurationMs);
+  const words = canonical?.enabled === false ? [] : alignedWords ?? subtitleScenes.flatMap((scene) => alignSceneWords(scene, settings));
   const cues = buildCues(
     words,
     style,
@@ -59,7 +61,7 @@ export function buildSubtitleTimeline(
 
   return {
     enabled: canonical?.enabled ?? true,
-    source: 'estimated',
+    source: alignedWords ? 'word-timestamps' : 'estimated',
     language: options.language ?? 'tr',
     durationMs,
     words,
@@ -67,6 +69,230 @@ export function buildSubtitleTimeline(
     style,
     metrics: calculateSubtitleMetrics(words, cues, durationMs),
   };
+}
+
+/** The exact hard-cut scene windows used by canonical subtitle construction. */
+export function resolveSubtitleTimingScenes(scenes: readonly MediaScene[]): MediaScene[] {
+  return scenes.map(effectiveSubtitleScene);
+}
+
+/**
+ * Reconstructs words from provider character timing only after proving that
+ * the stored original text still exactly matches the ordered scene text.
+ * Any ambiguity deliberately returns null so the established estimator wins.
+ */
+export function alignNarrationWords(
+  scenes: readonly MediaScene[],
+  settings: MediaProjectSettings,
+  alignment: NarrationCharacterAlignment | undefined,
+  narrationDurationMs?: number,
+): SubtitleWord[] | null {
+  return assessNarrationAlignment(scenes, settings, alignment, narrationDurationMs).words;
+}
+
+export type NarrationAlignmentAssessmentReason =
+  | 'aligned' | 'missing' | 'alignment-invalid' | 'scene-text-empty'
+  | 'scene-text-mismatch' | 'scene-boundary-cross' | 'scene-window'
+  | 'word-duration' | 'no-words';
+
+export type NarrationAlignmentSceneWindowDetail =
+  | 'before-scene'
+  | 'after-scene'
+  | 'spans-scene-window';
+
+export interface NarrationAlignmentSceneWindowDiagnostic {
+  readonly detail: NarrationAlignmentSceneWindowDetail;
+  readonly sceneIndex: number;
+  readonly wordStartMs: number;
+  readonly wordEndMs: number;
+  readonly sceneStartMs: number;
+  readonly sceneEndMs: number;
+  readonly narrationDurationMs: number;
+}
+
+export interface NarrationAlignmentAssessment {
+  readonly words: SubtitleWord[] | null;
+  readonly reason: NarrationAlignmentAssessmentReason;
+  /** Bounded, content-free detail for packaged scene-window diagnostics. */
+  readonly sceneWindow?: NarrationAlignmentSceneWindowDiagnostic;
+}
+
+export interface NarrationSemanticSceneWindow {
+  readonly startMs: number;
+  readonly endMs: number;
+}
+
+interface CompatibleSceneAlignment {
+  readonly alignment: NarrationCharacterAlignment;
+  readonly characterOffsets: ReadonlyArray<{ start: number; end: number }>;
+}
+
+type CompatibleSceneAlignmentResult =
+  | { readonly compatible: CompatibleSceneAlignment }
+  | { readonly reason: NarrationAlignmentAssessmentReason };
+
+/**
+ * Produces contiguous semantic scene windows from a validated original-text
+ * alignment. This is upstream timeline input, never a subtitle-side rewrite.
+ */
+export function deriveNarrationSemanticSceneWindows(
+  scenes: readonly MediaScene[],
+  alignment: NarrationCharacterAlignment | undefined,
+  narrationDurationMs: number | undefined,
+): NarrationSemanticSceneWindow[] | null {
+  const resolved = resolveCompatibleSceneAlignment(scenes, alignment, narrationDurationMs);
+  if (!('compatible' in resolved) || !narrationDurationMs) return null;
+  const grouped = Array.from({ length: scenes.length }, () => [] as Array<{ startMs: number; endMs: number }>);
+  const unitOffsets = characterUnitOffsets(resolved.compatible.alignment.characters);
+  let cursor = 0;
+  while (cursor < resolved.compatible.alignment.characters.length) {
+    while (cursor < resolved.compatible.alignment.characters.length && /\s/u.test(resolved.compatible.alignment.characters[cursor])) cursor += 1;
+    if (cursor >= resolved.compatible.alignment.characters.length) break;
+    const startIndex = cursor;
+    while (cursor < resolved.compatible.alignment.characters.length && !/\s/u.test(resolved.compatible.alignment.characters[cursor])) cursor += 1;
+    const endIndex = cursor;
+    const startOffset = unitOffsets[startIndex];
+    const endOffset = endIndex === resolved.compatible.alignment.characters.length
+      ? resolved.compatible.alignment.characters.join('').length
+      : unitOffsets[endIndex];
+    const sceneIndex = resolved.compatible.characterOffsets.findIndex((range) => startOffset >= range.start && endOffset <= range.end);
+    if (sceneIndex < 0) return null;
+    grouped[sceneIndex].push({
+      startMs: resolved.compatible.alignment.characterStartTimesMs[startIndex],
+      endMs: resolved.compatible.alignment.characterEndTimesMs[endIndex - 1],
+    });
+  }
+  if (grouped.some((words) => words.length === 0)) return null;
+  const ranges = grouped.map((words) => ({ startMs: words[0].startMs, endMs: words[words.length - 1].endMs }));
+  if (ranges[0].startMs < 0 || ranges.at(-1)!.endMs > narrationDurationMs) return null;
+  const boundaries = [0];
+  for (let index = 0; index < ranges.length - 1; index += 1) {
+    const previousEnd = ranges[index].endMs;
+    const nextStart = ranges[index + 1].startMs;
+    if (previousEnd > nextStart) return null;
+    boundaries.push(Math.floor((previousEnd + nextStart) / 2));
+  }
+  boundaries.push(narrationDurationMs);
+  const windows = boundaries.slice(0, -1).map((startMs, index) => ({ startMs, endMs: boundaries[index + 1] }));
+  return windows.every((window) => window.endMs > window.startMs) ? windows : null;
+}
+
+/** Safe, content-free classification for packaged timing diagnostics. */
+export function assessNarrationAlignment(
+  scenes: readonly MediaScene[],
+  settings: MediaProjectSettings,
+  alignment: NarrationCharacterAlignment | undefined,
+  narrationDurationMs?: number,
+): NarrationAlignmentAssessment {
+  const resolved = resolveCompatibleSceneAlignment(scenes, alignment, narrationDurationMs);
+  if (!('compatible' in resolved)) return { words: null, reason: resolved.reason };
+  const safe = resolved.compatible.alignment;
+  const characterOffsets = resolved.compatible.characterOffsets;
+  const audioDurationMs = narrationDurationMs ?? Math.round(scenes[scenes.length - 1].endMs);
+
+  const frameMs = Math.max(1, Math.round(1000 / Math.max(1, settings.fps)));
+  const words: SubtitleWord[] = [];
+  let cursor = 0;
+  const unitOffsets = characterUnitOffsets(safe.characters);
+  const originalTextLength = safe.characters.reduce((total, character) => total + character.length, 0);
+  while (cursor < safe.characters.length) {
+    while (cursor < safe.characters.length && /\s/u.test(safe.characters[cursor])) cursor += 1;
+    if (cursor >= safe.characters.length) break;
+    const startIndex = cursor;
+    while (cursor < safe.characters.length && !/\s/u.test(safe.characters[cursor])) cursor += 1;
+    const endIndex = cursor;
+    const startOffset = unitOffsets[startIndex];
+    const endOffset = endIndex === safe.characters.length ? originalTextLength : unitOffsets[endIndex];
+    const sceneIndex = characterOffsets.findIndex((range) => startOffset >= range.start && endOffset <= range.end);
+    if (sceneIndex < 0) return { words: null, reason: 'scene-boundary-cross' }; // a word crossed a semantic scene boundary
+    const scene = scenes[sceneIndex];
+    const rawStart = safe.characterStartTimesMs[startIndex];
+    const rawEnd = safe.characterEndTimesMs[endIndex - 1];
+    // A bounded clip is safe only for tiny frame-edge disagreement between
+    // planned visual timing and measured narration timing.
+    const startsBeforeScene = rawStart < scene.startMs - 250;
+    const endsAfterScene = rawEnd > scene.endMs + 250;
+    if (startsBeforeScene || endsAfterScene) {
+      return {
+        words: null,
+        reason: 'scene-window',
+        sceneWindow: {
+          detail: startsBeforeScene && endsAfterScene ? 'spans-scene-window' : startsBeforeScene ? 'before-scene' : 'after-scene',
+          sceneIndex: scene.index,
+          wordStartMs: rawStart,
+          wordEndMs: rawEnd,
+          sceneStartMs: scene.startMs,
+          sceneEndMs: scene.endMs,
+          narrationDurationMs: audioDurationMs,
+        },
+      };
+    }
+    const startMs = Math.max(scene.startMs, Math.min(scene.endMs - frameMs, rawStart));
+    const endMs = Math.min(scene.endMs, Math.max(startMs + frameMs, rawEnd));
+    if (!Number.isFinite(startMs) || endMs <= startMs) return { words: null, reason: 'word-duration' };
+    const text = safe.characters.slice(startIndex, endIndex).join('');
+    words.push({
+      id: `subtitle-aligned-${scene.index}-${startIndex}`,
+      sceneId: scene.id,
+      text,
+      normalizedText: normalizeToken(text),
+      startMs,
+      endMs,
+      durationMs: endMs - startMs,
+      confidence: 1,
+      emphasis: scene.sourceScene.emphasis === true || isEmphasisToken(text),
+      punctuation: /[,.!?:;…]$/u.test(text),
+    });
+  }
+  return words.length > 0 ? { words, reason: 'aligned' } : { words: null, reason: 'no-words' };
+}
+
+function resolveCompatibleSceneAlignment(
+  scenes: readonly MediaScene[],
+  alignment: NarrationCharacterAlignment | undefined,
+  narrationDurationMs: number | undefined,
+): CompatibleSceneAlignmentResult {
+  if (!alignment || scenes.length === 0) return { reason: 'missing' };
+  // Alignment describes the durable narration MP3, not the frame-snapped
+  // visual timeline. At 30fps a visual end can be 4999.999..., which is not
+  // a valid duration contract for the canonical alignment normalizer.
+  const audioDurationMs = narrationDurationMs ?? Math.round(scenes[scenes.length - 1].endMs);
+  const safe = normalizeNarrationCharacterAlignment(alignment, audioDurationMs);
+  if (!safe) return { reason: 'alignment-invalid' };
+  const originalText = canonicalizeNarrationLineEndings(safe.characters.join(''));
+  const sceneTexts = scenes.map((scene) => canonicalizeNarrationLineEndings(scene.subtitleText || scene.text).trim());
+  if (!sceneTexts.every(Boolean)) return { reason: 'scene-text-empty' };
+  const characterOffsets = orderedSceneTextRanges(originalText, sceneTexts);
+  if (!characterOffsets) return { reason: 'scene-text-mismatch' };
+  return { compatible: { alignment: safe, characterOffsets } };
+}
+
+function characterUnitOffsets(characters: readonly string[]): number[] {
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const character of characters) { offsets.push(offset); offset += character.length; }
+  return offsets;
+}
+
+/**
+ * Maps scene text to the original narration request without rebuilding it
+ * using a new separator. Scene content must be exact and ordered; only the
+ * whitespace between complete scene strings may differ (LF/CRLF/space).
+ */
+function orderedSceneTextRanges(
+  originalText: string,
+  sceneTexts: readonly string[],
+): Array<{ start: number; end: number }> | null {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let cursor = 0;
+  for (const sceneText of sceneTexts) {
+    while (cursor < originalText.length && /\s/u.test(originalText[cursor])) cursor += 1;
+    if (!originalText.startsWith(sceneText, cursor)) return null;
+    ranges.push({ start: cursor, end: cursor + sceneText.length });
+    cursor += sceneText.length;
+  }
+  while (cursor < originalText.length && /\s/u.test(originalText[cursor])) cursor += 1;
+  return cursor === originalText.length ? ranges : null;
 }
 
 function effectiveSubtitleScene(scene: MediaScene): MediaScene {

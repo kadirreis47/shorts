@@ -110,6 +110,8 @@ export function buildSegmentConcatCommand(input: {
     height: manifest.render.height,
     style: manifest.subtitles.style,
     enabled: manifest.subtitles.enabled,
+    words: manifest.subtitles.words,
+    source: manifest.subtitles.source,
   });
 
   const needsFinalVisualComposition = manifest.timeline.scenes.length > 1 && manifest.timeline.scenes.some((scene) =>

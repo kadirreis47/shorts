@@ -2,6 +2,7 @@ import type { MediaStorageObject, Scene, VisualMode } from './types';
 import type { CaptionStyle, MotionStyle, TransitionStyle } from './videoRenderer';
 import type { AudioNarrationMode } from '@/core/media';
 import type { StudioProductionRecipeInput } from '@/core/media';
+import type { NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 
 export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'publish';
@@ -53,6 +54,7 @@ export interface StudioDraft {
     durationMs: number;
     scriptRevision: string;
     voiceId: string;
+    alignment?: NarrationCharacterAlignment;
   };
 }
 

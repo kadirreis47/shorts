@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { authorizeProtectedFunction, isBoundedString, readBoundedJson, safeFailure } from "../_shared/protected-function.ts";
+import { decodeBase64Audio, parseElevenLabsOriginalAlignment } from "../../../src/shared/voiceoverAlignment.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,6 +9,7 @@ const corsHeaders = {
 };
 
 interface VoiceoverRequest { text?: unknown; voiceId?: unknown }
+const MAX_TIMESTAMP_RESPONSE_BYTES = 34_500_000;
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -49,7 +51,7 @@ Deno.serve(async (req: Request) => {
     const voice = voiceId || "21m00Tcm4TlvDq8ikWAM";
 
     const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voice}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voice}/with-timestamps`,
       {
         method: "POST",
         headers: {
@@ -75,17 +77,23 @@ Deno.serve(async (req: Request) => {
     }
 
     const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    if (!contentType.startsWith("audio/mpeg")) {
+    if (!contentType.includes("application/json")) {
       console.error(JSON.stringify({ event: "edge-function.provider-invalid-audio", functionName: "generate-voiceover", contentType: contentType.slice(0, 80) }));
       return safeFailure("Voice provider returned an invalid audio response.", 502);
     }
-    const audioBuffer = await response.arrayBuffer();
-    const durationMs = mp3DurationMs(new Uint8Array(audioBuffer));
+    const providerPayload = await readTimestampPayload(response);
+    if (!providerPayload) return safeFailure("Voice provider returned an invalid audio response.", 502);
+    const audioBytes = decodeBase64Audio(providerPayload.audio_base64);
+    if (!audioBytes) return safeFailure("Voice provider returned invalid audio.", 502);
+    const durationMs = mp3DurationMs(audioBytes);
     if (durationMs === null) return safeFailure("Voice provider returned invalid audio.", 502);
+    // Alignment is optional enhancement data: invalid/mismatched timing must
+    // never discard a valid durable narration asset.
+    const alignment = parseElevenLabsOriginalAlignment(providerPayload.alignment, text, durationMs);
     const objectPath = `${authorization.userId}/voiceovers/${crypto.randomUUID()}.mp3`;
     const { error: uploadError } = await supabase.storage.from("media").upload(
       objectPath,
-      new Uint8Array(audioBuffer),
+      audioBytes,
       { contentType: "audio/mpeg", upsert: false },
     );
     if (uploadError) {
@@ -99,13 +107,37 @@ Deno.serve(async (req: Request) => {
     }
 
     return new Response(
-      JSON.stringify({ media: { bucket: "media", objectPath }, durationMs, playbackUrl: signed.signedUrl, format: "mp3" }),
+      JSON.stringify({ media: { bucket: "media", objectPath }, durationMs, playbackUrl: signed.signedUrl, format: "mp3", ...(alignment ? { alignment } : {}) }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch {
     return safeFailure("Voice generation could not be completed.", 500);
   }
 });
+
+async function readTimestampPayload(response: Response): Promise<{ audio_base64?: unknown; alignment?: unknown } | null> {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && (!/^\d+$/u.test(contentLength) || Number(contentLength) > MAX_TIMESTAMP_RESPONSE_BYTES)) return null;
+  if (!response.body) return null;
+  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > MAX_TIMESTAMP_RESPONSE_BYTES) { await reader.cancel(); return null; }
+      chunks.push(value);
+    }
+  } catch { return null; } finally { reader.releaseLock(); }
+  if (!size) return null;
+  const bytes = new Uint8Array(size); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  try {
+    const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as { audio_base64?: unknown; alignment?: unknown } : null;
+  } catch { return null; }
+}
 
 function mp3DurationMs(bytes: Uint8Array): number | null {
   if (bytes.length < 4 || bytes.length > 25_000_000) return null;

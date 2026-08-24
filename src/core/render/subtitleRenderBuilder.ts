@@ -1,4 +1,4 @@
-import type { MediaScene, SubtitleCue, SubtitleStyle } from '@/core/media';
+import type { MediaScene, SubtitleAlignmentSource, SubtitleCue, SubtitleStyle, SubtitleWord } from '@/core/media';
 
 export type SubtitleRenderPreset =
   | 'clean'
@@ -20,6 +20,8 @@ export function buildCanonicalSubtitleRenderPlan(input: {
   height: number;
   style: SubtitleStyle;
   enabled?: boolean;
+  words?: SubtitleWord[];
+  source?: SubtitleAlignmentSource;
 }): SubtitleRenderPlan {
   const { cues, width, height, style } = input;
   if (input.enabled === false) return { preset: 'clean', cueCount: 0, highlightedWordCount: 0 };
@@ -41,7 +43,7 @@ export function buildCanonicalSubtitleRenderPlan(input: {
       'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
       ...styleBlock(style, width, height), '', '[Events]',
       'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
-      ...validCues.flatMap((cue) => buildCueEvents(cue, cue.startMs, cue.endMs, preset, style)), '',
+      ...validCues.flatMap((cue) => buildCueEvents(cue, cue.startMs, cue.endMs, preset, style, input.words, input.source)), '',
     ].join('\n'),
     preset,
     cueCount: validCues.length,
@@ -59,6 +61,8 @@ export function buildSceneSubtitleRenderPlan(input: {
   width: number;
   height: number;
   style: SubtitleStyle;
+  words?: SubtitleWord[];
+  source?: SubtitleAlignmentSource;
 }): SubtitleRenderPlan {
   const { scene, cues, width, height, style } = input;
   const localCues = cues
@@ -83,7 +87,7 @@ export function buildSceneSubtitleRenderPlan(input: {
   const preset = choosePreset(style);
   const styles = styleBlock(style, width, height);
   const events = localCues.flatMap(({ cue, startMs, endMs }) =>
-    buildCueEvents(cue, startMs, endMs, preset, style),
+    buildCueEvents(cue, startMs, endMs, preset, style, input.words, input.source, scene.startMs),
   );
 
   return {
@@ -120,6 +124,9 @@ function buildCueEvents(
   endMs: number,
   preset: SubtitleRenderPreset,
   style: SubtitleStyle,
+  alignedWords?: SubtitleWord[],
+  source?: SubtitleAlignmentSource,
+  sceneOffsetMs = 0,
 ): string[] {
   const escaped = escapeAss(cue.text);
   const base = `Dialogue: 0,${assTime(startMs)},${assTime(endMs)},`;
@@ -128,19 +135,20 @@ function buildCueEvents(
     const tokens = tokenizeSubtitleText(cue.text);
     const words = splitWords(cue.text);
     if (words.length > 0) {
-      const durationCentiseconds = Math.max(
-        words.length,
-        Math.round((endMs - startMs) / 10),
-      );
-      const perWord = Math.max(1, Math.floor(durationCentiseconds / words.length));
+      const durations = source === 'word-timestamps'
+        ? alignedKaraokeDurations(cue, alignedWords, startMs + sceneOffsetMs, endMs + sceneOffsetMs)
+        : null;
+      const equalDurationCentiseconds = Math.max(words.length, Math.round((endMs - startMs) / 10));
+      const perWord = Math.max(1, Math.floor(equalDurationCentiseconds / words.length));
       let wordIndex = 0;
       const karaokeText = tokens
         .map((token) => {
           if (token.kind !== 'word') return escapeAss(token.value);
           const index = wordIndex++;
+          const duration = durations?.[index] ?? perWord;
           const pop = preset === 'viral'
-            ? `{\\k${perWord}\\t(0,110,\\fscx118\\fscy118)\\t(110,220,\\fscx100\\fscy100)}`
-            : `{\\k${perWord}}`;
+            ? `{\\k${duration}\\t(0,110,\\fscx118\\fscy118)\\t(110,220,\\fscx100\\fscy100)}`
+            : `{\\k${duration}}`;
           const emphasized = (cue.emphasisWordIds ?? []).includes((cue.wordIds ?? [])[index]);
           const highlight = emphasized ? `{\\c${assColor(style.highlightColor)}}` : '';
           const restore = emphasized ? `{\\c${assColor(style.textColor)}}` : '';
@@ -162,6 +170,23 @@ function buildCueEvents(
 
   const fade = style.animation === 'fade' ? '{\\fad(90,90)}' : '';
   return [`${base}Clean,,0,0,0,,${fade}${highlightText(cue, style) || escaped}`];
+}
+
+/** Uses real word onsets only for a validated aligned subtitle timeline. */
+function alignedKaraokeDurations(cue: SubtitleCue, words: SubtitleWord[] | undefined, startMs: number, endMs: number): number[] | null {
+  if (!words?.length || cue.wordIds.length === 0) return null;
+  const byId = new Map(words.map((word) => [word.id, word]));
+  const ordered = cue.wordIds.map((id) => byId.get(id));
+  if (ordered.some((word) => !word) || ordered.length !== splitWords(cue.text).length) return null;
+  const safe = ordered as SubtitleWord[];
+  if (safe.some((word, index) => !Number.isFinite(word.startMs) || !Number.isFinite(word.endMs) || word.endMs <= word.startMs || word.startMs < startMs || word.endMs > endMs || (index > 0 && word.startMs < safe[index - 1].startMs))) return null;
+  const total = Math.max(safe.length, Math.round((endMs - startMs) / 10));
+  const raw = safe.map((word, index) => Math.max(1, Math.round(((index + 1 < safe.length ? safe[index + 1].startMs : endMs) - word.startMs) / 10)));
+  const sum = raw.reduce((value, item) => value + item, 0);
+  const result = raw.map((value) => Math.max(1, Math.floor(value * total / sum)));
+  let remaining = total - result.reduce((value, item) => value + item, 0);
+  for (let index = 0; remaining > 0; index = (index + 1) % result.length, remaining -= 1) result[index] += 1;
+  return result;
 }
 
 function styleBlock(
