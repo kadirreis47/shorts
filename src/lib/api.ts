@@ -496,15 +496,58 @@ export async function analyzeScript(params: {
 // AI SUBTITLE TRANSLATION
 // ============================================================
 
+export type SubtitleTranslationUnavailableReason =
+  | 'provider-not-configured'
+  | 'provider-timeout'
+  | 'provider-error'
+  | 'malformed-provider-response'
+  | 'incomplete-translation'
+  | 'unchanged-result';
+
+export type SubtitleTranslationResult =
+  | { status: 'translated'; translatedSrt: string; language: string }
+  | { status: 'unavailable'; reason: SubtitleTranslationUnavailableReason };
+
+const translationUnavailableReasons = new Set<SubtitleTranslationUnavailableReason>([
+  'provider-not-configured',
+  'provider-timeout',
+  'provider-error',
+  'malformed-provider-response',
+  'incomplete-translation',
+  'unchanged-result',
+]);
+
+function parseSubtitleTranslationResult(value: unknown): SubtitleTranslationResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Subtitle translation returned an invalid result.');
+  }
+  const result = value as Record<string, unknown>;
+  if (result.status === 'unavailable' && typeof result.reason === 'string'
+    && translationUnavailableReasons.has(result.reason as SubtitleTranslationUnavailableReason)) {
+    return { status: 'unavailable', reason: result.reason as SubtitleTranslationUnavailableReason };
+  }
+  if (result.status === 'translated'
+    && typeof result.translatedSrt === 'string'
+    && result.translatedSrt.trim().length > 0
+    && result.translatedSrt.length <= 200_000
+    && typeof result.language === 'string'
+    && result.language.trim().length > 0
+    && result.language.length <= 64) {
+    return { status: 'translated', translatedSrt: result.translatedSrt, language: result.language };
+  }
+  throw new Error('Subtitle translation returned an invalid result.');
+}
+
 export async function translateSubtitles(params: {
   srt: string;
   targetLanguage: string;
-}): Promise<{ translatedSrt: string; language: string }> {
-  return apiClient.post<{ translatedSrt: string; language: string }>(
+}): Promise<SubtitleTranslationResult> {
+  const result = await apiClient.post<unknown>(
     'translate-subtitles',
     params,
     { retryCount: 0, timeoutMs: 60_000 },
   );
+  return parseSubtitleTranslationResult(result);
 }
 
 // ============================================================

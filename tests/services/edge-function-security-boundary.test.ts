@@ -133,6 +133,21 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(sourceFor('research-footage')).toContain('scenes.length > 12');
     expect(sourceFor('search-images')).toContain('perPage > 12');
     expect(sourceFor('translate-subtitles')).toContain('isBoundedString(srt, 50_000, true)');
+    expect(sourceFor('translate-subtitles')).toContain('PROVIDER_TIMEOUT_MS');
+    expect(sourceFor('translate-subtitles')).toContain('MAX_PROVIDER_RESPONSE_BYTES');
+    expect(sourceFor('translate-subtitles')).toContain('response.body.getReader()');
+    expect(sourceFor('translate-subtitles')).toContain('parseCanonicalSrtForTranslation(srt)');
+    expect(sourceFor('translate-subtitles')).toContain('reconstructTranslatedSrt(sourceCues, translated.translations)');
+    expect(sourceFor('translate-subtitles')).not.toContain('translations[i] ??');
+    expect(sourceFor('translate-subtitles')).toContain('event: "edge-function.subtitle-translation-result"');
+    expect(sourceFor('translate-subtitles')).toContain('providerStatusClass');
+    expect(sourceFor('translate-subtitles')).toContain('providerHttpStatus');
+    expect(sourceFor('translate-subtitles')).toContain('providerErrorType');
+    expect(sourceFor('translate-subtitles')).toContain('providerErrorCode');
+    expect(sourceFor('translate-subtitles')).toContain('providerErrorParam');
+    expect(sourceFor('translate-subtitles')).toContain('safeProviderErrorValue');
+    expect(sourceFor('translate-subtitles')).not.toContain('console.info(JSON.stringify({ srt');
+    expect(sourceFor('translate-subtitles')).not.toContain('error.message');
   });
 
   it('keeps provider failures and logs bounded', () => {

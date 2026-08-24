@@ -307,9 +307,12 @@ const en: Dict = {
 
   // AI Subtitle Translation
   'studio.subtitleTranslation': 'AI Subtitle Translation',
-  'studio.subtitleTranslationDesc': 'Translate subtitles into 14 languages for global reach',
+  'studio.subtitleTranslationDesc': 'Translate and download a separate SRT file. This does not change subtitles in the verified video.',
   'studio.translateSubtitles': 'Translate & Download',
   'studio.translating': 'Translating…',
+  'studio.subtitleTranslationUnavailable': 'Subtitle translation is currently unavailable. Try again later.',
+  'studio.subtitleTranslationIncomplete': 'Translation service did not return a complete result. Try again.',
+  'studio.subtitleTranslationNoChange': 'Translation produced no changes. Choose another language or try again.',
 
   // Videos
   'videos.title': 'Video Library',
@@ -1048,9 +1051,12 @@ const tr: Dict = {
 
   // AI Subtitle Translation
   'studio.subtitleTranslation': 'AI Altyazı Çevirisi',
-  'studio.subtitleTranslationDesc': 'Altyazıları küresel erişim için 14 dile çevir',
+  'studio.subtitleTranslationDesc': 'Ayrı bir çevrilmiş SRT dosyası oluşturup indirir. Doğrulanmış videodaki altyazıları değiştirmez.',
   'studio.translateSubtitles': 'Çevir ve İndir',
   'studio.translating': 'Çevriliyor…',
+  'studio.subtitleTranslationUnavailable': 'Altyazı çevirisi şu anda kullanılamıyor. Daha sonra tekrar deneyin.',
+  'studio.subtitleTranslationIncomplete': 'Çeviri hizmeti tam bir sonuç döndürmedi. Tekrar deneyin.',
+  'studio.subtitleTranslationNoChange': 'Çeviri değişiklik üretmedi. Başka bir dil seçin veya tekrar deneyin.',
 
   'videos.title': 'Video Kütüphanesi',
   'videos.count': '{channels} kanalda {count} video',

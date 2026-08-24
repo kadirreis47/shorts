@@ -11,7 +11,7 @@ import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalo
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
   searchImages, searchVideos, ingestPexelsImage, ingestPexelsVideo, discardPexelsVideoQuarantine,
-  generateAIImage, researchFootage, translateSubtitles,
+  generateAIImage, researchFootage, translateSubtitles, type SubtitleTranslationUnavailableReason,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
 import {
@@ -66,6 +66,14 @@ type Step = StudioStep;
 
 function defaultChannelId(channels: readonly CanonicalChannelIdentity[]) {
   return channels.length === 1 ? channels[0].id : '';
+}
+
+function safeSubtitleDownloadName(value: string): string {
+  const normalized = [...value.trim()]
+    .map((character) => character.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(character) ? '-' : character)
+    .join('')
+    .replace(/\s+/gu, ' ');
+  return normalized.slice(0, 120) || 'video';
 }
 
 function providerActionError(action: string, error: unknown): string {
@@ -317,7 +325,6 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [analyzingScript, setAnalyzingScript] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [targetLanguage, setTargetLanguage] = useState('es');
-  const [translatedSrt, setTranslatedSrt] = useState('');
 
   const [voices, setVoices] = useState<Voice[]>([]);
   const [selectedVoice, setSelectedVoice] = useState('');
@@ -979,11 +986,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     try {
       const srt = await canonicalSubtitleSrt();
       const result = await translateSubtitles({ srt, targetLanguage });
-      setTranslatedSrt(result.translatedSrt);
+      if (result.status === 'unavailable') {
+        setError(translationUnavailableMessage(result.reason));
+        return;
+      }
       const blob = new Blob([result.translatedSrt], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.download = `subtitles-${targetLanguage}-${title || 'video'}.srt`;
+      link.download = `subtitles-${targetLanguage}-${safeSubtitleDownloadName(title)}.srt`;
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
@@ -992,6 +1002,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     } finally {
       setTranslating(false);
     }
+  }
+
+  function translationUnavailableMessage(reason: SubtitleTranslationUnavailableReason): string {
+    if (reason === 'unchanged-result') return t('studio.subtitleTranslationNoChange');
+    if (reason === 'incomplete-translation' || reason === 'malformed-provider-response') {
+      return t('studio.subtitleTranslationIncomplete');
+    }
+    return t('studio.subtitleTranslationUnavailable');
   }
 
   async function handleGenerateSceneImage(sceneIndex: number) {

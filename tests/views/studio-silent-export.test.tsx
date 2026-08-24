@@ -140,7 +140,7 @@ describe('Studio canonical silent export', () => {
     mocks.buildProject.mockResolvedValue({
       subtitleTimeline: canonicalSrtTimeline(),
     });
-    mocks.translateSubtitles.mockResolvedValue({ translatedSrt: '1\n00:00:02,043 --> 00:00:02,345\nTranslated', language: 'en' });
+    mocks.translateSubtitles.mockResolvedValue({ status: 'translated', translatedSrt: '1\n00:00:02,043 --> 00:00:02,345\nTranslated', language: 'English' });
     const createObjectURL = vi.fn(() => 'blob:translated-srt');
     URL.createObjectURL = createObjectURL;
     URL.revokeObjectURL = vi.fn();
@@ -161,6 +161,27 @@ describe('Studio canonical silent export', () => {
       srt: '1\n00:00:02,043 --> 00:00:02,345\nCanonical cue\n',
       targetLanguage: 'en',
     });
+    await act(async () => { root.unmount(); });
+  });
+
+  it('does not download an unavailable translation and explains that the SRT is download-only', async () => {
+    mocks.buildProject.mockResolvedValue({ subtitleTimeline: canonicalSrtTimeline() });
+    mocks.translateSubtitles.mockResolvedValue({ status: 'unavailable', reason: 'unchanged-result' });
+    const createObjectURL = vi.fn(() => 'blob:should-not-exist');
+    URL.createObjectURL = createObjectURL;
+    saveStudioDraft({ ...silentDraft(), step: 'style', targetLanguage: 'en' });
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const translate = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Translate & Download'));
+    await act(async () => { translate?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Translation produced no changes. Choose another language or try again.');
+    expect(container.textContent).toContain('This does not change subtitles in the verified video.');
     await act(async () => { root.unmount(); });
   });
 
