@@ -469,38 +469,6 @@ export async function generateSEO(params: {
 }
 
 // ============================================================
-// SRT SUBTITLE GENERATION
-// ============================================================
-
-export function generateSRT(scenes: Scene[], totalDuration?: number): string {  let srt = '';
-  let index = 1;
-  let currentTime = 0;
-
-  for (const scene of scenes) {
-    const duration = scene.duration || 5;
-    const startTime = currentTime;
-    const endTime = currentTime + duration;
-
-    srt += `${index}\n`;
-    srt += `${formatSRTTime(startTime)} --> ${formatSRTTime(endTime)}\n`;
-    srt += `${scene.text}\n\n`;
-
-    index++;
-    currentTime = endTime;
-  }
-
-  return srt;
-}
-
-function formatSRTTime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 1000);
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
-}
-
-// ============================================================
 // AI HOOK GENERATOR
 // ============================================================
 

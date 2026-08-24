@@ -14,6 +14,7 @@ export * from './providers';
 
 export * from './subtitleTypes';
 export * from './subtitleSynchronizer';
+export * from './subtitleSrt';
 export * from './audioTypes';
 export * from './audioComposer';
 export * from './brandingTypes';

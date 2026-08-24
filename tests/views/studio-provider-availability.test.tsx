@@ -31,7 +31,7 @@ vi.mock('@/lib/api', () => ({
   searchImages: mocks.searchImages, searchVideos: mocks.searchVideos, ingestPexelsImage: mocks.ingestPexelsImage,
   ingestPexelsVideo: mocks.ingestPexelsVideo, discardPexelsVideoQuarantine: mocks.discardPexelsVideoQuarantine,
   generateAIImage: vi.fn(), researchFootage: mocks.researchFootage,
-  generateSRT: vi.fn(() => '1\\n00:00:00,000 --> 00:00:05,000\\nScene'), translateSubtitles: mocks.translateSubtitles,
+  translateSubtitles: mocks.translateSubtitles,
 }));
 vi.mock('@/core/di', () => ({ applicationContainer: { resolve: () => mocks.aiService }, dependencyTokens: { aiApplicationService: Symbol('ai'), mediaEngine: Symbol('media') } }));
 vi.mock('@/lib/videoRenderer', () => ({ renderVideo: vi.fn() }));

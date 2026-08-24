@@ -11,7 +11,7 @@ import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalo
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
   searchImages, searchVideos, ingestPexelsImage, ingestPexelsVideo, discardPexelsVideoQuarantine,
-  generateAIImage, researchFootage, generateSRT, translateSubtitles,
+  generateAIImage, researchFootage, translateSubtitles,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
 import {
@@ -24,7 +24,7 @@ import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
-import { assessNarrationAlignment, compileStudioProductionRecipeV1, normalizeStudioProductionRecipeV1, resolveSubtitleTimingScenes } from '@/core/media';
+import { assessNarrationAlignment, compileStudioProductionRecipeV1, normalizeStudioProductionRecipeV1, resolveSubtitleTimingScenes, serializeCanonicalSubtitleSrt } from '@/core/media';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
 import { enqueueActiveExport, loadExportCapabilities, planActiveExport, waitForActiveExport } from '@/services/exportIntelligenceController';
@@ -39,6 +39,7 @@ import {
   createPrivateMediaSignedUrl,
   resolvePrivateSceneMedia,
   toDurableScenes,
+  type ValidatedMediaOwnerContext,
 } from '@/lib/mediaStorage';
 import { isCurrentValidatedOwnerContext } from '@/auth/identity';
 import { isApprovedCatalogMusicUrl, isValidCatalogMusicBlob, isValidCatalogMusicResponse, MUSIC_TRACKS } from '@/lib/catalogMusic';
@@ -872,16 +873,69 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
   }
 
-  function handleExportSRT() {
+  function currentProductionRecipe(ownerContext: ValidatedMediaOwnerContext, showSubtitlesForBuild = showSubtitles) {
+    assertCurrentMediaOwnerContext(ownerContext);
+    return normalizeStudioProductionRecipeV1({
+      projectId: directorProjectId,
+      title: title || topic || 'Studio video',
+      scenes: toDurableScenes(scenes),
+      captionStyle,
+      transitionStyle,
+      motionStyle,
+      // SRT remains a separate downloadable subtitle artifact even when
+      // burn-in visibility is off. It still uses the canonical cue planner.
+      showSubtitles: showSubtitlesForBuild,
+      captionTextColor,
+      captionHighlightColor,
+      voiceoverMode,
+      narration: hasCanonicalNarration && narration ? {
+        storage: narration.storage,
+        durationMs: narration.durationMs,
+        scriptRevision: narration.scriptRevision,
+        voiceId: narration.voiceId,
+        ...(narration.alignment ? { alignment: narration.alignment } : {}),
+      } : null,
+      musicId,
+      musicStorage,
+      musicVolume,
+      beatSync,
+      watermarkText,
+      watermarkPosition,
+      visualMode,
+      selectedStyleId,
+      characterProfileId,
+      useBroll,
+      characterName,
+      characterAppearance,
+      characterArtStyle,
+    }, ownerContext);
+  }
+
+  async function canonicalSubtitleSrt(): Promise<string> {
+    const ownerContext = captureValidatedMediaOwnerContext();
+    assertCurrentMediaOwnerContext(ownerContext);
+    const recipe = currentProductionRecipe(ownerContext, true);
+    const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
+    const build = await mediaEngine.buildProject(compileStudioProductionRecipeV1(recipe));
+    assertCurrentMediaOwnerContext(ownerContext);
+    return serializeCanonicalSubtitleSrt(build.subtitleTimeline ?? build.project.subtitles);
+  }
+
+  async function handleExportSRT() {
     if (scenes.length === 0) return;
-    const srt = generateSRT(scenes);
-    const blob = new Blob([srt], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.download = `subtitles-${title || 'video'}.srt`;
-    link.href = url;
-    link.click();
-    URL.revokeObjectURL(url);
+    setError('');
+    try {
+      const srt = await canonicalSubtitleSrt();
+      const blob = new Blob([srt], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = `subtitles-${title || 'video'}.srt`;
+      link.href = url;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError('Subtitles could not be exported. Try again.');
+    }
   }
 
   async function handleGenerateHooks() {
@@ -923,7 +977,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setTranslating(true);
     setError('');
     try {
-      const srt = generateSRT(scenes);
+      const srt = await canonicalSubtitleSrt();
       const result = await translateSubtitles({ srt, targetLanguage });
       setTranslatedSrt(result.translatedSrt);
       const blob = new Blob([result.translatedSrt], { type: 'text/plain' });
@@ -1508,38 +1562,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const ownerContext = captureValidatedMediaOwnerContext();
     try {
       assertCurrentMediaOwnerContext(ownerContext);
-      const recipe = normalizeStudioProductionRecipeV1({
-        projectId: directorProjectId,
-        title: title || topic || 'Studio video',
-        scenes: toDurableScenes(scenes),
-        captionStyle,
-        transitionStyle,
-        motionStyle,
-        showSubtitles,
-        captionTextColor,
-        captionHighlightColor,
-        voiceoverMode,
-        narration: hasCanonicalNarration && narration ? {
-          storage: narration.storage,
-          durationMs: narration.durationMs,
-          scriptRevision: narration.scriptRevision,
-          voiceId: narration.voiceId,
-          ...(narration.alignment ? { alignment: narration.alignment } : {}),
-        } : null,
-        musicId,
-        musicStorage,
-        musicVolume,
-        beatSync,
-        watermarkText,
-        watermarkPosition,
-        visualMode,
-        selectedStyleId,
-        characterProfileId,
-        useBroll,
-        characterName,
-        characterAppearance,
-        characterArtStyle,
-      }, ownerContext);
+      const recipe = currentProductionRecipe(ownerContext);
       const buildInput = compileStudioProductionRecipeV1(recipe);
       const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
       const build = await mediaEngine.buildProject(buildInput);

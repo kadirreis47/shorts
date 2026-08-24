@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   waitForActiveExport: vi.fn(),
   renderVideo: vi.fn(),
   uploadMedia: vi.fn(),
+  translateSubtitles: vi.fn(),
   getProviderStatus: vi.fn(async () => ({ openai: { configured: true }, elevenlabs: { configured: true }, pexels: { configured: true } })),
   from: vi.fn(() => ({
     select: vi.fn(() => Object.assign(Promise.resolve({ data: [] }), {
@@ -45,7 +46,7 @@ vi.mock('@/lib/api', () => ({
   generateVoiceover: vi.fn(), getProviderStatus: mocks.getProviderStatus, listVoices: vi.fn(async () => []), uploadMedia: mocks.uploadMedia,
   searchImages: vi.fn(async () => []),
   searchVideos: vi.fn(async () => []), ingestPexelsImage: vi.fn(), ingestPexelsVideo: vi.fn(), discardPexelsVideoQuarantine: vi.fn(), generateAIImage: vi.fn(), researchFootage: vi.fn(),
-  generateSRT: vi.fn(), translateSubtitles: vi.fn(),
+  translateSubtitles: mocks.translateSubtitles,
 }));
 vi.mock('@/lib/videoRenderer', () => ({ renderVideo: mocks.renderVideo }));
 
@@ -132,6 +133,34 @@ describe('Studio canonical silent export', () => {
     expect(container.textContent).toContain(title);
     expect(container.textContent).toContain(status);
     expect(container.textContent).toContain(detail);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('sends the canonical subtitle cue timeline to translated SRT instead of estimating scene durations', async () => {
+    mocks.buildProject.mockResolvedValue({
+      subtitleTimeline: canonicalSrtTimeline(),
+    });
+    mocks.translateSubtitles.mockResolvedValue({ translatedSrt: '1\n00:00:02,043 --> 00:00:02,345\nTranslated', language: 'en' });
+    const createObjectURL = vi.fn(() => 'blob:translated-srt');
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    saveStudioDraft({ ...silentDraft(), step: 'style', targetLanguage: 'en' });
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const translate = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('Translate & Download'));
+    await act(async () => { translate?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    expect(mocks.buildProject).toHaveBeenCalledWith(expect.objectContaining({
+      subtitles: expect.objectContaining({ enabled: true }),
+    }));
+    expect(mocks.translateSubtitles).toHaveBeenCalledWith({
+      srt: '1\n00:00:02,043 --> 00:00:02,345\nCanonical cue\n',
+      targetLanguage: 'en',
+    });
     await act(async () => { root.unmount(); });
   });
 
@@ -401,5 +430,18 @@ function silentDraft(): StudioDraft {
     characterAppearance: '', characterArtStyle: 'realistic', characterProfileId: '', watermarkText: '',
     watermarkPosition: 'bottom-right', showSubtitles: true, captionTextColor: '', captionHighlightColor: '',
     beatSync: false, voiceoverMode: 'none', selectedVoice: '', targetLanguage: 'tr',
+  };
+}
+
+function canonicalSrtTimeline() {
+  return {
+    enabled: true,
+    source: 'word-timestamps' as const,
+    language: 'tr',
+    durationMs: 7_497,
+    words: [],
+    cues: [{ id: 'cue', sceneId: 'scene', text: 'Canonical cue', startMs: 2_043, endMs: 2_345, durationMs: 302, wordIds: [], lineCount: 1, emphasisWordIds: [] }],
+    style: {},
+    metrics: {},
   };
 }

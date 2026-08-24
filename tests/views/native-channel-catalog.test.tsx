@@ -33,7 +33,6 @@ vi.mock('@/lib/api', () => ({
   searchVideos: vi.fn(async () => []),
   generateAIImage: vi.fn(),
   researchFootage: vi.fn(),
-  generateSRT: vi.fn(),
   translateSubtitles: vi.fn(),
 }));
 
