@@ -171,7 +171,7 @@ const en: Dict = {
   'studio.renderVideo': 'Render Video',
   'studio.renderYourVideo': 'Render your video',
   'studio.renderDesc': 'Your video will be rendered canonically in 9:16 vertical format at 1080x1920{audio}.',
-  'studio.recipeExportNotice': 'Subtitle visibility, the four caption presets, text/highlight colors, bounded image motion, Crossfade/None transitions, text watermarks, and selected background music volume are rendered canonically. Browser TTS is local preview only. Beat sync, other preview transition styles, video-source motion, logo overlays, and advanced caption styling remain preview-only.',
+  'studio.recipeExportNotice': 'Subtitle visibility, the four caption presets, text/highlight colors, bounded image motion, Crossfade/None transitions, text watermarks, and selected background music volume are rendered canonically. Browser TTS is local preview only. Beat sync is not available in verified exports yet. Other preview transition styles, video-source motion, logo overlays, and advanced caption styling remain preview-only.',
   'studio.previewOnly': 'Preview only',
   'studio.rendered': 'rendered',
   'studio.videoReady': 'Video Ready',
@@ -285,7 +285,9 @@ const en: Dict = {
 
   // Beat Sync
   'studio.beatSync': 'Beat Sync',
-  'studio.beatSyncDesc': 'Sync scene transitions to music beats',
+  'studio.beatSyncComingLater': 'Coming later',
+  'studio.beatSyncUnavailable': 'Beat synchronization is not available in verified exports yet.',
+  'studio.beatSyncDesc': 'Beat synchronization is not available in verified exports yet.',
 
   // AI Hook Generator
   'studio.hookGenerator': 'AI Hook Generator',
@@ -910,7 +912,7 @@ const tr: Dict = {
   'studio.renderVideo': 'Videoyu İşle',
   'studio.renderYourVideo': 'Videonuzu işleyin',
   'studio.renderDesc': 'Videonuz 9:16 dikey formatta 1080x1920 çözünürlükte kanonik olarak işlenecek{audio}.',
-  'studio.recipeExportNotice': 'Altyazı görünürlüğü, dört altyazı stili, metin/vurgu renkleri, sınırlı görsel hareketi, Crossfade/None geçişleri, metin filigranları ve seçilen arka plan müziği ses seviyesi kanonik olarak işlenir. Tarayıcı TTS yalnızca yerel önizleme içindir. Beat senkronu, diğer önizleme geçiş stilleri, video kaynak hareketi, logo katmanları ve gelişmiş altyazı stilleri yalnızca önizleme amaçlıdır.',
+  'studio.recipeExportNotice': 'Altyazı görünürlüğü, dört altyazı stili, metin/vurgu renkleri, sınırlı görsel hareketi, Crossfade/None geçişleri, metin filigranları ve seçilen arka plan müziği ses seviyesi kanonik olarak işlenir. Tarayıcı TTS yalnızca yerel önizleme içindir. Ritim senkronizasyonu henüz doğrulanmış final dışa aktarımlarda kullanılamıyor. Diğer önizleme geçiş stilleri, video kaynak hareketi, logo katmanları ve gelişmiş altyazı stilleri yalnızca önizleme amaçlıdır.',
   'studio.previewOnly': 'Yalnızca önizleme',
   'studio.rendered': 'işlendi',
   'studio.videoReady': 'Video Hazır',
@@ -1023,8 +1025,10 @@ const tr: Dict = {
   'studio.captionHighlightColor': 'Altyazı Vurgu Rengi',
 
   // Beat Sync
-  'studio.beatSync': 'Beat Senkronizasyonu',
-  'studio.beatSyncDesc': 'Sahne geçişlerini müzik beatlerine senkronize et',
+  'studio.beatSync': 'Ritim Senkronu',
+  'studio.beatSyncComingLater': 'Yakında',
+  'studio.beatSyncUnavailable': 'Ritim senkronizasyonu henüz doğrulanmış final dışa aktarımlarda kullanılamıyor.',
+  'studio.beatSyncDesc': 'Ritim senkronizasyonu henüz doğrulanmış final dışa aktarımlarda kullanılamıyor.',
 
   // AI Hook Generator
   'studio.hookGenerator': 'AI Hook Oluşturucu',

@@ -109,6 +109,32 @@ describe('Studio canonical silent export', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it.each([
+    ['en', 'Beat Sync', 'Coming later', 'Beat synchronization is not available in verified exports yet.'],
+    ['tr', 'Ritim Senkronu', 'Yakında', 'Ritim senkronizasyonu henüz doğrulanmış final dışa aktarımlarda kullanılamıyor.'],
+  ])('shows Beat Sync as unavailable for verified export in %s', async (language, title, status, detail) => {
+    window.localStorage.setItem('sf-lang', language);
+    saveStudioDraft({
+      ...silentDraft(),
+      step: 'style',
+      musicId: 'ambient',
+      musicStorage: { bucket: 'media', objectPath: 'studio-test-user/music/00000000-0000-4000-8000-000000000000.mp3' },
+    });
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const unavailable = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.getAttribute('aria-label') === detail);
+    expect(unavailable).toBeDefined();
+    expect(unavailable?.disabled).toBe(true);
+    expect(container.textContent).toContain(title);
+    expect(container.textContent).toContain(status);
+    expect(container.textContent).toContain(detail);
+    await act(async () => { root.unmount(); });
+  });
+
   it('blocks an ambiguous Browser TTS final export before the canonical engine', async () => {
     saveStudioDraft({ ...silentDraft(), step: 'render', voiceoverMode: 'browser' });
     container = document.createElement('div');

@@ -246,11 +246,25 @@ describe('StudioProductionRecipeV1', () => {
     expect(() => normalizeStudioProductionRecipeV1(foreign, ownerContext())).toThrow(/not owned/i);
   });
 
-  it('changes final recipe identity for music-only edits while leaving scene segment semantics music-neutral', () => {
+  it('keeps legacy Beat Sync intent out of canonical recipe and media-project identity', () => {
+    const enabled = recipeInput();
+    const disabled = { ...recipeInput(), beatSync: false };
+    const normalizedEnabled = normalizeStudioProductionRecipeV1(enabled, ownerContext());
+    const normalizedDisabled = normalizeStudioProductionRecipeV1(disabled, ownerContext());
+
+    expect(normalizedEnabled.identity).toBe(normalizedDisabled.identity);
+    expect(normalizedEnabled.recipe).toEqual(normalizedDisabled.recipe);
+    expect(compileStudioProductionRecipeV1(normalizedEnabled)).toEqual(compileStudioProductionRecipeV1(normalizedDisabled));
+  });
+
+  it('changes final recipe identity for canonical music-only edits while leaving scene segment semantics music-neutral', () => {
     const baseline = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
-    const changed = recipeInput();
-    changed.musicVolume = .4;
-    expect(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity).not.toBe(baseline.identity);
+    const changedVolume = recipeInput();
+    changedVolume.musicVolume = .4;
+    const changedAsset = recipeInput();
+    changedAsset.musicStorage = { bucket: 'media', objectPath: 'owner-a/music/00000000-0000-4000-8000-000000000099.mp3' };
+    expect(normalizeStudioProductionRecipeV1(changedVolume, ownerContext()).identity).not.toBe(baseline.identity);
+    expect(normalizeStudioProductionRecipeV1(changedAsset, ownerContext()).identity).not.toBe(baseline.identity);
   });
 
   it('compiles bounded Recipe V1 subtitle intent into canonical media input', () => {
@@ -536,11 +550,12 @@ describe('StudioProductionRecipeV1', () => {
   });
 
   it('reconstructs an equivalent normalized recipe from durable draft fields without persisting execution data', () => {
-    const draft = { ...recipeInput(), version: 1, savedAt: '2026-08-17T00:00:00.000Z', step: 'render', channelId: 'channel', topic: 'topic', niche: '', tone: 'engaging', duration: 30, hook: '', script: 'script', cta: '', targetLanguage: 'tr' } as StudioDraft;
+    const draft = { ...recipeInput(), beatSync: true, version: 1, savedAt: '2026-08-17T00:00:00.000Z', step: 'render', channelId: 'channel', topic: 'topic', niche: '', tone: 'engaging', duration: 30, hook: '', script: 'script', cta: '', targetLanguage: 'tr' } as StudioDraft;
     const direct = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
     const restored = normalizeStudioProductionRecipeV1(studioProductionRecipeInputFromDraft(draft), ownerContext());
 
     expect(restored.recipe).toEqual(direct.recipe);
+    expect(studioProductionRecipeInputFromDraft(draft).beatSync).toBe(true);
     expect(JSON.stringify(restored.recipe)).not.toMatch(/blob:|base64|storage\/v1\/object\/sign/i);
   });
 });

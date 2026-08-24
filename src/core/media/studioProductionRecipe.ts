@@ -85,8 +85,6 @@ export interface StudioRecipeNarrationV1 {
 export interface StudioRecipeMusicV1 {
   readonly storage: MediaStorageObject;
   readonly volume: number;
-  /** Persisted preview intent; beat synchronization is not canonical in V1.1. */
-  readonly beatSync: boolean;
 }
 
 export type StudioRecipeWatermarkPosition = CanonicalWatermarkPosition;
@@ -106,6 +104,7 @@ export interface StudioProductionRecipeInput {
   musicId: string;
   musicStorage?: MediaStorageObject | null;
   musicVolume: number;
+  /** Legacy draft intent retained for compatibility; excluded from Recipe V1 output. */
   beatSync: boolean;
   watermarkText: string;
   watermarkPosition: string;
@@ -182,7 +181,7 @@ export function normalizeStudioProductionRecipeV1(
     audio: {
       narrationMode: voiceMode,
       narration,
-      music: normalizeMusic(input.musicId, input.musicStorage ?? null, input.musicVolume, input.beatSync, safeOwnerId),
+      music: normalizeMusic(input.musicId, input.musicStorage ?? null, input.musicVolume, safeOwnerId),
     },
     branding: {
       watermark: normalizeWatermark(input.watermarkText, input.watermarkPosition),
@@ -407,13 +406,13 @@ function assertOwnedStorage(storage: MediaStorageObject, ownerId: string): void 
   }
 }
 
-function normalizeMusic(id: string, storage: MediaStorageObject | null, volume: number, beatSync: boolean, ownerId: string): StudioProductionRecipeV1['audio']['music'] {
+function normalizeMusic(id: string, storage: MediaStorageObject | null, volume: number, ownerId: string): StudioProductionRecipeV1['audio']['music'] {
   const safeId = optionalText(id);
   if (!safeId) return null;
   if (!storage) throw new Error('Selected background music requires a durable private media identity.');
   assertOwnedStorage(storage, ownerId);
   if (!/\/music\/[0-9a-f-]+\.mp3$/i.test(storage.objectPath)) throw new Error('Production recipe music identity is invalid.');
-  return { storage: cloneStorage(storage), volume: boundedNumber(volume, 0, 1, 'Music volume'), beatSync: Boolean(beatSync) };
+  return { storage: cloneStorage(storage), volume: boundedNumber(volume, 0, 1, 'Music volume') };
 }
 
 function normalizeWatermark(text: string, position: string): StudioProductionRecipeV1['branding']['watermark'] {

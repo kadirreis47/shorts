@@ -359,9 +359,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     title, hook, script, cta, scenes: toDurableScenes(scenes).map(({ imageProvenance: _imageProvenance, videoProvenance: _videoProvenance, ...scene }) => scene), captionStyle, transitionStyle,
     motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
     characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
-    showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice,
+    showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice,
     narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId, ...(narration.alignment ? { alignment: narration.alignment } : {}) } : null,
-  }), [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, beatSync, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
+  }), [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
 
   const currentCompletedExport = completedExport?.revision === canonicalStudioRevision && isVerifiedExportJob(completedExport.job)
     ? completedExport.job
@@ -2104,13 +2104,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     <input type="range" min="0" max="1" step="0.05" value={musicVolume}
                       onChange={(e) => setMusicVolume(Number(e.target.value))}
                       className="mt-1 w-full accent-slate-900" />
-                    <div className="mt-2 flex items-center gap-3 rounded-lg border border-slate-200 p-2">
-                      <button onClick={() => setBeatSync(!beatSync)}
-                        className={classNames('relative h-5 w-10 rounded-full transition-colors', beatSync ? 'bg-emerald-500' : 'bg-slate-200')}>
-                        <span className={classNames('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform', beatSync ? 'translate-x-5' : 'translate-x-0.5')} />
+                    <div className="mt-2 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                      <button type="button" disabled aria-label={t('studio.beatSyncUnavailable')}
+                        className="relative h-5 w-10 cursor-not-allowed rounded-full bg-slate-200 opacity-70">
+                        <span className="absolute top-0.5 h-4 w-4 translate-x-0.5 rounded-full bg-white shadow" />
                       </button>
                       <div>
-                        <p className="text-xs font-medium text-slate-700">{t('studio.beatSync')}</p>
+                        <p className="text-xs font-medium text-slate-700">{t('studio.beatSync')} <span className="ml-1 rounded bg-slate-200 px-1 py-0.5 text-[10px] font-semibold text-slate-600">{t('studio.beatSyncComingLater')}</span></p>
                         <p className="text-xs text-slate-500">{t('studio.beatSyncDesc')}</p>
                       </div>
                     </div>
