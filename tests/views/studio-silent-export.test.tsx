@@ -136,6 +136,34 @@ describe('Studio canonical silent export', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it.each([
+    ['en', 'Coming later', 'A saved transition is unavailable in V1.1. Verified export uses None.'],
+    ['tr', 'Yakında', 'Kaydedilmiş geçiş V1.1’de kullanılamaz. Doğrulanmış dışa aktarma None kullanır.'],
+  ])('keeps only None and Crossfade selectable while truthfully disabling legacy transitions in %s', async (language, comingLater, legacyDetail) => {
+    window.localStorage.setItem('sf-lang', language);
+    saveStudioDraft({ ...silentDraft(), step: 'style', transitionStyle: 'slide' });
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const buttons = Array.from(container.querySelectorAll('button'));
+    const byText = (text: string) => buttons.find((button) => button.textContent?.startsWith(text));
+    expect(byText('None')?.disabled).toBe(false);
+    expect(byText('Crossfade')?.disabled).toBe(false);
+    await act(async () => { byText('Crossfade')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent).not.toContain(legacyDetail);
+    for (const label of ['Slide', 'Zoom Punch', 'Fade to Black', 'Glitch', 'Shake', 'Whip Pan']) {
+      const choice = byText(label);
+      expect(choice?.disabled).toBe(true);
+      expect(choice?.textContent).toContain(comingLater);
+      await act(async () => { choice?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    }
+    expect(container.textContent).not.toContain(legacyDetail);
+    expect(byText('Crossfade')?.className).toContain('border-slate-900');
+    await act(async () => { root.unmount(); });
+  });
+
   it('sends the canonical subtitle cue timeline to translated SRT instead of estimating scene durations', async () => {
     mocks.buildProject.mockResolvedValue({
       subtitleTimeline: canonicalSrtTimeline(),

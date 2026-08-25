@@ -96,11 +96,60 @@ describe('StudioProductionRecipeV1', () => {
     const baseline = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
     const changed = recipeInput();
     changed.motionStyle = 'zoom_in';
-    changed.transitionStyle = 'slide';
+    changed.transitionStyle = 'none';
     changed.captionTextColor = '#FF00AA';
     changed.watermarkText = '@ShortsFlow';
 
     expect(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity).not.toBe(baseline.identity);
+  });
+
+  it('normalizes every unsupported legacy transition to the effective None/cut identity', async () => {
+    const none = recipeInput();
+    none.transitionStyle = 'none';
+    const normalizedNone = normalizeStudioProductionRecipeV1(none, ownerContext());
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const media = createMediaEngine(bus, createAssetProviderEngine(bus));
+    const noneBuild = await media.buildProject(compileStudioProductionRecipeV1(normalizedNone));
+    const fingerprint = (manifest: Awaited<typeof noneBuild>['manifest']) => createRenderFingerprint({
+      manifest,
+      preset: RENDER_PRESET,
+      adapterId: 'ffmpeg',
+    });
+
+    for (const transitionStyle of ['slide', 'zoom', 'fadeblack', 'glitch', 'shake', 'whippan'] as const) {
+      const legacy = recipeInput();
+      legacy.transitionStyle = transitionStyle;
+      const normalizedLegacy = normalizeStudioProductionRecipeV1(legacy, ownerContext());
+      const legacyBuild = await media.buildProject(compileStudioProductionRecipeV1(normalizedLegacy));
+
+      expect(normalizedLegacy.recipe.composition.transition).toBe('none');
+      expect(normalizedLegacy.identity).toBe(normalizedNone.identity);
+      expect(compileStudioProductionRecipeV1(normalizedLegacy)).toEqual(compileStudioProductionRecipeV1(normalizedNone));
+      expect(legacyBuild.manifest.timeline.scenes.map((scene) => ({
+        durationMs: scene.durationMs,
+        startMs: scene.startMs,
+        endMs: scene.endMs,
+        overlapBeforeMs: scene.overlapBeforeMs,
+        overlapAfterMs: scene.overlapAfterMs,
+        transition: scene.transition,
+      }))).toEqual(noneBuild.manifest.timeline.scenes.map((scene) => ({
+        durationMs: scene.durationMs,
+        startMs: scene.startMs,
+        endMs: scene.endMs,
+        overlapBeforeMs: scene.overlapBeforeMs,
+        overlapAfterMs: scene.overlapAfterMs,
+        transition: scene.transition,
+      })));
+      const manifestWithEquivalentLegacyRecipe = structuredClone(noneBuild.manifest);
+      manifestWithEquivalentLegacyRecipe.metadata.productionRecipe = normalizedLegacy;
+      expect(await fingerprint(manifestWithEquivalentLegacyRecipe)).toBe(await fingerprint(noneBuild.manifest));
+    }
+
+    const crossfade = recipeInput();
+    crossfade.transitionStyle = 'crossfade';
+    const normalizedCrossfade = normalizeStudioProductionRecipeV1(crossfade, ownerContext());
+    expect(normalizedCrossfade.identity).not.toBe(normalizedNone.identity);
+    expect(compileStudioProductionRecipeV1(normalizedCrossfade).transition).toEqual({ type: 'crossfade' });
   });
 
   it.each([

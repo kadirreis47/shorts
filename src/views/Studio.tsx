@@ -24,7 +24,7 @@ import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
-import { assessNarrationAlignment, compileStudioProductionRecipeV1, normalizeStudioProductionRecipeV1, resolveSubtitleTimingScenes, serializeCanonicalSubtitleSrt } from '@/core/media';
+import { assessNarrationAlignment, canonicalizeStudioRecipeTransition, compileStudioProductionRecipeV1, isStudioRecipeCanonicalTransition, normalizeStudioProductionRecipeV1, resolveSubtitleTimingScenes, serializeCanonicalSubtitleSrt } from '@/core/media';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
 import { enqueueActiveExport, loadExportCapabilities, planActiveExport, waitForActiveExport } from '@/services/exportIntelligenceController';
@@ -364,7 +364,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   );
 
   const canonicalStudioRevision = useMemo(() => JSON.stringify({
-    title, hook, script, cta, scenes: toDurableScenes(scenes).map(({ imageProvenance: _imageProvenance, videoProvenance: _videoProvenance, ...scene }) => scene), captionStyle, transitionStyle,
+    title, hook, script, cta, scenes: toDurableScenes(scenes).map(({ imageProvenance: _imageProvenance, videoProvenance: _videoProvenance, ...scene }) => scene), captionStyle,
+    transitionStyle: canonicalizeStudioRecipeTransition(transitionStyle),
     motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
     characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
     showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice,
@@ -2049,14 +2050,17 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
               <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">{t('studio.transitions')}</label>
               <div className="mt-2 flex flex-wrap gap-2">
                 {TRANSITION_STYLES.map((transition) => (
-                  <button key={transition.key} onClick={() => setTransitionStyle(transition.key)}
+                  <button key={transition.key} onClick={transition.canonical ? () => setTransitionStyle(transition.key) : undefined} disabled={!transition.canonical}
                     className={classNames(
-                      'rounded-lg border px-3 py-2 text-sm transition-colors',
-                      transitionStyle === transition.key ? 'border-slate-900 bg-slate-50 font-medium text-slate-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50',
+                      'rounded-lg border px-3 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
+                      transition.canonical && transitionStyle === transition.key ? 'border-slate-900 bg-slate-50 font-medium text-slate-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50',
                     )}>
-                    {transition.label}{!transition.canonical && <span className="ml-1 text-[10px] text-slate-400">{t('studio.previewOnly')}</span>}
+                    {transition.label}{!transition.canonical && <span className="ml-1 text-[10px] text-slate-400">{t('studio.transitionComingLater')}</span>}
                   </button>
                 ))}
+                {!isStudioRecipeCanonicalTransition(transitionStyle) && (
+                  <p className="w-full text-xs text-amber-700" role="status">{t('studio.transitionLegacyUnavailable')}</p>
+                )}
               </div>
             </div>
 

@@ -6,6 +6,8 @@ import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment 
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
+/** The only transition intents with distinct verified-export output in V1.1. */
+export type StudioRecipeCanonicalTransition = 'crossfade' | 'none';
 export type StudioRecipeMotion = 'kenburns' | 'pan' | 'zoom_in' | 'zoom_out' | 'static';
 export type StudioRecipeVoiceMode = 'elevenlabs' | 'browser' | 'none';
 export type StudioRecipeExportSupport = 'supported' | 'partial' | 'unsupported' | 'preview-only';
@@ -17,7 +19,7 @@ export interface StudioProductionRecipeV1 {
   readonly scenes: readonly StudioProductionRecipeSceneV1[];
   readonly composition: {
     readonly motion: StudioRecipeMotion;
-    readonly transition: StudioRecipeTransition;
+    readonly transition: StudioRecipeCanonicalTransition;
   };
   readonly subtitles: {
     readonly enabled: boolean;
@@ -163,6 +165,7 @@ export function normalizeStudioProductionRecipeV1(
   const narration = input.narration === null ? null : normalizeNarration(input.narration, safeOwnerId);
   if (voiceMode !== 'elevenlabs' && narration) throw new Error('Only ElevenLabs mode may contain canonical narration.');
 
+  const transitionIntent = enumValue(input.transitionStyle, TRANSITIONS, 'transition style');
   const recipe: StudioProductionRecipeV1 = {
     version: 1,
     projectId,
@@ -170,7 +173,9 @@ export function normalizeStudioProductionRecipeV1(
     scenes: normalizeScenes(input.scenes, safeOwnerId),
     composition: {
       motion: enumValue(input.motionStyle, MOTIONS, 'motion style'),
-      transition: enumValue(input.transitionStyle, TRANSITIONS, 'transition style'),
+      // Legacy preview-only values remain accepted at the draft boundary, but
+      // must not enter Recipe V1 identity because they all render as a cut.
+      transition: canonicalizeStudioRecipeTransition(transitionIntent),
     },
     subtitles: {
       enabled: Boolean(input.showSubtitles),
@@ -247,10 +252,19 @@ export function compileStudioProductionRecipeV1(
   };
 }
 
-function recipeTransitionToCanonical(transition: StudioRecipeTransition): CanonicalTransitionType {
-  // V1.1 canonical execution intentionally supports only a reliable crossfade.
-  // Existing richer preview choices remain durable Recipe intent but export as a
-  // truthful hard cut until a later, dedicated transition slice supports them.
+export function canonicalizeStudioRecipeTransition(
+  transition: StudioRecipeTransition,
+): StudioRecipeCanonicalTransition {
+  return transition === 'crossfade' ? 'crossfade' : 'none';
+}
+
+export function isStudioRecipeCanonicalTransition(
+  transition: StudioRecipeTransition,
+): transition is StudioRecipeCanonicalTransition {
+  return transition === 'crossfade' || transition === 'none';
+}
+
+function recipeTransitionToCanonical(transition: StudioRecipeCanonicalTransition): CanonicalTransitionType {
   return transition === 'crossfade' ? 'crossfade' : 'cut';
 }
 
