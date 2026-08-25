@@ -395,6 +395,7 @@ describe('StudioProductionRecipeV1', () => {
 
     expect(plan.preset).toBe('clean');
     expect(plan.assContent).toContain('{\\c&H0000FF00&}Focus{\\c&H00FFFFFF&}');
+    expect(plan.assContent).not.toContain('\\k');
   });
 
   it.each(['highlight', 'karaoke'] as const)('selects a deterministic emphasized word for ordinary %s Recipe text', async (preset) => {

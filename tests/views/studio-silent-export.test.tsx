@@ -164,6 +164,27 @@ describe('Studio canonical silent export', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it.each([
+    ['en', 'Highlight Box', 'Deterministic colored emphasis', 'Active word'],
+    ['tr', 'Vurgu Kutusu', 'Belirli kelimeleri renkli vurgu ile öne çıkarır', 'Aktif kelime'],
+  ])('keeps Highlight selectable with truthful static emphasis copy in %s', async (language, title, description, misleadingClaim) => {
+    window.localStorage.setItem('sf-lang', language);
+    saveStudioDraft({ ...silentDraft(), step: 'style', captionStyle: 'classic' });
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const highlight = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.startsWith(title));
+    expect(highlight?.disabled).toBe(false);
+    expect(highlight?.textContent).toContain(description);
+    expect(container.textContent).not.toContain(misleadingClaim);
+    await act(async () => { highlight?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(highlight?.className).toContain('border-slate-900');
+    await act(async () => { root.unmount(); });
+  });
+
   it('sends the canonical subtitle cue timeline to translated SRT instead of estimating scene durations', async () => {
     mocks.buildProject.mockResolvedValue({
       subtitleTimeline: canonicalSrtTimeline(),
