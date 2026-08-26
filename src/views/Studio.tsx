@@ -1585,23 +1585,25 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       const buildInput = compileStudioProductionRecipeV1(recipe);
       const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
       const build = await mediaEngine.buildProject(buildInput);
-      // Packaged-smoke diagnostic only: establishes whether provider alignment
+      // Development-only diagnostic: establishes whether provider alignment
       // survived through the canonical timeline without exposing any script or
       // private-media data.
       const subtitleTimeline = build.subtitleTimeline ?? build.project.subtitles;
       const audioTimeline = build.audioTimeline ?? build.project.audio;
       const alignmentAssessment = assessNarrationAlignment(resolveSubtitleTimingScenes(build.project.scenes), build.project.settings, narration?.alignment, narration?.durationMs);
-      console.info('[subtitle-timing]', {
-        source: subtitleTimeline?.source ?? 'unavailable',
-        alignmentEntryCount: narration?.alignment?.characters.length ?? 0,
-        firstAlignedWordStartMs: subtitleTimeline?.words[0]?.startMs ?? null,
-        firstCueStartMs: subtitleTimeline?.cues[0]?.startMs ?? null,
-        firstSceneStartMs: build.project.scenes[0]?.startMs ?? null,
-        canonicalNarrationStartMs: audioTimeline?.voice[0]?.startMs ?? null,
-        alignmentFallbackReason: subtitleTimeline?.source === 'word-timestamps' ? null : alignmentAssessment.reason,
-        alignmentSceneWindow: subtitleTimeline?.source === 'word-timestamps' ? null : alignmentAssessment.sceneWindow ?? null,
-      });
-      console.info(`[subtitle-timing-result] source=${subtitleTimeline?.source ?? 'unavailable'} fallback=${subtitleTimeline?.source === 'word-timestamps' ? 'none' : alignmentAssessment.reason} window=${alignmentAssessment.sceneWindow?.detail ?? 'none'}`);
+      if (import.meta.env.DEV) {
+        console.info('[subtitle-timing]', {
+          source: subtitleTimeline?.source ?? 'unavailable',
+          alignmentEntryCount: narration?.alignment?.characters.length ?? 0,
+          firstAlignedWordStartMs: subtitleTimeline?.words[0]?.startMs ?? null,
+          firstCueStartMs: subtitleTimeline?.cues[0]?.startMs ?? null,
+          firstSceneStartMs: build.project.scenes[0]?.startMs ?? null,
+          canonicalNarrationStartMs: audioTimeline?.voice[0]?.startMs ?? null,
+          alignmentFallbackReason: subtitleTimeline?.source === 'word-timestamps' ? null : alignmentAssessment.reason,
+          alignmentSceneWindow: subtitleTimeline?.source === 'word-timestamps' ? null : alignmentAssessment.sceneWindow ?? null,
+        });
+        console.info(`[subtitle-timing-result] source=${subtitleTimeline?.source ?? 'unavailable'} fallback=${subtitleTimeline?.source === 'word-timestamps' ? 'none' : alignmentAssessment.reason} window=${alignmentAssessment.sceneWindow?.detail ?? 'none'}`);
+      }
       if (!build.renderReady || build.validation.renderReady !== true) {
         throw new Error(canonicalMediaValidationError(build));
       }

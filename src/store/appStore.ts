@@ -19,7 +19,7 @@ const initialState = {
   lifecycle: 'idle' as AppLifecycle,
   initialized: false,
   offline: false,
-  version: '1.0.0',
+  version: '1.1.0',
   error: null,
 };
 

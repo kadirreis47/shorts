@@ -128,7 +128,9 @@ function createFFmpegBridge(ipcRenderer) {
 function installPreloadBridge({ contextBridge, ipcRenderer, platform = process.platform, version = process.versions.electron }) {
   const api = Object.freeze({
     platform,
+    // This is the Electron runtime version retained for compatibility.
     version,
+    appVersion: () => ipcRenderer.invoke('app:get-version'),
     ffmpeg: createFFmpegBridge(ipcRenderer),
     youtube: createYouTubeBridge(ipcRenderer),
   });

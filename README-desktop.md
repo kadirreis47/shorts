@@ -25,7 +25,7 @@
    npm run electron:build
    ```
 
-6. When it finishes, look inside the `release` folder. You will find an installer file called `ShortsFlow Setup 1.0.0.exe`. Double-click it to install and run the app.
+6. When it finishes, look inside the `release` folder. You will find an installer file called `ShortsFlow Setup 1.1.0.exe`. Double-click it to install and run the app.
 
 ## To run in development mode (without building .exe)
 
@@ -38,5 +38,5 @@ This opens the app window with developer tools visible.
 ## Troubleshooting
 
 - If `npm install` fails, make sure Node.js is installed (run `node -v` to check).
-- If the build fails on the icon, replace `build/icon.png` with any 256x256 PNG image.
+- The release build requires the approved release-owner icon at `build/icon.png`; do not substitute Electron's default icon or arbitrary artwork.
 - The app needs an internet connection to reach the Supabase database.

@@ -28,16 +28,19 @@ interface ElectronIpcMock {
 }
 
 describe('Electron FFmpeg IPC güvenliği', () => {
-  it('installs the packaged-safe preload bridge without sibling module loading', () => {
+  it('installs the packaged-safe preload bridge without sibling module loading', async () => {
     const ipc: ElectronIpcMock = { invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
     const contextBridge = { exposeInMainWorld: vi.fn() };
-    const api = installPreloadBridge({ contextBridge, ipcRenderer: ipc, platform: 'win32', version: '43.2.0' }) as { youtube: Record<string, unknown> };
+    const api = installPreloadBridge({ contextBridge, ipcRenderer: ipc, platform: 'win32', version: '43.2.0' }) as { youtube: Record<string, unknown>; version: string; appVersion: () => Promise<unknown> };
     expect(contextBridge.exposeInMainWorld).toHaveBeenCalledWith('electronAPI', api);
     expect(Object.keys(api.youtube).sort()).toEqual([...ALLOWED_YOUTUBE_API_KEYS].sort());
     expect(api.youtube).not.toHaveProperty('resolveExecutionCredential');
     expect(JSON.stringify(api)).not.toContain('accessToken');
     expect(JSON.stringify(api)).not.toContain('refreshToken');
     expect(JSON.stringify(api)).not.toMatch(/client_?secret/i);
+    expect(api.version).toBe('43.2.0');
+    await api.appVersion();
+    expect(ipc.invoke).toHaveBeenCalledWith('app:get-version');
     const preloadSource = readFileSync(path.resolve('electron/preload.cjs'), 'utf8');
     expect(preloadSource).not.toContain("require('./preload-api.cjs')");
     expect(preloadSource).not.toMatch(/client_?secret/i);

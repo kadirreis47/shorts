@@ -79,6 +79,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  ipcMain.handle('app:get-version', () => app.getVersion());
   registerFFmpegHandlers();
   registerManualVideoProbeHandler(ipcMain);
   registerYouTubeHandlers();

@@ -72,6 +72,13 @@ async function runBootstrap(userId: string, generation: number) {
   const startedAt = new Date().toISOString();
   assertCurrentBootstrap(userId, generation);
   appStore.beginBootstrap();
+  void globalThis.window?.electronAPI?.appVersion?.()
+    .then((version) => {
+      if (generation === bootstrapGeneration && bootstrapUserId === userId && /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(version)) {
+        useAppStore.getState().setVersion(version);
+      }
+    })
+    .catch(() => undefined);
   appStore.setOffline(!navigator.onLine || !isSupabaseConfigured);
   await eventBus.emit('app:bootstrap-started', { startedAt });
 

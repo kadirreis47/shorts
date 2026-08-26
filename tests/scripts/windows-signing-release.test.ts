@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -12,6 +12,27 @@ const { assertValidAuthenticodeResults } = require('../../scripts/verify-windows
 };
 
 describe('public Windows signing release contract', () => {
+  it('uses the V1.1 product metadata as the installer version authority', () => {
+    const packageJson = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8'));
+    const lockfile = JSON.parse(readFileSync(path.resolve('package-lock.json'), 'utf8'));
+
+    expect(packageJson).toMatchObject({
+      name: 'shortsflow',
+      version: '1.1.0',
+      author: 'ShortsFlow',
+      description: 'YouTube Shorts Automation Studio',
+      repository: { type: 'git', url: 'https://github.com/kadirreis47/shorts.git' },
+      build: { appId: 'com.shortsflow.studio', productName: 'ShortsFlow' },
+    });
+    expect(lockfile).toMatchObject({ version: '1.1.0', packages: { '': { version: '1.1.0' } } });
+  });
+
+  it('keeps the approved Windows icon source present for runtime and installer conversion', () => {
+    const packageJson = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8'));
+    expect(packageJson.build.win.icon).toBe('build/icon.png');
+    expect(existsSync(path.resolve(packageJson.build.win.icon))).toBe(true);
+  });
+
   it('fails closed when signing credentials are absent or incomplete', () => {
     expect(() => validatePublicWindowsSigning({})).toThrow(/WIN_CSC_LINK.*WIN_CSC_KEY_PASSWORD/i);
     expect(() => validatePublicWindowsSigning({ WIN_CSC_LINK: 'certificate-reference' })).toThrow(/both WIN_CSC_LINK and WIN_CSC_KEY_PASSWORD/i);
@@ -25,11 +46,11 @@ describe('public Windows signing release contract', () => {
   it('requires valid Authenticode status and a signer certificate for every public artifact', () => {
     expect(() => assertValidAuthenticodeResults([
       { artifact: 'ShortsFlow.exe', status: 'NotSigned', signerPresent: false },
-      { artifact: 'ShortsFlow Setup 1.0.0.exe', status: 'Valid', signerPresent: true },
+      { artifact: 'ShortsFlow Setup 1.1.0.exe', status: 'Valid', signerPresent: true },
     ])).toThrow(/not Authenticode-valid/i);
     expect(assertValidAuthenticodeResults([
       { artifact: 'ShortsFlow.exe', status: 'Valid', signerPresent: true },
-      { artifact: 'ShortsFlow Setup 1.0.0.exe', status: 'Valid', signerPresent: true },
+      { artifact: 'ShortsFlow Setup 1.1.0.exe', status: 'Valid', signerPresent: true },
     ])).toHaveLength(2);
     expect(() => assertValidAuthenticodeResults([
       { artifact: 'other.exe', status: 'Valid', signerPresent: true },

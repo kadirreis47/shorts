@@ -50,7 +50,10 @@ declare global {
   interface Window {
     electronAPI?: {
       platform: string;
+      /** Electron runtime version, not the ShortsFlow release version. */
       version: string;
+      /** Packaged application version sourced from Electron app metadata. */
+      appVersion?(): Promise<string>;
       ffmpeg: FFmpegBridge;
       youtube: Partial<YouTubePublishingClient> & {
         establishOwnerContext?(accessToken: string): Promise<{ ok: true; result: { ready: true; ownerId: string; changed: boolean } } | { ok: false; error: { code: string; message: string } }>;
