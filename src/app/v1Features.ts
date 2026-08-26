@@ -42,6 +42,7 @@ export const V1_EDGE_FUNCTIONS = [
   'search-images',
   'search-videos',
   'translate-subtitles',
+  'visual-query-planner',
 ] as const;
 
 export type V1EdgeFunction = (typeof V1_EDGE_FUNCTIONS)[number];

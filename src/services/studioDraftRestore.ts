@@ -1,4 +1,4 @@
-import type { StudioDraft } from '@/lib/studioDraft';
+import { normalizeStudioDraft, type StudioDraft } from '@/lib/studioDraft';
 import type { ProjectDraft } from '@/store/types';
 
 export interface StudioDraftRestoreDecision {
@@ -16,10 +16,11 @@ export function resolveRestoredStudioChannelId(
 }
 
 export function createStudioProjectDraft(draft: StudioDraft): ProjectDraft {
-  const projectId = draft.projectId?.trim();
+  const normalized = normalizeStudioDraft(draft);
+  const projectId = normalized.projectId?.trim();
   if (!projectId) throw new Error('Studio draft project ID is required for autosave.');
-  return { id: `studio-${projectId}`, projectId, title: draft.title || 'Untitled Studio Project',
-    updatedAt: draft.savedAt, data: { ...draft } };
+  return { id: `studio-${projectId}`, projectId, title: normalized.title || 'Untitled Studio Project',
+    updatedAt: normalized.savedAt, data: { ...normalized } };
 }
 
 export function resolveStudioDraftRestore(input: {

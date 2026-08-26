@@ -19,6 +19,8 @@ export interface ProviderMediaProvenance {
 }
 
 export interface Scene {
+  /** Stable draft-only identity for advisory visual-planning metadata; never Recipe/render authority. */
+  visualPlanningId?: string;
   text: string;
   duration: number;
   visual: string;

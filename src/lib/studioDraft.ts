@@ -3,6 +3,11 @@ import type { CaptionStyle, MotionStyle, TransitionStyle } from './videoRenderer
 import type { AudioNarrationMode } from '@/core/media';
 import type { StudioProductionRecipeInput } from '@/core/media';
 import type { NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
+import {
+  ensureSceneVisualPlanningIds,
+  normalizeVisualIntelligencePlanningState,
+  type VisualIntelligencePlanningState,
+} from '@/core/visual-intelligence';
 import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 
 export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'publish';
@@ -56,6 +61,8 @@ export interface StudioDraft {
     voiceId: string;
     alignment?: NarrationCharacterAlignment;
   };
+  /** Advisory editorial planning only; excluded from Recipe V1 and render identity. */
+  visualIntelligence?: VisualIntelligencePlanningState;
 }
 
 const STORAGE_KEY = 'shortsflow.studio.draft.v1';
@@ -66,18 +73,38 @@ export function loadStudioDraft(): StudioDraft | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StudioDraft>;
     if (parsed.version !== 1 || typeof parsed.savedAt !== 'string') return null;
-    return parsed as StudioDraft;
+    return normalizeStudioDraft(parsed as StudioDraft);
   } catch {
     return null;
   }
 }
 
-export function saveStudioDraft(draft: StudioDraft): void {
-  writeUserScopedLocalStorage(STORAGE_KEY, JSON.stringify(draft));
+export function saveStudioDraft(draft: StudioDraft): StudioDraft {
+  const normalized = normalizeStudioDraft(draft);
+  writeUserScopedLocalStorage(STORAGE_KEY, JSON.stringify(normalized));
+  return normalized;
 }
 
 export function clearStudioDraft(): void {
   removeUserScopedLocalStorage(STORAGE_KEY);
+}
+
+/** Preserves V1.1 drafts while giving future async planning a stable scene binding. */
+export function normalizeStudioDraft(draft: StudioDraft): StudioDraft {
+  const { visualIntelligence: rawVisualIntelligence, ...rest } = draft;
+  const scenes = ensureSceneVisualPlanningIds(Array.isArray(draft.scenes) ? draft.scenes : []);
+  let visualIntelligence: VisualIntelligencePlanningState | undefined;
+  try {
+    visualIntelligence = normalizeVisualIntelligencePlanningState(rawVisualIntelligence);
+  } catch {
+    // Advisory planning must fail closed without making an otherwise durable V1.1 draft unreadable.
+    visualIntelligence = undefined;
+  }
+  return {
+    ...rest,
+    scenes,
+    ...(visualIntelligence ? { visualIntelligence } : {}),
+  };
 }
 
 export function resolveStudioAudioNarrationMode(

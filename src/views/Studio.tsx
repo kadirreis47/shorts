@@ -6,12 +6,13 @@ import {
   Activity, Languages, Eye, EyeOff, ZoomIn, ZoomOut, Save, RotateCcw, FolderOpen, ExternalLink,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { isApiError } from '@/lib/api/client';
 import type { MediaStorageObject, ProviderMediaProvenance, Scene, Voice, PexelsVideo, VisualMode, VisualStyle, CharacterProfile } from '@/lib/types';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
   searchImages, searchVideos, ingestPexelsImage, ingestPexelsVideo, discardPexelsVideoQuarantine,
-  generateAIImage, researchFootage, translateSubtitles, type SubtitleTranslationUnavailableReason,
+  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, type SubtitleTranslationUnavailableReason,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
 import {
@@ -22,6 +23,10 @@ import { AIPipelineMonitor } from '@/components/AIPipelineMonitor';
 import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
+import { canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
+import { createSceneVisualBinding, discoverVisualCandidates, ensureSceneVisualPlanningIds, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState } from '@/core/visual-intelligence';
+import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
+import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { assessNarrationAlignment, canonicalizeStudioRecipeTransition, compileStudioProductionRecipeV1, isStudioRecipeCanonicalTransition, normalizeStudioProductionRecipeV1, resolveSubtitleTimingScenes, serializeCanonicalSubtitleSrt } from '@/core/media';
@@ -83,6 +88,17 @@ function providerActionError(action: string, error: unknown): string {
 }
 
 class StaleVisualSelectionError extends Error {}
+
+type PremiumVisualDiscoveryDiagnosticCode =
+  | 'VISUAL_PLANNER_REQUEST_FAILED'
+  | 'VISUAL_PLANNER_RESULT_REJECTED'
+  | 'VISUAL_DISCOVERY_PROVIDER_UNAVAILABLE'
+  | 'VISUAL_DISCOVERY_UNEXPECTED';
+
+function premiumVisualDiscoveryDiagnostic(code: PremiumVisualDiscoveryDiagnosticCode, detail: { apiCode?: string; failedQueryCount?: number; queryCount?: number } = {}): void {
+  // Deliberately bounded: no authored scene data, owner/project identity, URLs, or provider payloads.
+  console.info('[premium-visual-discovery]', { code, ...detail });
+}
 
 type ResearchClientDiagnosticCode =
   | 'RESEARCH_EMPTY'
@@ -246,7 +262,7 @@ const VISUAL_MODES: { key: VisualMode; labelKey: string; descKey: string; icon: 
 ];
 
 export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: StudioProps) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const authenticatedUserId = useAuthSessionStore((state) => state.user?.id ?? null);
   const aiService = useMemo(
     () => applicationContainer.resolve(dependencyTokens.aiApplicationService),
@@ -279,6 +295,25 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [script, setScript] = useState('');
   const [cta, setCta] = useState('');
   const [scenes, setScenes] = useState<Scene[]>([]);
+  const scenesRef = useRef<Scene[]>([]);
+  // No UI in Slice 1; preserve advisory plans across draft hydration for later Visual Intelligence slices.
+  const [visualIntelligence, setVisualIntelligence] = useState<VisualIntelligencePlanningState | undefined>();
+  const [visualShortlists, setVisualShortlists] = useState<Record<string, VisualDiscoveryShortlist>>({});
+  const [selectedVisualCandidates, setSelectedVisualCandidates] = useState<Record<string, string>>({});
+  const selectedVisualCandidatesRef = useRef<Record<string, string>>({});
+  const visualPlanningRef = useRef<VisualIntelligencePlanningState | undefined>();
+  const [visualDiscoveryBusy, setVisualDiscoveryBusy] = useState<Set<string>>(new Set());
+  const [visualApplyBusy, setVisualApplyBusy] = useState<Set<string>>(new Set());
+  const visualProviderRef = useRef(createPexelsVisualDiscoveryProvider());
+  const visualDiscoveryGenerations = useRef(new Map<string, number>());
+  const visualApplyGenerations = useRef(new Map<string, number>());
+  const visualApplyActive = useRef(new Set<string>());
+  const visualSessionEpoch = useRef(0);
+  const directorProjectIdRef = useRef(directorProjectId);
+  useEffect(() => { scenesRef.current = scenes; }, [scenes]);
+  useEffect(() => { selectedVisualCandidatesRef.current = selectedVisualCandidates; }, [selectedVisualCandidates]);
+  useEffect(() => { visualPlanningRef.current = visualIntelligence; }, [visualIntelligence]);
+  useEffect(() => { directorProjectIdRef.current = directorProjectId; }, [directorProjectId]);
 
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('karaoke');
   const [transitionStyle, setTransitionStyle] = useState<TransitionStyle>('crossfade');
@@ -364,7 +399,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   );
 
   const canonicalStudioRevision = useMemo(() => JSON.stringify({
-    title, hook, script, cta, scenes: toDurableScenes(scenes).map(({ imageProvenance: _imageProvenance, videoProvenance: _videoProvenance, ...scene }) => scene), captionStyle,
+    title, hook, script, cta, scenes: canonicalStudioOutputScenes(scenes), captionStyle,
     transitionStyle: canonicalizeStudioRecipeTransition(transitionStyle),
     motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
     characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
@@ -387,6 +422,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setPreparingPublish(false);
     setError('');
     // Owner-scoped state must never cross an authenticated owner transition.
+    setVisualShortlists({});
+    setSelectedVisualCandidates({});
+    visualSessionEpoch.current += 1;
+    visualApplyActive.current.clear();
   }, [authenticatedUserId]);
 
   useEffect(() => {
@@ -405,6 +444,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const projectId = resolveStudioProjectId(currentProject?.id, decision.projectId);
     activateStudioProject(projectIdentity.current, projectId);
     setDirectorProjectId(projectId);
+    // Discovery results, selection, and provider previews are intentionally session-only
+    // and must never follow a project hydration transition.
+    setVisualShortlists({});
+    setSelectedVisualCandidates({});
+    visualSessionEpoch.current += 1;
+    visualApplyActive.current.clear();
     if (draft) {
       const restoredChannelId = resolveRestoredStudioChannelId(draft.channelId, channels.map((candidate) => candidate.id));
       const savedChannelUnavailable = Boolean(draft.channelId.trim() && !restoredChannelId);
@@ -421,6 +466,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setCta(draft.cta);
       const restoredScenes = toDurableScenes(draft.scenes ?? []);
       setScenes(restoredScenes);
+      setVisualIntelligence(draft.visualIntelligence);
       if (restoredScenes.some((scene) => scene.imageStorage || scene.videoStorage)) {
         void resolvePrivateSceneMedia(restoredScenes)
           .then((resolvedScenes) => { if (!cancelled) setScenes(resolvedScenes); })
@@ -476,6 +522,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setScript('');
       setCta('');
       setScenes([]);
+      setVisualIntelligence(undefined);
       setDraftSavedAt('');
       setDraftStatus('empty');
     }
@@ -498,6 +545,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     script,
     cta,
     scenes: toDurableScenes(scenes),
+    visualIntelligence,
     captionStyle,
     transitionStyle,
     motionStyle,
@@ -526,7 +574,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode,
     selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId,
     watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor,
-    beatSync, voiceoverMode, browserTtsFinalIntent, selectedVoice, targetLanguage, narration]);
+    beatSync, voiceoverMode, browserTtsFinalIntent, selectedVoice, targetLanguage, narration, visualIntelligence]);
 
   useEffect(() => {
     if (!draftHydratedRef.current) return;
@@ -558,6 +606,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setScript('');
     setCta('');
     setScenes([]);
+    setVisualIntelligence(undefined);
+    setVisualShortlists({});
+    setSelectedVisualCandidates({});
+    visualSessionEpoch.current += 1;
+    visualApplyActive.current.clear();
     setAudioBlob(null);
     setAudioUrl('');
     setNarration(null);
@@ -1011,6 +1064,124 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       return t('studio.subtitleTranslationIncomplete');
     }
     return t('studio.subtitleTranslationUnavailable');
+  }
+
+  async function handleFindPremiumVisuals(sceneIndex: number, regeneratePlan = false) {
+    if (!hasPexels || visualDiscoveryBusy.size || !scenes[sceneIndex]) return;
+    const normalizedScenes = ensureSceneVisualPlanningIds(scenes);
+    const target = normalizedScenes[sceneIndex];
+    const binding = createSceneVisualBinding(normalizedScenes, sceneIndex);
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
+    let owner: ValidatedMediaOwnerContext;
+    try { owner = captureValidatedMediaOwnerContext(); } catch { return; }
+    const generation = (visualDiscoveryGenerations.current.get(binding.sceneId) ?? 0) + 1;
+    visualDiscoveryGenerations.current.set(binding.sceneId, generation);
+    const assertCurrent = () => {
+      assertCurrentMediaOwnerContext(owner);
+      if (visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId
+        || visualDiscoveryGenerations.current.get(binding.sceneId) !== generation
+        || !isSceneVisualBindingCurrent(binding, scenesRef.current)) throw new StaleVisualSelectionError();
+    };
+    scenesRef.current = normalizedScenes;
+    setScenes(normalizedScenes);
+    setVisualDiscoveryBusy((current) => new Set(current).add(binding.sceneId));
+    setError('');
+    let stage: 'planning' | 'discovery' = 'planning';
+    try {
+      let planning = visualPlanningRef.current;
+      let brief = planning?.briefs.find((item) => item.sceneBinding.sceneId === binding.sceneId);
+      let queryPlan = planning?.queryPlans.find((item) => item.sceneBinding.sceneId === binding.sceneId);
+      if (regeneratePlan || !brief || !queryPlan || !isSceneVisualBindingCurrent(brief.sceneBinding, normalizedScenes) || !isVisualQueryPlanCurrent(queryPlan, brief, normalizedScenes)) {
+        let result: Awaited<ReturnType<typeof planVisualQueries>>;
+        try {
+          result = await planVisualQueries({ scenes: [{ sceneBinding: binding, sceneText: target.text, projectContext: title || undefined, visualStylePreference: target.visual || undefined, currentMediaType: target.videoStorage ? 'video' : target.imageStorage ? 'image' : 'none', language: lang }] });
+        } catch (error) {
+          premiumVisualDiscoveryDiagnostic('VISUAL_PLANNER_REQUEST_FAILED', isApiError(error) ? { apiCode: error.code } : {});
+          throw error;
+        }
+        assertCurrent();
+        planning = mergeVisualIntelligencePlanning(visualPlanningRef.current, result.planning); brief = planning.briefs.find((item) => item.sceneBinding.sceneId === binding.sceneId); queryPlan = planning.queryPlans.find((item) => item.sceneBinding.sceneId === binding.sceneId);
+        visualPlanningRef.current = planning;
+        setVisualIntelligence(planning);
+        setVisualShortlists((current) => { const next = { ...current }; delete next[binding.sceneId]; return next; });
+      }
+      if (!brief || !queryPlan) return;
+      assertCurrent();
+      stage = 'discovery';
+      const shortlist = await discoverVisualCandidates({ brief, queryPlan, provider: visualProviderRef.current, adjacentShortlists: Object.values(visualShortlists) });
+      assertCurrent();
+      if (shortlist.status === 'empty' && shortlist.failedQueryCount > 0) {
+        premiumVisualDiscoveryDiagnostic('VISUAL_DISCOVERY_PROVIDER_UNAVAILABLE', { failedQueryCount: shortlist.failedQueryCount, queryCount: shortlist.queryCount });
+        setError(t('studio.visualDiscoveryUnavailable'));
+        return;
+      }
+      setVisualShortlists((current) => ({ ...current, [binding.sceneId]: shortlist }));
+      setSelectedVisualCandidates((current) => ({ ...current, [binding.sceneId]: shortlist.candidates[0]?.candidateId ?? '' }));
+    } catch (error) {
+      if (!(error instanceof StaleVisualSelectionError)) premiumVisualDiscoveryDiagnostic(stage === 'planning' ? 'VISUAL_PLANNER_RESULT_REJECTED' : 'VISUAL_DISCOVERY_UNEXPECTED', isApiError(error) ? { apiCode: error.code } : {});
+      if (visualDiscoveryGenerations.current.get(binding.sceneId) === generation && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation) && directorProjectIdRef.current === projectId) setError(stage === 'planning' ? t('studio.visualPlanningUnavailable') : t('studio.visualDiscoveryFailed'));
+    } finally {
+      if (visualDiscoveryGenerations.current.get(binding.sceneId) === generation) setVisualDiscoveryBusy((current) => { const next = new Set(current); next.delete(binding.sceneId); return next; });
+    }
+  }
+
+  async function handleApplyPremiumVisual(sceneIndex: number) {
+    const scene = scenes[sceneIndex]; const sceneId = scene?.visualPlanningId;
+    const shortlist = sceneId ? visualShortlists[sceneId] : undefined; const selectedId = sceneId ? selectedVisualCandidates[sceneId] : undefined;
+    const candidate = shortlist?.candidates.find((item) => item.candidateId === selectedId);
+    if (!scene || !sceneId || !candidate || visualApplyActive.current.has(`${visualSessionEpoch.current}:${sceneId}`)) return;
+    const providerMediaId = Number(candidate.providerMediaIdentity);
+    if (!Number.isSafeInteger(providerMediaId) || providerMediaId <= 0) {
+      setError(t('studio.visualApplyFailed'));
+      return;
+    }
+    const generation = (visualApplyGenerations.current.get(sceneId) ?? 0) + 1;
+    visualApplyGenerations.current.set(sceneId, generation);
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
+    let owner: ValidatedMediaOwnerContext;
+    try { owner = captureValidatedMediaOwnerContext(); } catch { return; }
+    const binding = createSceneVisualBinding(scenes, sceneIndex);
+    const operationKey = `${sessionEpoch}:${sceneId}`;
+    visualApplyActive.current.add(operationKey);
+    setVisualApplyBusy((current) => new Set(current).add(sceneId));
+    try {
+      const assertCurrent = () => {
+        assertCurrentMediaOwnerContext(owner);
+        const current = scenesRef.current.find((item) => item.visualPlanningId === sceneId);
+        if (!current || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, scenesRef.current) || current.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId) throw new StaleVisualSelectionError();
+      };
+      assertCurrent();
+      if (candidate.mediaType === 'image') {
+        const ingested = await ingestPexelsImage(providerMediaId, scene.visual || scene.text);
+        assertCurrent();
+        setScenes((current) => {
+          const currentScene = current.find((item) => item.visualPlanningId === sceneId);
+          if (!currentScene || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, current) || currentScene.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return current;
+          return current.map((item) => item.visualPlanningId !== sceneId ? item : {
+            ...item, imageStorage: ingested.media, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance,
+            videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined,
+          });
+        });
+      } else {
+        const prepared = await prepareDurablePexelsVideo(providerMediaId, scene.visual || scene.text, assertCurrent);
+        assertCurrent();
+        setScenes((current) => {
+          const currentScene = current.find((item) => item.visualPlanningId === sceneId);
+          if (!currentScene || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, current) || currentScene.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return current;
+          return current.map((item) => item.visualPlanningId !== sceneId ? item : {
+            ...item, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance,
+            imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined,
+          });
+        });
+      }
+    } catch {
+      if (visualApplyGenerations.current.get(sceneId) === generation && visualSessionEpoch.current === sessionEpoch && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation) && directorProjectIdRef.current === projectId) setError(t('studio.visualApplyFailed'));
+    } finally {
+      visualApplyActive.current.delete(operationKey);
+      if (visualApplyGenerations.current.get(sceneId) === generation) setVisualApplyBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
+    }
   }
 
   async function handleGenerateSceneImage(sceneIndex: number) {
@@ -1892,6 +2063,85 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     {s.imageUrl && !s.videoUrl && (
                       <div className="mt-2 overflow-hidden rounded-lg">
                         <img src={s.imageUrl} alt="Scene visual" className="h-24 w-full object-cover" />
+                      </div>
+                    )}
+                    {hasPexels && (
+                      <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-900">{t('studio.visualPlan')}</p>
+                            <p className="mt-0.5 text-xs text-slate-600">{t('studio.visualDiscoveryDesc')}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void handleFindPremiumVisuals(i)}
+                            disabled={!s.text.trim() || visualDiscoveryBusy.size > 0}
+                            className="flex items-center gap-1 rounded-lg border border-violet-300 bg-white px-2 py-1 text-xs font-medium text-violet-800 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {visualDiscoveryBusy.has(s.visualPlanningId ?? '') ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                            {t('studio.findVisuals')}
+                          </button>
+                        </div>
+                        {(() => {
+                          const sceneId = s.visualPlanningId;
+                          const rawBrief = sceneId ? visualIntelligence?.briefs.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
+                          const plan = sceneId ? visualIntelligence?.queryPlans.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
+                          const brief = rawBrief && plan && isSceneVisualBindingCurrent(rawBrief.sceneBinding, scenes) && isVisualQueryPlanCurrent(plan, rawBrief, scenes) ? rawBrief : undefined;
+                          const rawShortlist = sceneId ? visualShortlists[sceneId] : undefined;
+                          const shortlist = brief && rawShortlist && isSceneVisualBindingCurrent(rawShortlist.sceneBinding, scenes) && rawShortlist.briefFingerprint === plan?.briefFingerprint ? rawShortlist : undefined;
+                          const selectedId = sceneId ? selectedVisualCandidates[sceneId] : undefined;
+                          const applying = sceneId ? visualApplyBusy.has(sceneId) : false;
+                          return <>
+                            {brief && (
+                              <div className="mt-2 rounded-md bg-white/80 px-2 py-1.5 text-xs text-slate-700">
+                                {[brief.subject, brief.setting, brief.mood, brief.editorialRole].filter(Boolean).join(' · ')}
+                              </div>
+                            )}
+                            {shortlist?.status === 'partial' && <p role="status" className="mt-2 text-xs text-amber-700">{t('studio.visualPartial')}</p>}
+                            {shortlist && shortlist.candidates.length === 0 && <p role="status" className="mt-2 text-xs text-slate-600">{t('studio.visualEmpty')}</p>}
+                            {shortlist && shortlist.candidates.length > 0 && (
+                              <div className="mt-3">
+                                <p className="mb-1 text-xs font-medium text-slate-700">{t('studio.visualCandidates')}</p>
+                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                  {shortlist.candidates.map((candidate) => {
+                                    const selected = candidate.candidateId === selectedId;
+                                    const preview = visualProviderRef.current.resolvePreview(candidate.candidateId);
+                                    const label = `${candidate.mediaType === 'video' ? t('studio.broll') : t('studio.generateImage')}${candidate.width && candidate.height ? ` · ${candidate.width}×${candidate.height}` : ''}`;
+                                    const reasons = candidate.explanations.slice(0, 2).map((reason) => reason.replace(/-/gu, ' ')).join(' · ');
+                                    return (
+                                      <button
+                                        key={candidate.candidateId}
+                                        type="button"
+                                        aria-pressed={selected}
+                                        aria-label={label}
+                                        onClick={() => {
+                                          if (!sceneId || applying) return;
+                                          visualApplyGenerations.current.set(sceneId, (visualApplyGenerations.current.get(sceneId) ?? 0) + 1);
+                                          setSelectedVisualCandidates((current) => ({ ...current, [sceneId]: candidate.candidateId }));
+                                        }}
+                                        className={classNames('overflow-hidden rounded-md border text-left transition-colors focus:outline-none focus:ring-2 focus:ring-violet-500', selected ? 'border-violet-600 ring-1 ring-violet-500' : 'border-slate-200 hover:border-violet-300')}
+                                      >
+                                        {preview ? <img src={preview} alt="" className="h-20 w-full object-cover" /> : <div className="flex h-20 items-center justify-center bg-slate-100 text-slate-400">{candidate.mediaType === 'video' ? <Video size={18} /> : <ImagePlus size={18} />}</div>}
+                                        <span className="block truncate px-1.5 pt-1 text-[11px] text-slate-600">{label}</span>
+                                        <span className="block truncate px-1.5 pb-1 text-[10px] text-slate-500">{t('studio.visualProvider')}{reasons ? ` · ${reasons}` : ''}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <button type="button" onClick={() => void handleFindPremiumVisuals(i)} disabled={visualDiscoveryBusy.size > 0 || applying}
+                                    className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                    {t('studio.searchAgain')}
+                                  </button>
+                                  <button type="button" onClick={() => void handleApplyPremiumVisual(i)} disabled={!selectedId || applying}
+                                    className="rounded-md bg-violet-700 px-2 py-1 text-xs font-medium text-white hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50">
+                                    {applying ? t('studio.applyingVisual') : t('studio.useThisVisual')}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </>;
+                        })()}
                       </div>
                     )}
                     {ingestingPexelsImages.has(i) && (

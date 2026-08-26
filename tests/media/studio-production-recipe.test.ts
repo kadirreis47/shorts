@@ -103,6 +103,20 @@ describe('StudioProductionRecipeV1', () => {
     expect(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity).not.toBe(baseline.identity);
   });
 
+  it('keeps visual-planning identity outside Recipe V1 while durable media remains significant', () => {
+    const baseline = recipeInput();
+    baseline.scenes[0].visualPlanningId = 'visual-scene-00000000-0000-4000-8000-000000000001';
+    const planningOnly = structuredClone(baseline);
+    planningOnly.scenes[0].visualPlanningId = 'visual-scene-00000000-0000-4000-8000-000000000099';
+    const changedMedia = structuredClone(planningOnly);
+    changedMedia.scenes[0].imageStorage!.objectPath = 'owner-a/generated-images/00000000-0000-4000-8000-000000000099.png';
+
+    const normalized = normalizeStudioProductionRecipeV1(baseline, ownerContext());
+    expect(normalizeStudioProductionRecipeV1(planningOnly, ownerContext()).identity).toBe(normalized.identity);
+    expect(normalizeStudioProductionRecipeV1(planningOnly, ownerContext()).recipe).toEqual(normalized.recipe);
+    expect(normalizeStudioProductionRecipeV1(changedMedia, ownerContext()).identity).not.toBe(normalized.identity);
+  });
+
   it('normalizes every unsupported legacy transition to the effective None/cut identity', async () => {
     const none = recipeInput();
     none.transitionStyle = 'none';

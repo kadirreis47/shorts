@@ -14,7 +14,8 @@
     "research-footage",
     "search-images",
     "search-videos",
-    "translate-subtitles"
+    "translate-subtitles",
+    "visual-query-planner"
   ],
   "retiredFailClosed": [
     "youtube-auth",

@@ -4,6 +4,11 @@ import { apiClient } from '@/lib/api/client';
 import { supabase } from '@/lib/supabase';
 import { assertCurrentOwnerMediaIdentity, uploadPrivateMedia, type PrivateMediaClass, type PrivateMediaUpload } from '@/lib/mediaStorage';
 import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
+import {
+  normalizeVisualIntelligencePlanningState,
+  type VisualIntelligencePlanningState,
+} from '@/core/visual-intelligence';
+import type { VisualQueryPlannerRequest } from '../../supabase/functions/_shared/visual-query-planner';
 
 import type {
   Scene,
@@ -215,6 +220,7 @@ export async function getProviderStatus(): Promise<ProviderStatus> {
 export async function searchImages(
   query: string,
   perPage = 3,
+  retryCount = 2,
 ): Promise<PexelsImage[]> {
   const data = await apiClient.post<ImageSearchResponse>(
     'search-images',
@@ -223,7 +229,7 @@ export async function searchImages(
       perPage,
     },
     {
-      retryCount: 2,
+      retryCount,
     },
   );
 
@@ -233,6 +239,7 @@ export async function searchImages(
 export async function searchVideos(
   query: string,
   perPage = 5,
+  retryCount = 2,
 ): Promise<PexelsVideo[]> {
   const data = await apiClient.post<VideoSearchResponse>(
     'search-videos',
@@ -241,7 +248,7 @@ export async function searchVideos(
       perPage,
     },
     {
-      retryCount: 2,
+      retryCount,
     },
   );
 
@@ -548,6 +555,44 @@ export async function translateSubtitles(params: {
     { retryCount: 0, timeoutMs: 60_000 },
   );
   return parseSubtitleTranslationResult(result);
+}
+
+export interface VisualQueryPlannerResult {
+  readonly status: 'planned';
+  readonly planning: VisualIntelligencePlanningState;
+}
+
+function parseVisualQueryPlannerResult(value: unknown, expectedSceneCount: number): VisualQueryPlannerResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Visual query planner returned an invalid result.');
+  const result = value as Record<string, unknown>;
+  if (result.status !== 'planned' || Object.keys(result).some((key) => key !== 'status' && key !== 'planning')) {
+    throw new Error('Visual query planner returned an invalid result.');
+  }
+  let planning: VisualIntelligencePlanningState | undefined;
+  try {
+    planning = normalizeVisualIntelligencePlanningState(result.planning);
+  } catch {
+    throw new Error('Visual query planner returned an invalid result.');
+  }
+  if (!planning || planning.briefs.length !== expectedSceneCount || planning.queryPlans.length !== expectedSceneCount) {
+    throw new Error('Visual query planner returned an invalid result.');
+  }
+  return { status: 'planned', planning };
+}
+
+export async function planVisualQueries(params: VisualQueryPlannerRequest): Promise<VisualQueryPlannerResult> {
+  const result = await apiClient.post<unknown>('visual-query-planner', params, { retryCount: 0, timeoutMs: 40_000 });
+  const parsed = parseVisualQueryPlannerResult(result, params.scenes.length);
+  const expected = new Set(params.scenes.map((scene) => bindingKey(scene.sceneBinding)));
+  if (parsed.planning.briefs.some((brief) => !expected.has(bindingKey(brief.sceneBinding)))
+    || parsed.planning.queryPlans.some((plan) => !expected.has(bindingKey(plan.sceneBinding)))) {
+    throw new Error('Visual query planner returned an invalid result.');
+  }
+  return parsed;
+}
+
+function bindingKey(binding: { sceneId: string; sceneIndex: number; sceneTextFingerprint: string }): string {
+  return binding.sceneId + '|' + binding.sceneIndex + '|' + binding.sceneTextFingerprint;
 }
 
 // ============================================================

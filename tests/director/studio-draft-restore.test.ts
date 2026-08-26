@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveStudioAudioNarrationMode, type StudioDraft } from '@/lib/studioDraft';
+import { normalizeStudioDraft, resolveStudioAudioNarrationMode, type StudioDraft } from '@/lib/studioDraft';
 import { createStudioProjectDraft, resolveRestoredStudioChannelId, resolveStudioDraftRestore } from '@/services/studioDraftRestore';
 
 describe('Studio draft restore isolation', () => {
@@ -60,6 +60,14 @@ describe('Studio draft restore isolation', () => {
       projectDrafts: [a, b], fallbackProjectId: 'fallback' });
     expect(selected.draft?.projectId).toBe('project-b');
     expect(selected.draft?.scenes[0]?.text).toBe('B content');
+  });
+  it('hydrates legacy drafts without planning metadata and strips malformed advisory planning only', () => {
+    const legacy = normalizeStudioDraft(draft('project-a', 'A content'));
+    expect(legacy.visualIntelligence).toBeUndefined();
+    expect(legacy.scenes[0].visualPlanningId).toMatch(/^visual-scene-/);
+    const malformed = normalizeStudioDraft({ ...legacy, visualIntelligence: { version: 1, briefs: [{ unsafe: true }], queryPlans: [] } as never });
+    expect(malformed.visualIntelligence).toBeUndefined();
+    expect(malformed.scenes[0].text).toBe('A content');
   });
 });
 

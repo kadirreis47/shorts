@@ -30,6 +30,7 @@ export const FUNCTION_POLICIES = {
   "search-images": { operationClass: "medium", burstMax: 10, dailyMax: 200 },
   "search-videos": { operationClass: "medium", burstMax: 10, dailyMax: 200 },
   "translate-subtitles": { operationClass: "medium", burstMax: 10, dailyMax: 200 },
+  "visual-query-planner": { operationClass: "medium", burstMax: 6, dailyMax: 80 },
 } as const;
 
 export type ProtectedFunctionName = keyof typeof FUNCTION_POLICIES;

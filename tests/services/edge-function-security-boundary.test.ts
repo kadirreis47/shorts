@@ -19,7 +19,7 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(manifest.active).toEqual([
       'provider-status', 'generate-script', 'generate-hooks', 'generate-seo',
       'analyze-script', 'generate-image', 'ingest-pexels-image', 'ingest-pexels-video', 'generate-voiceover', 'list-voices',
-      'research-footage', 'search-images', 'search-videos', 'translate-subtitles',
+      'research-footage', 'search-images', 'search-videos', 'translate-subtitles', 'visual-query-planner',
     ]);
 
     for (const name of manifest.active) {
@@ -60,6 +60,7 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(protectedSource).toContain('"ingest-pexels-video-cleanup": { operationClass: "low", burstMax: 12, dailyMax: 50 }');
     expect(protectedSource).toContain('"generate-voiceover": { operationClass: "high", burstMax: 3, dailyMax: 25 }');
     expect(protectedSource).toContain('"research-footage": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
+    expect(protectedSource).toContain('"visual-query-planner": { operationClass: "medium", burstMax: 6, dailyMax: 80 }');
     expect(protectedSource).toContain('Request limit reached. Please try again shortly.');
     expect(protectedSource).toContain('}, 429)');
     expect(protectedSource).toContain('Service is temporarily unavailable.');
@@ -158,6 +159,23 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(protectedSource).not.toContain('console.error(serviceRoleKey');
     expect(protectedSource).not.toContain('apiKey');
     expect(protectedSource).not.toContain('prompt');
+  });
+
+  it('records bounded visual planner outcome diagnostics without scene or provider content', () => {
+    const source = sourceFor('visual-query-planner');
+    expect(source).toContain('event: "edge-function.visual-query-planner-result"');
+    expect(source).toContain('reason: "authorization-failed"');
+    expect(source).toContain('reason: "provider-not-configured"');
+    expect(source).toContain('"provider-timeout"');
+    expect(source).toContain('reason: "malformed-provider-response"');
+    expect(source).toContain('reason: "invalid-planning-output"');
+    expect(source).toContain('providerHttpStatus');
+    expect(source).toContain('providerErrorType');
+    expect(source).toContain('providerErrorCode');
+    expect(source).toContain('safeProviderErrorValue');
+    expect(source).not.toContain('console.info(JSON.stringify({ scenes');
+    expect(source).not.toContain('console.info(JSON.stringify({ payload');
+    expect(source).not.toContain('error.message');
   });
 
   it('stores generated voiceovers under the verified owner rather than returning durable audio bytes', () => {
