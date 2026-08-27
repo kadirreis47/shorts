@@ -1,4 +1,7 @@
-import type { SceneVisualBinding, SceneVisualBrief, VisualConceptCategory, VisualMediaPreference, VisualQueryPlan } from './types';
+import { visualBriefFingerprint, type SceneVisualBinding, type SceneVisualBrief, type VisualConceptCategory, type VisualMediaPreference, type VisualQueryPlan } from './types';
+import { assessVisualQuality, type VisualQualityAssessment } from './quality';
+import { semanticRankingAdjustment, unavailableVisualSemanticAssessment, type VisualSemanticAssessment } from './semantic';
+import { assessVisualCandidateContinuity, neutralCandidateContinuity, type VisualContinuityCandidateAssessment, type VisualStoryMediaContext, type VisualStoryPlan } from './continuity';
 
 export const MAX_DISCOVERY_CONCEPTS = 4;
 export const MAX_DISCOVERY_RESULTS_PER_QUERY = 3;
@@ -28,8 +31,16 @@ export interface VisualDiscoveryCandidate {
 }
 
 export interface RankedVisualDiscoveryCandidate extends VisualDiscoveryCandidate {
+  /** Session-derived factual assessment; no semantic/provider-URL authority. */
+  readonly quality: VisualQualityAssessment;
+  /** Truthful unavailable state until a future provider receives a safe opaque media reference. */
+  readonly semantic: VisualSemanticAssessment;
   readonly relevanceScore: number;
   readonly qualityFitScore: number;
+  readonly semanticFitScore: number;
+  /** Session-derived global sequence fit. It is separate from local factual/semantic assessment. */
+  readonly continuity: VisualContinuityCandidateAssessment;
+  readonly continuityFitScore: number;
   readonly diversityScore: number;
   readonly crossSceneNoveltyScore: number;
   readonly finalScore: number;
@@ -56,10 +67,11 @@ export interface VisualDiscoverySearchInput {
   readonly queryPlan: VisualQueryPlan;
   readonly provider: VisualDiscoveryProvider;
   readonly adjacentShortlists?: readonly VisualDiscoveryShortlist[];
+  readonly continuityContext?: { readonly story: VisualStoryPlan; readonly media: readonly VisualStoryMediaContext[] };
   readonly signal?: AbortSignal;
 }
 
-const WEIGHTS = Object.freeze({ relevance: 1, quality: 1, diversity: 1, novelty: 1 });
+const WEIGHTS = Object.freeze({ relevance: 1, quality: 1, semantic: 1, continuity: 1, diversity: 1, novelty: 1 });
 
 /** One scene action: first four concepts, each at most one image and one video request. */
 export async function discoverVisualCandidates(input: VisualDiscoverySearchInput): Promise<VisualDiscoveryShortlist> {
@@ -71,7 +83,7 @@ export async function discoverVisualCandidates(input: VisualDiscoverySearchInput
   });
   const successes = settled.filter((item): item is PromiseFulfilledResult<Array<{ candidate: VisualDiscoveryCandidate; concept: VisualQueryPlan['concepts'][number]; providerRank: number }>> => item.status === 'fulfilled').flatMap((item) => item.value);
   const deduplicated = deduplicate(successes);
-  const ranked = rankVisualCandidates(deduplicated, input.brief, input.adjacentShortlists ?? []);
+  const ranked = rankVisualCandidates(deduplicated, input.brief, input.adjacentShortlists ?? [], input.continuityContext);
   return Object.freeze({
     sceneBinding: input.queryPlan.sceneBinding,
     briefFingerprint: input.queryPlan.briefFingerprint,
@@ -86,30 +98,40 @@ export function rankVisualCandidates(
   candidates: readonly VisualDiscoveryCandidate[],
   brief: SceneVisualBrief,
   adjacentShortlists: readonly VisualDiscoveryShortlist[] = [],
+  continuityContext?: { readonly story: VisualStoryPlan; readonly media: readonly VisualStoryMediaContext[] },
 ): RankedVisualDiscoveryCandidate[] {
-  const adjacentIds = new Set(adjacentShortlists.flatMap((list) => list.candidates.map((candidate) => candidate.candidateId)));
-  const previousMedia = adjacentShortlists.at(-1)?.candidates[0]?.mediaType;
+  // A selection-aware continuity context supersedes legacy shortlist-presence hints;
+  // otherwise the same reuse signal would be counted twice.
+  const legacyAdjacent = continuityContext ? [] : adjacentShortlists;
+  const adjacentIds = new Set(legacyAdjacent.flatMap((list) => list.candidates.map((candidate) => candidate.candidateId)));
+  const previousMedia = legacyAdjacent.at(-1)?.candidates[0]?.mediaType;
   return candidates.map((candidate) => {
     const explanations: VisualRankExplanation[] = [];
     const bestPriority = Math.min(...candidate.conceptPriorities);
     const relevance = 28 - ((bestPriority - 1) * 4) + Math.max(0, 10 - ((Math.min(...candidate.providerRanks) - 1) * 2)) + ((candidate.conceptPriorities.length - 1) * 8);
     explanations.push('strong-query-match');
     if (candidate.conceptPriorities.length > 1) explanations.push('cross-query-match');
-    const preferred = brief.preferredMedia === 'either' ? 4 : candidate.mediaType === brief.preferredMedia ? 14 : -18;
-    if (preferred > 0 && brief.preferredMedia !== 'either') explanations.push('preferred-media');
-    let quality = candidate.orientation === 'portrait' ? 12 : candidate.orientation === 'landscape' ? -4 : 0;
-    if (candidate.orientation === 'portrait') explanations.push('vertical-fit');
-    if (candidate.mediaType === 'video' && candidate.durationMs !== undefined) {
-      quality += candidate.durationMs >= 2_000 && candidate.durationMs <= 20_000 ? 6 : -3;
-      explanations.push(candidate.durationMs >= 2_000 && candidate.durationMs <= 20_000 ? 'duration-fit' : 'low-resolution-penalty');
-    }
-    if (candidate.width !== undefined && candidate.height !== undefined && Math.max(candidate.width, candidate.height) < 1_080) { quality -= 8; explanations.push('low-resolution-penalty'); }
+    const quality = assessVisualQuality({ candidate, brief, repeatedAcrossScenes: adjacentIds.has(candidate.candidateId) });
+    const semantic = unavailableVisualSemanticAssessment({ version: 1, analyzerVersion: 'semantic-contract-v1', briefFingerprint: visualBriefFingerprint(brief), candidate: { candidateId: candidate.candidateId, provider: candidate.provider, providerMediaIdentity: candidate.providerMediaIdentity, mediaType: candidate.mediaType } });
+    const semanticFitScore = semanticRankingAdjustment(semantic);
+    const continuity = continuityContext ? assessVisualCandidateContinuity({ story: continuityContext.story, target: brief.sceneBinding, candidate, media: continuityContext.media }) : neutralCandidateContinuity();
+    const continuityFitScore = continuity.globalAdjustment;
+    if (quality.reasons.includes('vertical-native')) explanations.push('vertical-fit');
+    if (quality.reasons.includes('media-preference-match')) explanations.push('preferred-media');
+    if (quality.reasons.includes('duration-fit')) explanations.push('duration-fit');
+    if (quality.reasons.includes('low-resolution')) explanations.push('low-resolution-penalty');
     const diversity = Math.min(10, (candidate.conceptCategories.length - 1) * 4) + (brief.preferredMedia === 'either' && candidate.mediaType !== previousMedia ? 3 : 0);
     if (diversity > 0) explanations.push('diversity-boost');
     const novelty = adjacentIds.has(candidate.candidateId) ? -35 : (previousMedia === candidate.mediaType && brief.noveltyConstraints.includes('vary-media-type') ? -5 : 0);
     if (novelty < 0) explanations.push('repeated-visual-penalty');
-    return Object.freeze({ ...candidate, relevanceScore: relevance + preferred, qualityFitScore: quality, diversityScore: diversity, crossSceneNoveltyScore: novelty, finalScore: (relevance + preferred) * WEIGHTS.relevance + quality * WEIGHTS.quality + diversity * WEIGHTS.diversity + novelty * WEIGHTS.novelty, explanations: Object.freeze([...new Set(explanations)].sort()) });
-  }).sort((left, right) => right.finalScore - left.finalScore || left.candidateId.localeCompare(right.candidateId));
+    return Object.freeze({ ...candidate, quality, semantic, continuity, relevanceScore: relevance, qualityFitScore: quality.rankingAdjustment, semanticFitScore, continuityFitScore, diversityScore: diversity, crossSceneNoveltyScore: novelty, finalScore: relevance * WEIGHTS.relevance + quality.rankingAdjustment * WEIGHTS.quality + semanticFitScore * WEIGHTS.semantic + continuityFitScore * WEIGHTS.continuity + diversity * WEIGHTS.diversity + novelty * WEIGHTS.novelty, explanations: Object.freeze([...new Set(explanations)].sort()) });
+  }).filter((candidate) => !candidate.quality.hardRejected)
+    .sort((left, right) => mediaPreferenceOrder(left, brief.preferredMedia) - mediaPreferenceOrder(right, brief.preferredMedia)
+      || right.finalScore - left.finalScore || left.candidateId.localeCompare(right.candidateId));
+}
+
+function mediaPreferenceOrder(candidate: VisualDiscoveryCandidate, preference: VisualMediaPreference): number {
+  return preference === 'either' || candidate.mediaType === preference ? 0 : 1;
 }
 
 function deduplicate(items: readonly { candidate: VisualDiscoveryCandidate; concept: VisualQueryPlan['concepts'][number]; providerRank: number }[]): VisualDiscoveryCandidate[] {

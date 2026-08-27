@@ -30,6 +30,23 @@ describe('Premium Visual Discovery Studio boundary', () => {
     expect(studio).toContain('resolvePreview(candidate.candidateId)');
     expect(studio).toContain('canonicalStudioOutputScenes(scenes)');
     expect(studio).toContain('visualSessionEpoch.current += 1');
+    expect(studio).not.toContain('quality: candidate.quality');
+  });
+
+  it('uses latest advisory sequence context without silently replacing a still-present selection', () => {
+    expect(studio).toContain('createVisualStoryPlan(planning, normalizedScenes)');
+    expect(studio).toContain('visualStoryMediaContexts(normalizedScenes, visualShortlists, selectedVisualCandidates)');
+    expect(studio).toContain('shortlist.candidates.some((candidate) => candidate.candidateId === current[binding.sceneId])');
+    expect(studio).toContain('candidate.continuity.reasons');
+  });
+
+  it('shows translated factual quality and a truthful semantic-unavailable state without semantic claims', () => {
+    expect(studio).toContain("t('studio.visualQuality')");
+    expect(studio).toContain('candidate.quality.reasons');
+    expect(studio).toContain('candidate.quality.grade');
+    expect(studio).toContain("t('studio.visualSemanticUnavailable')");
+    expect(studio).toContain("candidate.semantic.status === 'unavailable'");
+    expect(studio).not.toContain('semanticSignals');
   });
 
   it('classifies planner and exhausted Pexels discovery failures without changing media', () => {

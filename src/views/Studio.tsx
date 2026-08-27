@@ -24,7 +24,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
-import { createSceneVisualBinding, discoverVisualCandidates, ensureSceneVisualPlanningIds, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState } from '@/core/visual-intelligence';
+import { createSceneVisualBinding, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
@@ -188,6 +188,31 @@ async function prepareDurablePexelsVideo(
       pexelsVideoPrepareDiagnostic('PEXELS_VIDEO_QUARANTINE_CLEANUP_FAILED');
     });
   }
+}
+
+/** Builds session-only continuity context from explicit shortlist selections and safe durable provenance IDs. */
+function visualStoryMediaContexts(
+  scenes: readonly Scene[],
+  shortlists: Readonly<Record<string, VisualDiscoveryShortlist>>,
+  selections: Readonly<Record<string, string>>,
+): readonly VisualStoryMediaContext[] {
+  const contexts: VisualStoryMediaContext[] = [];
+  const selectedSceneIds = new Set<string>();
+  for (const [sceneId, shortlist] of Object.entries(shortlists)) {
+    const selected = shortlist.candidates.find((candidate) => candidate.candidateId === selections[sceneId]);
+    if (!selected) continue;
+    selectedSceneIds.add(sceneId);
+    contexts.push(Object.freeze({ sceneId, mediaType: selected.mediaType, origin: 'selection', provider: selected.provider, providerMediaIdentity: selected.providerMediaIdentity, categories: selected.conceptCategories }));
+  }
+  for (const scene of scenes) {
+    const sceneId = scene.visualPlanningId;
+    if (!sceneId || selectedSceneIds.has(sceneId)) continue;
+    const provenance = scene.imageStorage ? scene.imageProvenance : scene.videoStorage ? scene.videoProvenance : undefined;
+    const mediaType = scene.videoStorage ? 'video' : scene.imageStorage ? 'image' : undefined;
+    if (!mediaType) continue;
+    contexts.push(Object.freeze({ sceneId, mediaType, origin: 'canonical', ...(provenance ? { provider: provenance.provider, providerMediaIdentity: String(provenance.providerMediaId) } : {}) }));
+  }
+  return Object.freeze(contexts);
 }
 
 function narrationRevision(text: string): string {
@@ -1109,7 +1134,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (!brief || !queryPlan) return;
       assertCurrent();
       stage = 'discovery';
-      const shortlist = await discoverVisualCandidates({ brief, queryPlan, provider: visualProviderRef.current, adjacentShortlists: Object.values(visualShortlists) });
+      const continuityContext = planning ? (() => {
+        try { return { story: createVisualStoryPlan(planning, normalizedScenes), media: visualStoryMediaContexts(normalizedScenes, visualShortlists, selectedVisualCandidates) }; } catch { return undefined; }
+      })() : undefined;
+      const shortlist = await discoverVisualCandidates({ brief, queryPlan, provider: visualProviderRef.current, adjacentShortlists: Object.values(visualShortlists), continuityContext });
       assertCurrent();
       if (shortlist.status === 'empty' && shortlist.failedQueryCount > 0) {
         premiumVisualDiscoveryDiagnostic('VISUAL_DISCOVERY_PROVIDER_UNAVAILABLE', { failedQueryCount: shortlist.failedQueryCount, queryCount: shortlist.queryCount });
@@ -1117,7 +1145,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         return;
       }
       setVisualShortlists((current) => ({ ...current, [binding.sceneId]: shortlist }));
-      setSelectedVisualCandidates((current) => ({ ...current, [binding.sceneId]: shortlist.candidates[0]?.candidateId ?? '' }));
+      setSelectedVisualCandidates((current) => ({ ...current, [binding.sceneId]: shortlist.candidates.some((candidate) => candidate.candidateId === current[binding.sceneId]) ? current[binding.sceneId] : shortlist.candidates[0]?.candidateId ?? '' }));
     } catch (error) {
       if (!(error instanceof StaleVisualSelectionError)) premiumVisualDiscoveryDiagnostic(stage === 'planning' ? 'VISUAL_PLANNER_RESULT_REJECTED' : 'VISUAL_DISCOVERY_UNEXPECTED', isApiError(error) ? { apiCode: error.code } : {});
       if (visualDiscoveryGenerations.current.get(binding.sceneId) === generation && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation) && directorProjectIdRef.current === projectId) setError(stage === 'planning' ? t('studio.visualPlanningUnavailable') : t('studio.visualDiscoveryFailed'));
@@ -2108,12 +2136,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                     const preview = visualProviderRef.current.resolvePreview(candidate.candidateId);
                                     const label = `${candidate.mediaType === 'video' ? t('studio.broll') : t('studio.generateImage')}${candidate.width && candidate.height ? ` · ${candidate.width}×${candidate.height}` : ''}`;
                                     const reasons = candidate.explanations.slice(0, 2).map((reason) => reason.replace(/-/gu, ' ')).join(' · ');
+                                    const qualityReasons = candidate.quality.reasons.slice(0, 2).map((reason) => t(`studio.visualQualityReason.${reason}`)).join(' · ');
+                                    const qualityLabel = t(`studio.visualQualityGrade.${candidate.quality.grade}`);
+                                    const continuityReasons = candidate.continuity.reasons.slice(0, 2).map((reason) => t(`studio.visualSequenceReason.${reason}`)).join(' · ');
                                     return (
                                       <button
                                         key={candidate.candidateId}
                                         type="button"
                                         aria-pressed={selected}
-                                        aria-label={label}
+                                        aria-label={`${label} · ${t('studio.visualQuality')}: ${qualityLabel}${candidate.semantic.status === 'unavailable' ? ` · ${t('studio.visualSemanticUnavailable')}` : ''}${continuityReasons ? ` · ${t('studio.visualSequenceFit')}: ${continuityReasons}` : ''}`}
                                         onClick={() => {
                                           if (!sceneId || applying) return;
                                           visualApplyGenerations.current.set(sceneId, (visualApplyGenerations.current.get(sceneId) ?? 0) + 1);
@@ -2123,6 +2154,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                       >
                                         {preview ? <img src={preview} alt="" className="h-20 w-full object-cover" /> : <div className="flex h-20 items-center justify-center bg-slate-100 text-slate-400">{candidate.mediaType === 'video' ? <Video size={18} /> : <ImagePlus size={18} />}</div>}
                                         <span className="block truncate px-1.5 pt-1 text-[11px] text-slate-600">{label}</span>
+                                        <span className="block truncate px-1.5 pt-0.5 text-[10px] font-medium text-violet-700">{t('studio.visualQuality')}: {qualityLabel}{qualityReasons ? ` · ${qualityReasons}` : ''}</span>
+                                        {candidate.semantic.status === 'unavailable' && <span className="block truncate px-1.5 pt-0.5 text-[10px] text-slate-500">{t('studio.visualSemanticUnavailable')}</span>}
+                                        {continuityReasons && <span className="block truncate px-1.5 pt-0.5 text-[10px] text-sky-700">{t('studio.visualSequenceFit')}: {continuityReasons}</span>}
                                         <span className="block truncate px-1.5 pb-1 text-[10px] text-slate-500">{t('studio.visualProvider')}{reasons ? ` · ${reasons}` : ''}</span>
                                       </button>
                                     );
