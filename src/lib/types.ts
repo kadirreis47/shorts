@@ -2,6 +2,15 @@ export type VideoStatus = 'idea' | 'script_ready' | 'rendering' | 'rendered' | '
 
 export type VisualMode = 'auto' | 'ai_cartoon' | 'ai_realistic' | 'ai_anime' | 'ai_horror' | 'real_footage' | 'mixed';
 
+/** Optional, renderer-safe per-scene overrides. Absence means inherit the project composition default. */
+export type SceneCompositionMotion = 'kenburns' | 'pan' | 'zoom_in' | 'zoom_out' | 'static';
+export type SceneCompositionTransition = 'crossfade' | 'none';
+export interface SceneCompositionOverride {
+  motion?: SceneCompositionMotion;
+  /** Owns the incoming boundary from the preceding scene; the first scene has no boundary. */
+  transition?: SceneCompositionTransition;
+}
+
 export interface MediaStorageObject {
   bucket: 'media';
   objectPath: string;
@@ -38,6 +47,8 @@ export interface Scene {
   overlayText?: string;
   emphasis?: boolean;
   characterRef?: string;
+  /** Canonical pixel-affecting composition intent. It is not advisory state. */
+  compositionOverride?: SceneCompositionOverride;
 }
 
 export interface PexelsImage {

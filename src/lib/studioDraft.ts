@@ -9,6 +9,8 @@ import {
   type VisualIntelligencePlanningState,
 } from '@/core/visual-intelligence';
 import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
+import { canonicalizeStudioRecipeTransition } from '@/core/media/studioProductionRecipe';
+import { normalizeSceneCompositionOverride } from '@/core/media/sceneComposition';
 
 export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'publish';
 export type StudioVoiceoverMode = 'elevenlabs' | 'browser' | 'none';
@@ -92,7 +94,17 @@ export function clearStudioDraft(): void {
 /** Preserves V1.1 drafts while giving future async planning a stable scene binding. */
 export function normalizeStudioDraft(draft: StudioDraft): StudioDraft {
   const { visualIntelligence: rawVisualIntelligence, ...rest } = draft;
-  const scenes = ensureSceneVisualPlanningIds(Array.isArray(draft.scenes) ? draft.scenes : []);
+  const plannedScenes = ensureSceneVisualPlanningIds(Array.isArray(draft.scenes) ? draft.scenes : []);
+  const compositionDefaults = {
+    motion: draft.motionStyle,
+    transition: canonicalizeStudioRecipeTransition(draft.transitionStyle),
+  };
+  const scenes = plannedScenes.map((scene, sceneIndex) => {
+    if (scene.compositionOverride === undefined) return scene;
+    const compositionOverride = normalizeSceneCompositionOverride(scene.compositionOverride, compositionDefaults, sceneIndex);
+    const { compositionOverride: _ignored, ...canonical } = scene;
+    return compositionOverride ? { ...canonical, compositionOverride } : canonical;
+  });
   let visualIntelligence: VisualIntelligencePlanningState | undefined;
   try {
     visualIntelligence = normalizeVisualIntelligencePlanningState(rawVisualIntelligence);

@@ -22,3 +22,4 @@ export * from './brandingTypes';
 export * from './validationTypes';
 export * from './mediaValidator';
 export * from './studioProductionRecipe';
+export * from './sceneComposition';

@@ -1,6 +1,9 @@
 import type { RenderManifest } from '@/core/media';
 import type { RenderPreset } from './types';
 import { canonicalMediaAssetSource } from '@/core/media/storageIdentity';
+import { buildFFmpegCommand } from './ffmpegCommandBuilder';
+
+const FFMPEG_OUTPUT_FINGERPRINT_VERSION = 1;
 
 export interface RenderFingerprintInput {
   manifest: RenderManifest;
@@ -11,10 +14,18 @@ export interface RenderFingerprintInput {
 export async function createRenderFingerprint(
   input: RenderFingerprintInput,
 ): Promise<string> {
+  const manifest = normalizeManifest(input.manifest) as RenderManifest;
+  const outputAuthority = input.adapterId === 'ffmpeg' && executableFFmpegManifest(manifest)
+    ? {
+        version: FFMPEG_OUTPUT_FINGERPRINT_VERSION,
+        schemaVersion: manifest.schemaVersion,
+        execution: buildFFmpegCommand({ manifest, preset: input.preset }),
+      }
+    : manifest;
   const canonical = stableStringify({
     adapterId: input.adapterId,
     preset: input.preset,
-    manifest: normalizeManifest(input.manifest),
+    outputAuthority,
   });
 
   if (globalThis.crypto?.subtle) {
@@ -26,6 +37,19 @@ export async function createRenderFingerprint(
   }
 
   return fallbackHash(canonical);
+}
+
+function executableFFmpegManifest(manifest: RenderManifest): boolean {
+  const value = manifest as unknown as Partial<RenderManifest>;
+  return Boolean(
+    value.timeline
+    && Array.isArray(value.timeline.scenes)
+    && value.timeline.scenes.length > 0
+    && value.render
+    && value.subtitles
+    && value.audio
+    && typeof value.durationMs === 'number',
+  );
 }
 
 function normalizeManifest(manifest: RenderManifest): unknown {

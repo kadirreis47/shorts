@@ -1,14 +1,15 @@
-import type { MediaStorageObject, ProviderMediaProvenance, Scene, VisualMode } from '@/lib/types';
+import type { MediaStorageObject, ProviderMediaProvenance, Scene, SceneCompositionMotion, SceneCompositionOverride, SceneCompositionTransition, VisualMode } from '@/lib/types';
 import { assertCurrentMediaOwnerContext, type ValidatedMediaOwnerContext } from '@/lib/mediaStorage';
 import type { CanonicalMotionMode, CanonicalTransitionType, CanonicalWatermarkPosition, CreateMediaProjectInput } from './types';
 import { normalizeCanonicalWatermarkText } from './brandingTypes';
 import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
+import { normalizeSceneCompositionOverride, resolveEffectiveSceneComposition } from './sceneComposition';
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
 /** The only transition intents with distinct verified-export output in V1.1. */
-export type StudioRecipeCanonicalTransition = 'crossfade' | 'none';
-export type StudioRecipeMotion = 'kenburns' | 'pan' | 'zoom_in' | 'zoom_out' | 'static';
+export type StudioRecipeCanonicalTransition = SceneCompositionTransition;
+export type StudioRecipeMotion = SceneCompositionMotion;
 export type StudioRecipeVoiceMode = 'elevenlabs' | 'browser' | 'none';
 export type StudioRecipeExportSupport = 'supported' | 'partial' | 'unsupported' | 'preview-only';
 
@@ -64,6 +65,8 @@ export interface StudioProductionRecipeSceneV1 {
   readonly visualMode: VisualMode | null;
   readonly characterRef: string | null;
   readonly keywords: readonly string[];
+  /** Optional canonical override; absent fields inherit recipe composition independently. */
+  readonly compositionOverride?: SceneCompositionOverride;
   readonly media: StudioRecipeVisualMediaV1 | null;
 }
 
@@ -166,17 +169,18 @@ export function normalizeStudioProductionRecipeV1(
   if (voiceMode !== 'elevenlabs' && narration) throw new Error('Only ElevenLabs mode may contain canonical narration.');
 
   const transitionIntent = enumValue(input.transitionStyle, TRANSITIONS, 'transition style');
+  const composition = {
+    motion: enumValue(input.motionStyle, MOTIONS, 'motion style'),
+    // Legacy preview-only values remain accepted at the draft boundary, but
+    // must not enter Recipe V1 identity because they all render as a cut.
+    transition: canonicalizeStudioRecipeTransition(transitionIntent),
+  };
   const recipe: StudioProductionRecipeV1 = {
     version: 1,
     projectId,
     title: input.title.trim() || 'Untitled Media Project',
-    scenes: normalizeScenes(input.scenes, safeOwnerId),
-    composition: {
-      motion: enumValue(input.motionStyle, MOTIONS, 'motion style'),
-      // Legacy preview-only values remain accepted at the draft boundary, but
-      // must not enter Recipe V1 identity because they all render as a cut.
-      transition: canonicalizeStudioRecipeTransition(transitionIntent),
-    },
+    scenes: normalizeScenes(input.scenes, safeOwnerId, composition),
+    composition,
     subtitles: {
       enabled: Boolean(input.showSubtitles),
       preset: enumValue(input.captionStyle, CAPTION_STYLES, 'caption style'),
@@ -247,6 +251,13 @@ export function compileStudioProductionRecipeV1(
     transition: {
       type: recipeTransitionToCanonical(recipe.composition.transition),
     },
+    sceneComposition: recipe.scenes.map((scene, sceneIndex) => {
+      const effective = resolveEffectiveSceneComposition(recipe.composition, scene.compositionOverride, sceneIndex);
+      return {
+        motion: { mode: recipeMotionToCanonical(effective.motion) },
+        transition: { type: recipeTransitionToCanonical(effective.transition) },
+      };
+    }),
     branding: recipe.branding,
     productionRecipe: normalized,
   };
@@ -265,7 +276,9 @@ export function isStudioRecipeCanonicalTransition(
 }
 
 function recipeTransitionToCanonical(transition: StudioRecipeCanonicalTransition): CanonicalTransitionType {
-  return transition === 'crossfade' ? 'crossfade' : 'cut';
+  if (transition === 'crossfade') return 'crossfade';
+  if (transition === 'none') return 'cut';
+  throw new Error('Recipe transition is invalid.');
 }
 
 function recipeMotionToCanonical(motion: StudioRecipeMotion): CanonicalMotionMode {
@@ -275,6 +288,7 @@ function recipeMotionToCanonical(motion: StudioRecipeMotion): CanonicalMotionMod
     case 'pan': return 'pan';
     case 'zoom_in': return 'zoom_in';
     case 'zoom_out': return 'zoom_out';
+    default: throw new Error('Recipe motion is invalid.');
   }
 }
 
@@ -293,10 +307,15 @@ export function recipeIdentity(recipe: StudioProductionRecipeV1): string {
   return `studio-recipe-v1-${(first >>> 0).toString(16).padStart(8, '0')}${(second >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-function normalizeScenes(scenes: readonly Scene[], ownerId: string): StudioProductionRecipeSceneV1[] {
+function normalizeScenes(
+  scenes: readonly Scene[], ownerId: string, defaults: StudioProductionRecipeV1['composition'],
+): StudioProductionRecipeSceneV1[] {
   const normalized = scenes.map((scene, order) => {
     const text = requiredText(scene.text, `Scene ${order + 1} requires text.`);
     const durationSeconds = boundedNumber(scene.duration, .1, 300, `Scene ${order + 1} duration`);
+    const compositionOverride = scene.compositionOverride === undefined
+      ? undefined
+      : normalizeSceneCompositionOverride(scene.compositionOverride, defaults, order);
     return {
       id: `scene-${order + 1}`,
       order,
@@ -309,6 +328,7 @@ function normalizeScenes(scenes: readonly Scene[], ownerId: string): StudioProdu
       visualMode: scene.visualMode === undefined ? null : enumValue(scene.visualMode, VISUAL_MODES, `Scene ${order + 1} visual mode`),
       characterRef: optionalText(scene.characterRef),
       keywords: [...new Set((scene.keywords ?? []).map((value) => String(value).trim()).filter(Boolean))],
+      ...(compositionOverride ? { compositionOverride } : {}),
       media: normalizeSceneMedia(scene, ownerId),
     };
   });
@@ -374,6 +394,7 @@ function recipeSceneToScene(scene: StudioProductionRecipeSceneV1): Scene {
     visualMode: scene.visualMode ?? undefined,
     characterRef: scene.characterRef ?? undefined,
     keywords: [...scene.keywords],
+    ...(scene.compositionOverride ? { compositionOverride: { ...scene.compositionOverride } } : {}),
     ...(scene.media?.type === 'video' ? {
       videoStorage: scene.media.storage ?? undefined,
       videoUrl: scene.media.sourceUrl ?? undefined,

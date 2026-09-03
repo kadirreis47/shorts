@@ -11,7 +11,7 @@ import { composeTracks } from './trackComposer';
 import { validateMediaProject } from './mediaValidator';
 import { privateStorageSource } from './storageIdentity';
 import { normalizeCanonicalBrandingConfiguration } from './brandingTypes';
-import type { CameraMotion, CanonicalMotionMode, CanonicalTransitionType, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
+import type { CameraMotion, CanonicalMotionMode, CanonicalSceneComposition, CanonicalTransitionType, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
 
 export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
 
@@ -21,19 +21,29 @@ export function createMediaEngine(
 ): MediaEngine {
   return {
     async buildProject(input) {
+      if (input.sceneComposition === undefined && input.scenes.some((scene) => scene.compositionOverride !== undefined)) {
+        throw new Error('Scene composition overrides require canonical Recipe compilation.');
+      }
       const settings = normalizeMediaSettings(input.settings);
       const branding = normalizeCanonicalBrandingConfiguration(input.branding);
-      let plannedScenes = applyCanonicalMotion(planScenes(input.scenes, settings), canonicalMotionMode(input.motion?.mode));
-      // Recipe-compiled projects always provide the bounded canonical
-      // transition configuration. Preserve the legacy planner's transition
-      // metadata for non-Recipe callers such as the editing audit pipeline;
-      // it is not an authorization path for Studio canonical export.
-      if (input.transition !== undefined) {
-        plannedScenes = applyCanonicalTransition(
-          plannedScenes,
-          canonicalTransitionType(input.transition.type),
-          settings.defaultTransitionMs,
-        );
+      const globalMotion = canonicalMotionMode(input.motion?.mode);
+      const globalTransition = input.transition === undefined
+        ? undefined
+        : canonicalTransitionType(input.transition.type);
+      let plannedScenes = planScenes(input.scenes, settings);
+      if (input.sceneComposition !== undefined) {
+        plannedScenes = applyEffectiveSceneComposition(plannedScenes, input.sceneComposition, settings.defaultTransitionMs);
+      } else {
+        plannedScenes = applyCanonicalMotion(plannedScenes, globalMotion);
+        // Preserve the legacy planner's transition metadata for non-Recipe
+        // callers such as the editing audit pipeline.
+        if (globalTransition !== undefined) {
+          plannedScenes = applyCanonicalTransition(
+            plannedScenes,
+            globalTransition,
+            settings.defaultTransitionMs,
+          );
+        }
       }
       const semanticWindows = deriveNarrationSemanticSceneWindows(plannedScenes, input.narration?.alignment, input.narration?.durationMs);
       plannedScenes = semanticWindows
@@ -187,6 +197,46 @@ export function createMediaEngine(
         validation,
       };
     },
+  };
+}
+
+function applyEffectiveSceneComposition(
+  scenes: MediaScene[], composition: readonly CanonicalSceneComposition[], defaultTransitionMs: number,
+): MediaScene[] {
+  if (composition.length !== scenes.length) throw new Error('Canonical scene composition count is invalid.');
+  return scenes.map((scene, index) => {
+    const current = canonicalSceneComposition(composition[index], index);
+    const motion = resolveCanonicalCameraMotion(current.motion, index);
+    return {
+      ...scene,
+      cameraMotion: motion,
+      // Effective transition ownership was resolved by Recipe compilation.
+      transition: current.transition === 'cut'
+        ? { type: 'cut', durationMs: 0 }
+        : { type: 'crossfade', durationMs: defaultTransitionMs },
+    };
+  });
+}
+
+function canonicalSceneComposition(value: unknown, sceneIndex: number): { motion: CanonicalMotionMode; transition: CanonicalTransitionType } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Canonical scene composition is invalid.');
+  const composition = value as Record<string, unknown>;
+  const keys = Object.keys(composition);
+  if (keys.length !== 2 || keys.some((key) => key !== 'motion' && key !== 'transition')
+    || !Object.prototype.hasOwnProperty.call(composition, 'motion')
+    || !Object.prototype.hasOwnProperty.call(composition, 'transition')) throw new Error('Canonical scene composition is invalid.');
+  const motion = composition.motion;
+  const transition = composition.transition;
+  if (!motion || typeof motion !== 'object' || Array.isArray(motion) || Object.keys(motion).length !== 1
+    || !Object.prototype.hasOwnProperty.call(motion, 'mode')) throw new Error('Canonical scene composition is invalid.');
+  if (!transition || typeof transition !== 'object' || Array.isArray(transition) || Object.keys(transition).length !== 1
+    || !Object.prototype.hasOwnProperty.call(transition, 'type')) throw new Error('Canonical scene composition is invalid.');
+  if (sceneIndex === 0 && (transition as { type: unknown }).type !== 'cut') {
+    throw new Error('The first canonical scene transition must be cut.');
+  }
+  return {
+    motion: canonicalMotionMode((motion as { mode: unknown }).mode),
+    transition: canonicalTransitionType((transition as { type: unknown }).type),
   };
 }
 

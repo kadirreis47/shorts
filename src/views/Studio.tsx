@@ -23,7 +23,7 @@ import { AIPipelineMonitor } from '@/components/AIPipelineMonitor';
 import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
-import { canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
+import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
 import { assessCinematography, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
@@ -432,14 +432,28 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     && narration.scriptRevision === narrationRevision(script),
   );
 
-  const canonicalStudioRevision = useMemo(() => JSON.stringify({
-    title, hook, script, cta, scenes: canonicalStudioOutputScenes(scenes), captionStyle,
-    transitionStyle: canonicalizeStudioRecipeTransition(transitionStyle),
-    motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
-    characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
-    showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice,
-    narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId, ...(narration.alignment ? { alignment: narration.alignment } : {}) } : null,
-  }), [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
+  const canonicalStudioRevision = useMemo(() => {
+    const outputScenes = canonicalStudioOutputScenes(scenes);
+    const compositionDefaults = { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) };
+    let canonicalOutput: { scenes: unknown[]; sceneComposition: unknown[] };
+    try {
+      canonicalOutput = canonicalStudioCompositionOutput(outputScenes, compositionDefaults);
+    } catch {
+      // Malformed hydrated state remains visible for correction and will fail
+      // closed at Recipe normalization; it must not crash Studio rendering.
+      canonicalOutput = {
+        scenes: outputScenes.map(({ compositionOverride: _ignored, ...scene }) => scene),
+        sceneComposition: outputScenes.map((scene) => ({ invalidOverride: scene.compositionOverride ?? null })),
+      };
+    }
+    return JSON.stringify({
+      title, hook, script, cta, scenes: canonicalOutput.scenes, sceneComposition: canonicalOutput.sceneComposition, captionStyle,
+      useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
+      characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
+      showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice,
+      narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId, ...(narration.alignment ? { alignment: narration.alignment } : {}) } : null,
+    });
+  }, [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
 
   const currentCompletedExport = completedExport?.revision === canonicalStudioRevision && isVerifiedExportJob(completedExport.job)
     ? completedExport.job

@@ -28,6 +28,12 @@ export type CanonicalTransitionType = 'cut' | 'crossfade';
 export interface CanonicalTransitionConfiguration {
   type: CanonicalTransitionType;
 }
+/** Fully resolved per-scene composition passed to canonical media planning. */
+export interface CanonicalSceneComposition {
+  motion: CanonicalMotionConfiguration;
+  /** The incoming transition boundary for this scene; the first is always cut. */
+  transition: CanonicalTransitionConfiguration;
+}
 export type CanonicalWatermarkPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 /** Bounded global branding intent; logo media is intentionally not part of V1.1. */
@@ -192,6 +198,8 @@ export interface CreateMediaProjectInput {
   subtitles?: CanonicalSubtitleConfiguration;
   motion?: CanonicalMotionConfiguration;
   transition?: CanonicalTransitionConfiguration;
+  /** When supplied by Recipe compilation, one explicit effective configuration per source scene. */
+  sceneComposition?: readonly CanonicalSceneComposition[];
   branding?: CanonicalBrandingConfiguration;
   productionRecipe?: NormalizedStudioProductionRecipeV1;
 }
