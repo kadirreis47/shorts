@@ -8,7 +8,7 @@ import {
   normalizeVisualIntelligencePlanningState,
   type VisualIntelligencePlanningState,
 } from '@/core/visual-intelligence';
-import { normalizeOpaqueMediaReferenceRequest, normalizeOpaqueMediaReferenceResponse, normalizeSemanticImageAnalysisRequest, normalizeSemanticImageAnalysisResponse, type OpaqueMediaReferenceResponse, type SemanticImageAnalysisRequest, type SemanticImageAnalysisResponse } from '@/core/visual-intelligence';
+import { normalizeOpaqueMediaReferenceRequest, normalizeOpaqueMediaReferenceResponse, normalizeSemanticImageAnalysisRequest, normalizeSemanticImageAnalysisResponse, normalizeDiscoveryCandidateSemanticAnalysisRequest, type OpaqueMediaReferenceResponse, type SemanticImageAnalysisRequest, type SemanticImageAnalysisResponse, type DiscoveryCandidateSemanticAnalysisRequest } from '@/core/visual-intelligence';
 import type { VisualQueryPlannerRequest } from '../../supabase/functions/_shared/visual-query-planner';
 
 import type {
@@ -607,6 +607,15 @@ export async function analyzeVisualSemantics(request: SemanticImageAnalysisReque
   if (response.status === 'evaluated' && (response.observations.length !== normalized.intent.dimensions.length || response.observations.some((observation) => !normalized.intent.dimensions.includes(observation.dimension)) || new Set(response.observations.map((observation) => observation.dimension)).size !== normalized.intent.dimensions.length)) {
     throw new Error('Visual semantic analysis returned an invalid result.');
   }
+  return response;
+}
+
+/** One server-only operation for a provider asset ID; no preview or delivery URL is accepted. */
+export async function analyzeDiscoveryCandidateSemantics(request: DiscoveryCandidateSemanticAnalysisRequest): Promise<SemanticImageAnalysisResponse> {
+  const normalized = normalizeDiscoveryCandidateSemanticAnalysisRequest(request);
+  const result = await apiClient.post<unknown>('analyze-discovery-candidate-semantics', normalized, { retryCount: 0, timeoutMs: 45_000 });
+  const response = normalizeSemanticImageAnalysisResponse(result);
+  if (response.status === 'evaluated' && (response.observations.length !== normalized.intent.dimensions.length || response.observations.some((observation) => !normalized.intent.dimensions.includes(observation.dimension)))) throw new Error('Discovery candidate semantic analysis returned an invalid result.');
   return response;
 }
 

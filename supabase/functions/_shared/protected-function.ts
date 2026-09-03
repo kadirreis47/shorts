@@ -35,6 +35,7 @@ export const FUNCTION_POLICIES = {
   "media-analysis-reference": { operationClass: "low", burstMax: 12, dailyMax: 120 },
   // Explicit, paid image analysis. One request resolves one already-owned image and makes one provider call.
   "analyze-visual-semantics": { operationClass: "high", burstMax: 2, dailyMax: 20 },
+  "analyze-discovery-candidate-semantics": { operationClass: "high", burstMax: 2, dailyMax: 20 },
 } as const;
 
 export type ProtectedFunctionName = keyof typeof FUNCTION_POLICIES;
@@ -116,7 +117,8 @@ export async function authorizeProtectedFunction(
     });
     const { data, error } = await service.rpc("consume_edge_function_quota", {
       p_user_id: verifiedUser.userId,
-      p_function_name: functionName,
+      // Discovery-candidate analysis shares the paid semantic budget with durable analysis.
+      p_function_name: functionName === "analyze-discovery-candidate-semantics" ? "analyze-visual-semantics" : functionName,
       p_burst_window_seconds: 60,
       p_burst_max_requests: limit.burstMax,
       p_daily_max_requests: limit.dailyMax,

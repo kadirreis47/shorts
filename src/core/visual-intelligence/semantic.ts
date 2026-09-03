@@ -8,7 +8,7 @@ export type VisualSemanticSignalState = 'evaluated' | 'unsupported' | 'unavailab
 export type VisualSemanticInterpretation = 'match' | 'mismatch' | 'uncertain';
 export type VisualSemanticConfidenceBand = 'low' | 'medium' | 'high';
 export type VisualSemanticObservation = 'provider-observed-match' | 'provider-observed-mismatch' | 'provider-observed-uncertain';
-export type VisualSemanticUnavailableReason = 'no-media-reference' | 'provider-unavailable' | 'provider-failure' | 'invalid-provider-result' | 'provider-not-configured' | 'provider-credit-exhausted' | 'provider-rate-limited' | 'provider-timeout' | 'provider-malformed-response' | 'unsupported-media' | 'invalid-reference' | 'expired-reference';
+export type VisualSemanticUnavailableReason = 'no-media-reference' | 'provider-unavailable' | 'provider-failure' | 'invalid-provider-result' | 'provider-not-configured' | 'provider-credit-exhausted' | 'provider-rate-limited' | 'provider-timeout' | 'provider-malformed-response' | 'unsupported-media' | 'invalid-reference' | 'expired-reference' | 'candidate-invalid' | 'candidate-not-found' | 'candidate-provider-not-configured' | 'candidate-provider-unavailable' | 'candidate-media-unavailable' | 'candidate-media-too-large';
 
 export interface VisualSemanticCandidateBinding {
   readonly candidateId: string;
@@ -54,7 +54,7 @@ const states = new Set<VisualSemanticSignalState>(['evaluated', 'unsupported', '
 const interpretations = new Set<VisualSemanticInterpretation>(['match', 'mismatch', 'uncertain']);
 const confidenceBands = new Set<VisualSemanticConfidenceBand>(['low', 'medium', 'high']);
 const observations = new Set<VisualSemanticObservation>(['provider-observed-match', 'provider-observed-mismatch', 'provider-observed-uncertain']);
-const unavailableReasons = new Set<VisualSemanticUnavailableReason>(['no-media-reference', 'provider-unavailable', 'provider-failure', 'invalid-provider-result', 'provider-not-configured', 'provider-credit-exhausted', 'provider-rate-limited', 'provider-timeout', 'provider-malformed-response', 'unsupported-media', 'invalid-reference', 'expired-reference']);
+const unavailableReasons = new Set<VisualSemanticUnavailableReason>(['no-media-reference', 'provider-unavailable', 'provider-failure', 'invalid-provider-result', 'provider-not-configured', 'provider-credit-exhausted', 'provider-rate-limited', 'provider-timeout', 'provider-malformed-response', 'unsupported-media', 'invalid-reference', 'expired-reference', 'candidate-invalid', 'candidate-not-found', 'candidate-provider-not-configured', 'candidate-provider-unavailable', 'candidate-media-unavailable', 'candidate-media-too-large']);
 const urlLike = /(?:https?:\/\/|www\.)/iu;
 
 export function unavailableVisualSemanticAssessment(request: VisualSemanticAnalysisRequest, reason: VisualSemanticUnavailableReason = 'no-media-reference'): VisualSemanticAssessment {

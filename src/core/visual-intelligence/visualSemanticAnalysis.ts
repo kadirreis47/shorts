@@ -4,10 +4,12 @@ export {
   VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS,
   normalizeVisualSemanticAnalysisRequest as normalizeSemanticImageAnalysisRequest,
   normalizeVisualSemanticAnalysisResponse as normalizeSemanticImageAnalysisResponse,
+  normalizeDiscoveryCandidateSemanticAnalysisRequest,
 } from '../../../supabase/functions/_shared/visual-semantic-analysis';
 export type {
   VisualSemanticAnalysisRequest as SemanticImageAnalysisRequest,
   VisualSemanticAnalysisResponse as SemanticImageAnalysisResponse,
   VisualSemanticAnalysisReason as SemanticImageAnalysisReason,
   VisualSemanticObservation as SemanticImageObservation,
+  DiscoveryCandidateSemanticAnalysisRequest,
 } from '../../../supabase/functions/_shared/visual-semantic-analysis';

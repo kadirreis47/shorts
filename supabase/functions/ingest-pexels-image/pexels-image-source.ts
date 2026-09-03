@@ -33,10 +33,12 @@ export function resolvePexelsImageSource(
 }
 
 export function isApprovedPexelsUrl(value: unknown, host: 'images.pexels.com' | 'www.pexels.com'): value is string {
-  if (typeof value !== 'string' || value.length > 2_000) return false;
+  if (typeof value !== 'string' || value.length > 2_000 || [...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) return false;
+  // Validate the raw authority before URL canonicalization can erase encoded or delimiter tricks.
+  if (!new RegExp(`^https://${host.replace(/\./gu, '\\.')}(?:[/?]|$)`, 'iu').test(value)) return false;
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === host && !url.username && !url.password && !url.hash;
+    return url.protocol === 'https:' && url.hostname === host && !url.port && !url.username && !url.password && !url.hash;
   } catch {
     return false;
   }

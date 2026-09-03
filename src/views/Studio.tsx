@@ -12,7 +12,7 @@ import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalo
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
   searchImages, searchVideos, ingestPexelsImage, ingestPexelsVideo, discardPexelsVideoQuarantine,
-  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, issueOpaqueMediaAnalysisReference, analyzeVisualSemantics, type SubtitleTranslationUnavailableReason,
+  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, issueOpaqueMediaAnalysisReference, analyzeVisualSemantics, analyzeDiscoveryCandidateSemantics, type SubtitleTranslationUnavailableReason,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
 import {
@@ -324,6 +324,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   // No UI in Slice 1; preserve advisory plans across draft hydration for later Visual Intelligence slices.
   const [visualIntelligence, setVisualIntelligence] = useState<VisualIntelligencePlanningState | undefined>();
   const [visualShortlists, setVisualShortlists] = useState<Record<string, VisualDiscoveryShortlist>>({});
+  const visualShortlistsRef = useRef<Record<string, VisualDiscoveryShortlist>>({});
   const [selectedVisualCandidates, setSelectedVisualCandidates] = useState<Record<string, string>>({});
   const selectedVisualCandidatesRef = useRef<Record<string, string>>({});
   const visualPlanningRef = useRef<VisualIntelligencePlanningState | undefined>();
@@ -337,10 +338,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const visualSemanticRequests = useRef(createVisualSemanticRequestRegistry());
   const [visualSemanticBusy, setVisualSemanticBusy] = useState<Set<string>>(new Set());
   const [visualSemanticAssessments, setVisualSemanticAssessments] = useState<Record<string, { readonly mediaPath: string; readonly briefFingerprint: string; readonly assessment: VisualSemanticAssessment }>>({});
+  const [candidateSemanticAssessments, setCandidateSemanticAssessments] = useState<Record<string, { readonly briefFingerprint: string; readonly assessment: VisualSemanticAssessment }>>({});
+  const candidateSemanticRequests = useRef(createVisualSemanticRequestRegistry());
+  const [candidateSemanticBusy, setCandidateSemanticBusy] = useState<Set<string>>(new Set());
   const visualSessionEpoch = useRef(0);
   const directorProjectIdRef = useRef(directorProjectId);
   useEffect(() => { scenesRef.current = scenes; }, [scenes]);
   useEffect(() => { selectedVisualCandidatesRef.current = selectedVisualCandidates; }, [selectedVisualCandidates]);
+  useEffect(() => { visualShortlistsRef.current = visualShortlists; }, [visualShortlists]);
   useEffect(() => { visualPlanningRef.current = visualIntelligence; }, [visualIntelligence]);
   useEffect(() => { directorProjectIdRef.current = directorProjectId; }, [directorProjectId]);
 
@@ -1249,6 +1254,37 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       visualSemanticRequests.current.release(operation);
       if (visualSemanticGenerations.current.get(sceneId) === generation && visualSessionEpoch.current === epoch && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) setVisualSemanticBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
     }
+  }
+
+  async function handleAnalyzeDiscoveryCandidate(sceneIndex: number, candidateId: string) {
+    const scene = scenesRef.current[sceneIndex]; const sceneId = scene?.visualPlanningId;
+    const plan = sceneId ? visualPlanningRef.current?.queryPlans.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
+    const brief = sceneId ? visualPlanningRef.current?.briefs.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
+    const shortlist = sceneId ? visualShortlistsRef.current[sceneId] : undefined;
+    const candidate = shortlist?.candidates.find((item) => item.candidateId === candidateId);
+    if (!scene || !sceneId || !plan || !brief || !candidate || candidate.provider !== 'pexels' || candidate.mediaType !== 'image' || !/^\d+$/u.test(candidate.providerMediaIdentity)) return;
+    const operation = { sceneId, mediaPath: candidate.candidateId, briefFingerprint: plan.briefFingerprint };
+    const owner = captureValidatedMediaOwnerContext(); if (!candidateSemanticRequests.current.tryAcquire(operation)) return;
+    const discoveryGeneration = visualDiscoveryGenerations.current.get(sceneId) ?? 0;
+    const generation = (visualSemanticGenerations.current.get(sceneId) ?? 0) + 1; const epoch = visualSessionEpoch.current; const projectId = directorProjectIdRef.current;
+    visualSemanticGenerations.current.set(sceneId, generation); setCandidateSemanticBusy((current) => new Set(current).add(candidate.candidateId));
+    try {
+      const response = await analyzeDiscoveryCandidateSemantics({ candidate: { provider: 'pexels', providerAssetId: Number(candidate.providerMediaIdentity), mediaType: 'image' }, requestId: crypto.randomUUID(), intent: { brief, briefFingerprint: visualBriefFingerprint(brief), dimensions: VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS } });
+      const currentShortlist = visualShortlistsRef.current[sceneId];
+      if (!currentShortlist?.candidates.some((item) => item.candidateId === candidate.candidateId) || visualDiscoveryGenerations.current.get(sceneId) !== discoveryGeneration || visualSemanticGenerations.current.get(sceneId) !== generation || visualSessionEpoch.current !== epoch || directorProjectIdRef.current !== projectId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation) || !isVisualQueryPlanCurrent(plan, brief, scenesRef.current)) return;
+      const assessment = interpretVisualSemanticAnalysis({ version: 1, analyzerVersion: 'visual-semantic-v1', briefFingerprint: plan.briefFingerprint, candidate }, response);
+      setCandidateSemanticAssessments((current) => ({ ...current, [candidate.candidateId]: { briefFingerprint: plan.briefFingerprint, assessment } }));
+    } catch {
+      if (visualSemanticGenerations.current.get(sceneId) === generation && visualSessionEpoch.current === epoch && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) {
+        setCandidateSemanticAssessments((current) => ({
+          ...current,
+          [candidate.candidateId]: {
+            briefFingerprint: plan.briefFingerprint,
+            assessment: { version: 1, status: 'unavailable', analyzerVersion: 'visual-semantic-v1', briefFingerprint: plan.briefFingerprint, candidate, signals: [], unavailableReason: 'provider-unavailable' },
+          },
+        }));
+      }
+    } finally { candidateSemanticRequests.current.release(operation); if (visualSemanticGenerations.current.get(sceneId) === generation) setCandidateSemanticBusy((current) => { const next = new Set(current); next.delete(candidate.candidateId); return next; }); }
   }
 
   async function handleGenerateSceneImage(sceneIndex: number) {
@@ -2180,6 +2216,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                           const rawShortlist = sceneId ? visualShortlists[sceneId] : undefined;
                           const shortlist = brief && rawShortlist && isSceneVisualBindingCurrent(rawShortlist.sceneBinding, scenes) && rawShortlist.briefFingerprint === plan?.briefFingerprint ? rawShortlist : undefined;
                           const selectedId = sceneId ? selectedVisualCandidates[sceneId] : undefined;
+                          const selectedCandidate = shortlist?.candidates.find((candidate) => candidate.candidateId === selectedId);
+                          const selectedCandidateAssessment = selectedCandidate && plan ? candidateSemanticAssessments[selectedCandidate.candidateId]?.briefFingerprint === plan.briefFingerprint ? candidateSemanticAssessments[selectedCandidate.candidateId]?.assessment : undefined : undefined;
+                          const candidateAnalyzing = Boolean(selectedCandidate && candidateSemanticBusy.has(selectedCandidate.candidateId));
                           const applying = sceneId ? visualApplyBusy.has(sceneId) : false;
                           return <>
                             {brief && (
@@ -2233,7 +2272,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                     className="rounded-md bg-violet-700 px-2 py-1 text-xs font-medium text-white hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50">
                                     {applying ? t('studio.applyingVisual') : t('studio.useThisVisual')}
                                   </button>
+                                  <button type="button" onClick={() => selectedCandidate && void handleAnalyzeDiscoveryCandidate(i, selectedCandidate.candidateId)} disabled={!selectedCandidate || selectedCandidate.mediaType !== 'image' || candidateAnalyzing}
+                                    className="rounded-md border border-sky-300 bg-white px-2 py-1 text-xs text-sky-800 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                    {candidateAnalyzing ? 'Analyzing…' : 'Analyze selected'}
+                                  </button>
                                 </div>
+                                {selectedCandidateAssessment && <p className="mt-2 text-xs text-sky-800">Semantic analysis: {selectedCandidateAssessment.status === 'available' ? `Evaluated — fit ${semanticRankingAdjustment(selectedCandidateAssessment) >= 3 ? 'High' : semanticRankingAdjustment(selectedCandidateAssessment) <= -3 ? 'Low' : 'Medium'}` : selectedCandidateAssessment.unavailableReason === 'unsupported-media' ? 'Unsupported' : 'Unavailable'}</p>}
                               </div>
                             )}
                           </>;

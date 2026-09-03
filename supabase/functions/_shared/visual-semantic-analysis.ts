@@ -3,7 +3,7 @@ import { normalizeSceneVisualBrief, visualBriefFingerprint, type SceneVisualBrie
 export const VISUAL_SEMANTIC_ANALYSIS_CONTRACT_VERSION = "visual-semantic-v1" as const;
 export const VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS = ["subject", "setting", "location", "era", "action", "mood", "lighting", "composition", "realism-style", "text-logo"] as const;
 export type VisualSemanticAnalysisDimension = typeof VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS[number];
-export type VisualSemanticAnalysisReason = "provider-not-configured" | "provider-credit-exhausted" | "provider-rate-limited" | "provider-timeout" | "provider-malformed-response" | "provider-unavailable" | "unsupported-media" | "invalid-reference" | "expired-reference";
+export type VisualSemanticAnalysisReason = "provider-not-configured" | "provider-credit-exhausted" | "provider-rate-limited" | "provider-timeout" | "provider-malformed-response" | "provider-unavailable" | "unsupported-media" | "invalid-reference" | "expired-reference" | "candidate-invalid" | "candidate-not-found" | "candidate-provider-not-configured" | "candidate-provider-unavailable" | "candidate-media-unavailable" | "candidate-media-too-large";
 export type VisualSemanticEvidence = "supports-intent" | "contradicts-intent" | "uncertain";
 export type VisualSemanticConfidence = "low" | "medium" | "high";
 
@@ -16,7 +16,7 @@ export type VisualSemanticAnalysisResponse = { readonly status: "evaluated"; rea
 const dimensions = new Set<string>(VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS);
 const evidence = new Set<string>(["supports-intent", "contradicts-intent", "uncertain"]);
 const confidence = new Set<string>(["low", "medium", "high"]);
-const reasons = new Set<string>(["provider-not-configured", "provider-credit-exhausted", "provider-rate-limited", "provider-timeout", "provider-malformed-response", "provider-unavailable", "unsupported-media", "invalid-reference", "expired-reference"]);
+const reasons = new Set<string>(["provider-not-configured", "provider-credit-exhausted", "provider-rate-limited", "provider-timeout", "provider-malformed-response", "provider-unavailable", "unsupported-media", "invalid-reference", "expired-reference", "candidate-invalid", "candidate-not-found", "candidate-provider-not-configured", "candidate-provider-unavailable", "candidate-media-unavailable", "candidate-media-too-large"]);
 const referencePattern = /^omr1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{32,4096}$/u;
 const requestIdPattern = /^[A-Za-z0-9._:-]{8,96}$/u;
 const factPattern = /^[\p{L}\p{N}][\p{L}\p{N} ,.'’()&/+:-]{0,119}$/u;
@@ -30,6 +30,18 @@ export function normalizeVisualSemanticAnalysisRequest(value: unknown): VisualSe
   const requested = intentSource.dimensions.map((item) => typeof item === "string" && dimensions.has(item) ? item as VisualSemanticAnalysisDimension : invalid());
   if (new Set(requested).size !== requested.length) throw new Error("Visual semantic analysis intent is invalid.");
   return Object.freeze({ reference: source.reference, requestId: source.requestId, intent: Object.freeze({ brief, briefFingerprint: intentSource.briefFingerprint, dimensions: Object.freeze(requested) }) });
+}
+
+export interface DiscoveryCandidateSemanticAnalysisRequest { readonly candidate: { readonly provider: "pexels"; readonly providerAssetId: number; readonly mediaType: "image" }; readonly intent: VisualSemanticAnalysisIntent; readonly requestId: string; }
+/** Candidate transport has no URL, bucket, path, owner, or preview authority. */
+export function normalizeDiscoveryCandidateSemanticAnalysisRequest(value: unknown): DiscoveryCandidateSemanticAnalysisRequest {
+  const source = object(value, "Discovery candidate semantic analysis request"); keys(source, ["candidate", "intent", "requestId"], "Discovery candidate semantic analysis request");
+  const candidate = object(source.candidate, "Discovery candidate identity"); keys(candidate, ["provider", "providerAssetId", "mediaType"], "Discovery candidate identity");
+  const rawAssetId = candidate.providerAssetId;
+  if (candidate.provider !== "pexels" || candidate.mediaType !== "image" || typeof rawAssetId !== "number" || !Number.isSafeInteger(rawAssetId) || rawAssetId < 1 || rawAssetId > 2_147_483_647) throw new Error("Discovery candidate identity is invalid.");
+  const providerAssetId = rawAssetId;
+  const semantic = normalizeVisualSemanticAnalysisRequest({ reference: `omr1.${"a".repeat(16)}.${"b".repeat(48)}`, intent: source.intent, requestId: source.requestId });
+  return Object.freeze({ candidate: Object.freeze({ provider: "pexels" as const, providerAssetId, mediaType: "image" as const }), intent: semantic.intent, requestId: semantic.requestId });
 }
 
 /** Strictly admits compact pixel-observation evidence; raw model prose never escapes this boundary. */
