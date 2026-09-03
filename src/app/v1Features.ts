@@ -43,6 +43,7 @@ export const V1_EDGE_FUNCTIONS = [
   'search-videos',
   'translate-subtitles',
   'visual-query-planner',
+  'media-analysis-reference',
 ] as const;
 
 export type V1EdgeFunction = (typeof V1_EDGE_FUNCTIONS)[number];

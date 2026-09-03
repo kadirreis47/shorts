@@ -8,6 +8,7 @@ import {
   normalizeVisualIntelligencePlanningState,
   type VisualIntelligencePlanningState,
 } from '@/core/visual-intelligence';
+import { normalizeOpaqueMediaReferenceRequest, normalizeOpaqueMediaReferenceResponse, type OpaqueMediaReferenceResponse } from '@/core/visual-intelligence';
 import type { VisualQueryPlannerRequest } from '../../supabase/functions/_shared/visual-query-planner';
 
 import type {
@@ -589,6 +590,13 @@ export async function planVisualQueries(params: VisualQueryPlannerRequest): Prom
     throw new Error('Visual query planner returned an invalid result.');
   }
   return parsed;
+}
+
+/** Requests a short-lived analysis capability for one existing private image identity; it never returns a URL. */
+export async function issueOpaqueMediaAnalysisReference(media: MediaStorageObject): Promise<OpaqueMediaReferenceResponse> {
+  const request = normalizeOpaqueMediaReferenceRequest({ media });
+  const result = await apiClient.post<unknown>('media-analysis-reference', request, { retryCount: 0, timeoutMs: 15_000 });
+  return normalizeOpaqueMediaReferenceResponse(result);
 }
 
 function bindingKey(binding: { sceneId: string; sceneIndex: number; sceneTextFingerprint: string }): string {
