@@ -19,23 +19,27 @@ const edge = readFileSync('supabase/functions/media-analysis-reference/index.ts'
 
 describe('opaque media analysis reference gateway', () => {
   it('accepts only a narrow owner-derived durable image identity and rejects URL-bearing shapes before a fetch', () => {
-    expect(normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.png' } })).toBeTruthy();
+    expect(normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.png' } })).toMatchObject({ scope: 'semantic-image-analysis' });
+    expect(normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.png' }, scope: 'semantic-image-analysis' })).toBeTruthy();
     for (const objectPath of ['https://example.test/image.png', 'file:///tmp/a.png', 'http://127.0.0.1/a.png', 'http://[::1]/a.png', 'http://169.254.169.254/latest', 'owner/../secret.png', 'owner/./secret.png', 'owner//generated-images/id.png', 'owner\\generated-images\\id.png', 'owner/%2e%2e/secret.png', 'owner/%2Fsecret.png', 'owner/generated-images/id.PNG', 'owner/generated-images/id.png.exe', 'owner/generated-images/id.png\0', 'owner/videos/a.mp4']) {
-      expect(() => normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath } })).toThrow();
+      expect(() => normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath }, scope: 'semantic-image-analysis' })).toThrow();
     }
-    expect(() => normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/a.png' }, url: 'https://evil.test' })).toThrow();
+    expect(() => normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/a.png' }, scope: 'semantic-image-analysis', url: 'https://evil.test' })).toThrow();
     for (const field of ['url', 'href', 'src', 'path', 'hostname', 'downloadUrl', 'signedUrl']) {
-      expect(() => normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.png' }, [field]: 'https://evil.test' })).toThrow();
+      expect(() => normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.png' }, scope: 'semantic-image-analysis', [field]: 'https://evil.test' })).toThrow();
     }
+    expect(() => normalizeOpaqueMediaReferenceRequest({ media: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.png' }, scope: 'unknown' })).toThrow();
   });
 
   it('strictly validates short-lived opaque client responses and never accepts authority fields', () => {
     expect(normalizeOpaqueMediaReferenceResponse(response, now)).toEqual(response);
-    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, expiresAt: new Date(now + 3600_000).toISOString() }, now)).toThrow();
-    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, expiresAt: new Date(now - 1).toISOString() }, now)).toThrow();
-    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, issuedAt: new Date(now + 31_000).toISOString(), expiresAt: new Date(now + 300_000).toISOString() }, now)).toThrow();
-    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, objectPath: 'owner/path' }, now)).toThrow();
-    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, scope: 'visual-qa' }, now)).toThrow();
+    expect(normalizeOpaqueMediaReferenceResponse(response, 'semantic-image-analysis', now)).toEqual(response);
+    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, expiresAt: new Date(now + 3600_000).toISOString() }, 'semantic-image-analysis', now)).toThrow();
+    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, expiresAt: new Date(now - 1).toISOString() }, 'semantic-image-analysis', now)).toThrow();
+    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, issuedAt: new Date(now + 31_000).toISOString(), expiresAt: new Date(now + 300_000).toISOString() }, 'semantic-image-analysis', now)).toThrow();
+    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, objectPath: 'owner/path' }, 'semantic-image-analysis', now)).toThrow();
+    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, scope: 'visual-qa' }, 'semantic-image-analysis', now)).toThrow();
+    expect(() => normalizeOpaqueMediaReferenceResponse({ ...response, scope: 'spatial-image-analysis' }, 'semantic-image-analysis', now)).toThrow();
   });
 
   it('uses the narrow issuance endpoint and rejects malformed response data', async () => {
@@ -43,6 +47,7 @@ describe('opaque media analysis reference gateway', () => {
     post.mockResolvedValueOnce(response);
     await expect(issueOpaqueMediaAnalysisReference({ bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.png' })).resolves.toEqual(response);
     expect(post).toHaveBeenCalledWith('media-analysis-reference', expect.anything(), { retryCount: 0, timeoutMs: 15_000 });
+    expect(post).toHaveBeenLastCalledWith('media-analysis-reference', expect.objectContaining({ scope: 'semantic-image-analysis' }), { retryCount: 0, timeoutMs: 15_000 });
     post.mockResolvedValueOnce({ ...response, mediaUrl: 'https://unsafe.test' });
     await expect(issueOpaqueMediaAnalysisReference({ bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.png' })).rejects.toThrow(/unsupported|invalid/i);
   });

@@ -1,27 +1,33 @@
-import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { normalizeOpaqueMediaReferenceRequest, OPAQUE_MEDIA_REFERENCE_TTL_SECONDS, type OpaqueMediaAnalysisScope, type OpaqueMediaReferenceRequest, type OpaqueMediaReferenceResponse } from "./opaque-media-reference.ts";
-import { MAX_ANALYSIS_IMAGE_BYTES, validateAnalysisImage, type AnalysisImageContentType } from "./analysis-image-validation.ts";
+import { MAX_ANALYSIS_IMAGE_BYTES, validateAnalysisImageWithGeometry, type AnalysisImageContentType } from "./analysis-image-validation.ts";
 import { decodeMediaAnalysisSecret, MEDIA_ANALYSIS_CLOCK_SKEW_SECONDS, openMediaAnalysisCapability, sealMediaAnalysisCapability } from "./media-analysis-reference-crypto.ts";
 import { BoundedStorageReadError, readBoundedAnalysisObject, type AnalysisStorageReadAuthority } from "./bounded-storage-read.ts";
 
 type Failure = "invalid-reference" | "expired-reference" | "scope-mismatch" | "media-not-found" | "media-not-eligible" | "unsupported-media-type" | "media-too-large" | "resolution-failed" | "temporarily-unavailable";
 interface StoredEvidence { readonly id: string; readonly version: string; readonly etag: string; readonly updatedAt: string; readonly size: number; readonly contentType: AnalysisImageContentType; }
+interface MediaAnalysisMetadataService {
+  readonly storage: {
+    from(bucket: string): {
+      info(path: string): Promise<{ data: { id?: unknown; version?: unknown; etag?: unknown; updatedAt?: unknown; size?: unknown; contentType?: unknown } | null; error: unknown }>;
+    };
+  };
+}
 
 export class MediaAnalysisReferenceError extends Error { constructor(readonly reason: Failure) { super(reason); } }
-export interface ResolvedMediaAnalysisReference { readonly mediaType: "image"; readonly contentType: "image/jpeg" | "image/png"; readonly bytes: Uint8Array; }
+export interface ResolvedMediaAnalysisReference { readonly mediaType: "image"; readonly contentType: "image/jpeg" | "image/png"; readonly bytes: Uint8Array; readonly width: number; readonly height: number; }
 
-export async function issueMediaAnalysisReference(service: SupabaseClient, userId: string, request: OpaqueMediaReferenceRequest, secret: string, now = Date.now()): Promise<OpaqueMediaReferenceResponse> {
+export async function issueMediaAnalysisReference(service: MediaAnalysisMetadataService, userId: string, request: OpaqueMediaReferenceRequest, secret: string, now = Date.now()): Promise<OpaqueMediaReferenceResponse> {
   decodeMediaAnalysisSecret(secret);
   const normalized = normalizeOpaqueMediaReferenceRequest(request);
   assertOwnerImagePath(normalized.media.objectPath, userId);
   const evidence = await storedEvidence(service, normalized.media.objectPath);
   const issuedAt = Math.floor(now / 1_000); const expiresAt = issuedAt + OPAQUE_MEDIA_REFERENCE_TTL_SECONDS;
-  const reference = await sealMediaAnalysisCapability({ v: 1, s: "semantic-image-analysis", m: "image", b: "media", p: normalized.media.objectPath, o: userId, oid: evidence.id, ov: evidence.version, oe: evidence.etag, ou: evidence.updatedAt, oz: evidence.size, oct: evidence.contentType, iat: issuedAt, exp: expiresAt }, secret);
-  return Object.freeze({ reference, issuedAt: new Date(issuedAt * 1_000).toISOString(), expiresAt: new Date(expiresAt * 1_000).toISOString(), scope: "semantic-image-analysis", mediaType: "image" });
+  const reference = await sealMediaAnalysisCapability({ v: 1, s: normalized.scope, m: "image", b: "media", p: normalized.media.objectPath, o: userId, oid: evidence.id, ov: evidence.version, oe: evidence.etag, ou: evidence.updatedAt, oz: evidence.size, oct: evidence.contentType, iat: issuedAt, exp: expiresAt }, secret);
+  return Object.freeze({ reference, issuedAt: new Date(issuedAt * 1_000).toISOString(), expiresAt: new Date(expiresAt * 1_000).toISOString(), scope: normalized.scope, mediaType: "image" });
 }
 
 /** Server-only resolver for a future provider adapter. It never returns an object path or URL. */
-export async function resolveMediaAnalysisReference(service: SupabaseClient, storageAuthority: AnalysisStorageReadAuthority, userId: string, reference: string, requiredScope: OpaqueMediaAnalysisScope, secret: string, now = Date.now()): Promise<ResolvedMediaAnalysisReference> {
+export async function resolveMediaAnalysisReference(service: MediaAnalysisMetadataService, storageAuthority: AnalysisStorageReadAuthority, userId: string, reference: string, requiredScope: OpaqueMediaAnalysisScope, secret: string, now = Date.now()): Promise<ResolvedMediaAnalysisReference> {
   let capability;
   try { capability = await openMediaAnalysisCapability(reference, secret); } catch { throw new MediaAnalysisReferenceError("invalid-reference"); }
   if (capability.o !== userId) throw new MediaAnalysisReferenceError("invalid-reference");
@@ -35,15 +41,15 @@ export async function resolveMediaAnalysisReference(service: SupabaseClient, sto
   let bytes: Uint8Array;
   try { bytes = await readBoundedAnalysisObject(storageAuthority, userId, capability.p, expected); }
   catch (error) { throw new MediaAnalysisReferenceError(error instanceof BoundedStorageReadError ? error.reason : "resolution-failed"); }
-  let validatedType: AnalysisImageContentType;
-  try { validatedType = validateAnalysisImage(capability.p, expected.contentType, bytes); } catch { throw new MediaAnalysisReferenceError("unsupported-media-type"); }
+  let validated: { readonly contentType: AnalysisImageContentType; readonly width: number; readonly height: number };
+  try { validated = validateAnalysisImageWithGeometry(capability.p, expected.contentType, bytes); } catch { throw new MediaAnalysisReferenceError("unsupported-media-type"); }
   // Detect overwrite/delete-recreate races between the first metadata read and download.
   assertSameObject(expected, await storedEvidence(service, capability.p));
-  return Object.freeze({ mediaType: "image", contentType: validatedType, bytes });
+  return Object.freeze({ mediaType: "image", contentType: validated.contentType, bytes, width: validated.width, height: validated.height });
 }
 
 function assertOwnerImagePath(path: string, userId: string): void { const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"; if (!new RegExp(`^${uuid}/generated-images/${uuid}\\.(?:png|jpg)$`).test(path) || !path.startsWith(`${userId}/`)) throw new MediaAnalysisReferenceError("media-not-eligible"); }
-async function storedEvidence(service: SupabaseClient, path: string): Promise<StoredEvidence> { try { const { data, error } = await service.storage.from("media").info(path); if (error || !data) throw new MediaAnalysisReferenceError("media-not-found"); const contentType = data.contentType?.split(";", 1)[0].trim().toLowerCase(); if (typeof data.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(data.id)
+async function storedEvidence(service: MediaAnalysisMetadataService, path: string): Promise<StoredEvidence> { try { const { data, error } = await service.storage.from("media").info(path); if (error || !data) throw new MediaAnalysisReferenceError("media-not-found"); const contentType = typeof data.contentType === "string" ? data.contentType.split(";", 1)[0].trim().toLowerCase() : undefined; if (typeof data.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(data.id)
       || typeof data.version !== "string" || data.version.length < 1 || data.version.length > 160 || typeof data.etag !== "string" || data.etag.length < 1 || data.etag.length > 160
       || typeof data.updatedAt !== "string" || data.updatedAt.length < 1 || data.updatedAt.length > 64 || typeof data.size !== "number" || !Number.isSafeInteger(data.size) || data.size < 1
       || (contentType !== "image/jpeg" && contentType !== "image/png")) throw new MediaAnalysisReferenceError("media-not-eligible");

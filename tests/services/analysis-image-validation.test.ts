@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { validateAnalysisImage } from '../../supabase/functions/_shared/analysis-image-validation';
+import { validateAnalysisImage, validateAnalysisImageWithGeometry } from '../../supabase/functions/_shared/analysis-image-validation';
 
 describe('analysis image validation', () => {
   it('accepts bounded PNG and JPEG dimensions with matching extension, MIME, and signature', () => {
     expect(validateAnalysisImage('owner/generated-images/id.png', 'image/png', png(1080, 1920))).toBe('image/png');
     expect(validateAnalysisImage('owner/generated-images/id.jpg', 'image/jpeg', jpeg(1080, 1920))).toBe('image/jpeg');
+  });
+
+  it('returns trusted encoded-raster dimensions from the same validation pass', () => {
+    expect(validateAnalysisImageWithGeometry('owner/generated-images/id.png', 'image/png', png(1080, 1920))).toEqual({ contentType: 'image/png', width: 1080, height: 1920 });
+    expect(validateAnalysisImageWithGeometry('owner/generated-images/id.jpg', 'image/jpeg', jpeg(1920, 1080))).toEqual({ contentType: 'image/jpeg', width: 1920, height: 1080 });
+  });
+
+  it('reports JPEG encoded-raster geometry without applying EXIF display orientation', () => {
+    expect(validateAnalysisImageWithGeometry('owner/generated-images/id.jpg', 'image/jpeg', jpegWithExifOrientation(1920, 1080, 6))).toEqual({ contentType: 'image/jpeg', width: 1920, height: 1080 });
+  });
+
+  it('retains the first valid JPEG SOF geometry when a later valid SOF is present', () => {
+    expect(validateAnalysisImageWithGeometry('owner/generated-images/id.jpg', 'image/jpeg', jpegWithAdditionalSof(1920, 1080, 640, 480))).toEqual({ contentType: 'image/jpeg', width: 1920, height: 1080 });
   });
 
   it('rejects truncated, malformed, absurd, mismatched, and arbitrary images', () => {
@@ -34,6 +47,26 @@ function png(width: number, height: number): Uint8Array {
   return bytes;
 }
 function jpeg(width: number, height: number): Uint8Array { return Uint8Array.from([0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, height >> 8, height & 255, width >> 8, width & 255, 1, 1, 0x11, 0, 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0, 0xff, 0xd9]); }
+function jpegWithAdditionalSof(firstWidth: number, firstHeight: number, secondWidth: number, secondHeight: number): Uint8Array {
+  return Uint8Array.from([
+    0xff, 0xd8,
+    0xff, 0xc0, 0, 11, 8, firstHeight >> 8, firstHeight & 255, firstWidth >> 8, firstWidth & 255, 1, 1, 0x11, 0,
+    0xff, 0xc0, 0, 11, 8, secondHeight >> 8, secondHeight & 255, secondWidth >> 8, secondWidth & 255, 1, 1, 0x11, 0,
+    0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0, 0xff, 0xd9,
+  ]);
+}
+function jpegWithExifOrientation(width: number, height: number, orientation: number): Uint8Array {
+  const base = jpeg(width, height);
+  const app1 = Uint8Array.from([
+    0xff, 0xe1, 0, 34, 0x45, 0x78, 0x69, 0x66, 0, 0,
+    0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0,
+    0x12, 0x01, 3, 0, 1, 0, 0, 0, orientation, 0, 0, 0,
+    0, 0, 0, 0,
+  ]);
+  const result = new Uint8Array(base.length + app1.length);
+  result.set(base.slice(0, 2)); result.set(app1, 2); result.set(base.slice(2), 2 + app1.length);
+  return result;
+}
 function setUint32(bytes: Uint8Array, offset: number, value: number): void { bytes[offset] = value >>> 24; bytes[offset + 1] = value >>> 16; bytes[offset + 2] = value >>> 8; bytes[offset + 3] = value; }
 function crc32(bytes: Uint8Array): number { let crc = 0xffffffff; for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1)); } return (crc ^ 0xffffffff) >>> 0; }
 function withByte(bytes: Uint8Array, index: number, value: number): Uint8Array { const copy = bytes.slice(); copy[index] = value; return copy; }

@@ -16,6 +16,7 @@ describe('Pexels analysis candidate resolver', () => {
     }) as unknown as typeof fetch;
     const result = await resolvePexelsAnalysisCandidate(42, 'server-secret', fetchImpl);
     expect(result.contentType).toBe('image/png');
+    expect(result).toMatchObject({ width: 10, height: 10 });
     expect(calls[0][0]).toBe('https://api.pexels.com/v1/photos/42');
     expect((calls[0][1]?.headers as Record<string, string>).Authorization).toBe('server-secret');
     expect(calls[1][1]?.headers).toBeUndefined();

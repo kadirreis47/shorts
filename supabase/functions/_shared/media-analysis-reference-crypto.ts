@@ -36,7 +36,7 @@ function normalizeCapability(value: unknown): MediaAnalysisCapability {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid-reference");
   const item = value as Record<string, unknown>;
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-  if (Object.keys(item).length !== 14 || item.v !== 1 || item.s !== "semantic-image-analysis" || item.m !== "image" || item.b !== "media"
+  if (Object.keys(item).length !== 14 || item.v !== 1 || (item.s !== "semantic-image-analysis" && item.s !== "spatial-image-analysis") || item.m !== "image" || item.b !== "media"
     || typeof item.p !== "string" || item.p.length > 240 || typeof item.o !== "string" || !uuid.test(item.o)
     || typeof item.oid !== "string" || !uuid.test(item.oid) || typeof item.ov !== "string" || item.ov.length < 1 || item.ov.length > 160
     || typeof item.oe !== "string" || item.oe.length < 1 || item.oe.length > 160 || typeof item.ou !== "string" || item.ou.length < 1 || item.ou.length > 64

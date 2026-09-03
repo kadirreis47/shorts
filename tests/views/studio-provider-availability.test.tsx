@@ -6,6 +6,7 @@ import { advanceValidatedOwnerGeneration, setValidatedOwnerId } from '@/auth/ide
 import { I18nProvider } from '@/lib/i18n';
 import { loadStudioDraft, saveStudioDraft, type StudioDraft } from '@/lib/studioDraft';
 import { isCanonicalSceneId } from '@/lib/sceneIdentity';
+import { visualBriefFingerprint, type SceneVisualBinding } from '@/core/visual-intelligence';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import { reconcileCharacterProfileSelection } from '@/services/characterProfileSelection';
 import { useProjectStore } from '@/store';
@@ -15,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   getProviderStatus: vi.fn(), searchImages: vi.fn(), searchVideos: vi.fn(),
   ingestPexelsImage: vi.fn(), ingestPexelsVideo: vi.fn(), discardPexelsVideoQuarantine: vi.fn(),
   researchFootage: vi.fn(), uploadMedia: vi.fn(),
+  planVisualQueries: vi.fn(), issueOpaqueSpatialMediaAnalysisReference: vi.fn(),
+  analyzeVisualSpatial: vi.fn(), analyzeDiscoveryCandidateSpatial: vi.fn(),
   aiService: {
     generateScript: vi.fn(), generateHooks: vi.fn(), generateSEO: vi.fn(), analyzeScript: vi.fn(),
   },
@@ -40,6 +43,10 @@ vi.mock('@/lib/api', () => ({
   ingestPexelsVideo: mocks.ingestPexelsVideo, discardPexelsVideoQuarantine: mocks.discardPexelsVideoQuarantine,
   generateAIImage: vi.fn(), researchFootage: mocks.researchFootage,
   translateSubtitles: mocks.translateSubtitles,
+  planVisualQueries: mocks.planVisualQueries,
+  issueOpaqueSpatialMediaAnalysisReference: mocks.issueOpaqueSpatialMediaAnalysisReference,
+  analyzeVisualSpatial: mocks.analyzeVisualSpatial,
+  analyzeDiscoveryCandidateSpatial: mocks.analyzeDiscoveryCandidateSpatial,
 }));
 vi.mock('@/core/di', () => ({ applicationContainer: { resolve: () => mocks.aiService }, dependencyTokens: { aiApplicationService: Symbol('ai'), mediaEngine: Symbol('media') } }));
 vi.mock('@/lib/videoRenderer', () => ({ renderVideo: vi.fn() }));
@@ -105,6 +112,125 @@ describe('Studio provider availability', () => {
     const elevenLabs = Array.from(container.querySelectorAll('button')).find((button) => button.textContent?.includes('ElevenLabs'));
     expect(elevenLabs).toBeDefined();
     expect(elevenLabs?.disabled).toBe(true);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('rejects candidate spatial evidence that resolves after Search Again', async () => {
+    const pending = deferred<ReturnType<typeof spatialEvidence>>();
+    configureSpatialDiscovery();
+    mocks.analyzeDiscoveryCandidateSpatial.mockReturnValueOnce(pending.promise);
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    await discoverCandidates();
+
+    await clickButton('Analyze framing');
+    expect(mocks.analyzeDiscoveryCandidateSpatial).toHaveBeenCalledWith(expect.objectContaining({ candidate: expect.objectContaining({ providerAssetId: 42 }) }));
+    await clickButton('Search Again');
+    await flush();
+    await act(async () => { pending.resolve(spatialEvidence(0.2, 0.3)); });
+
+    expect(container?.textContent).not.toContain('Spatial evidence: focal (0.20, 0.30)');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('keeps candidate B evidence current when superseded candidate A resolves later', async () => {
+    const pendingA = deferred<ReturnType<typeof spatialEvidence>>();
+    const pendingB = deferred<ReturnType<typeof spatialEvidence>>();
+    configureSpatialDiscovery();
+    mocks.analyzeDiscoveryCandidateSpatial.mockReturnValueOnce(pendingA.promise).mockReturnValueOnce(pendingB.promise);
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    await discoverCandidates();
+
+    await clickButton('Analyze framing');
+    const candidateB = Array.from(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+      .find((button) => button.querySelector('img')?.getAttribute('src')?.includes('/43.jpg'));
+    expect(candidateB).toBeDefined();
+    await act(async () => { candidateB?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await clickButton('Analyze framing');
+    expect(mocks.analyzeDiscoveryCandidateSpatial).toHaveBeenLastCalledWith(expect.objectContaining({ candidate: expect.objectContaining({ providerAssetId: 43 }) }));
+
+    await act(async () => { pendingB.resolve(spatialEvidence(0.8, 0.7)); });
+    expect(container?.textContent).toContain('Spatial evidence: focal (0.80, 0.70)');
+    await act(async () => { pendingA.resolve(spatialEvidence(0.2, 0.3)); });
+    expect(container?.textContent).toContain('Spatial evidence: focal (0.80, 0.70)');
+    expect(container?.textContent).not.toContain('Spatial evidence: focal (0.20, 0.30)');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('clears candidate spatial evidence on Apply and requires fresh owned-media analysis', async () => {
+    configureSpatialDiscovery();
+    mocks.analyzeDiscoveryCandidateSpatial.mockResolvedValueOnce(spatialEvidence(0.25, 0.35));
+    mocks.ingestPexelsImage.mockResolvedValueOnce({
+      media: { bucket: 'media', objectPath: APPLIED_MEDIA_B },
+      previewUrl: 'https://signed.example/applied-42.jpg',
+      provenance: { provider: 'pexels', providerMediaId: 42, originalSourceUrl: 'https://images.pexels.com/photos/42/original.jpg', query: 'Visual' },
+    });
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial.mockResolvedValueOnce(spatialEvidence(0.65, 0.55));
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    await discoverCandidates();
+
+    await clickButton('Analyze framing');
+    expect(container?.textContent).toContain('Spatial evidence: focal (0.25, 0.35)');
+    await clickButton('Use This Visual');
+    await flush();
+    expect(container?.textContent).not.toContain('Spatial evidence: focal (0.25, 0.35)');
+    expect(container?.textContent).not.toContain('Spatial evidence: focal (0.65, 0.55)');
+    expect(mocks.issueOpaqueSpatialMediaAnalysisReference).not.toHaveBeenCalled();
+
+    const framingButtons = Array.from(container?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+      .filter((button) => button.textContent?.includes('Analyze framing'));
+    expect(framingButtons).toHaveLength(2);
+    await act(async () => { framingButtons[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await flush();
+    expect(mocks.issueOpaqueSpatialMediaAnalysisReference).toHaveBeenCalledWith({ bucket: 'media', objectPath: APPLIED_MEDIA_B });
+    expect(mocks.analyzeVisualSpatial).toHaveBeenCalledTimes(1);
+    expect(container?.textContent).toContain('Spatial evidence: focal (0.65, 0.55)');
+    expect(container?.textContent).toContain('1200×800 encoded raster');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('rejects applied spatial evidence after canonical media replacement', async () => {
+    const pending = deferred<ReturnType<typeof spatialEvidence>>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial.mockReturnValueOnce(pending.promise);
+    mocks.uploadMedia.mockResolvedValueOnce({ imageUrl: 'https://signed.example/replacement.png', media: { bucket: 'media', objectPath: APPLIED_MEDIA_B } });
+    saveStudioDraft(draftWithImage(APPLIED_MEDIA_A));
+    const root = await renderStudio();
+    await flush();
+
+    await clickButton('Analyze framing');
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]');
+    Object.defineProperty(input!, 'files', { configurable: true, value: [pngFile()] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+    await act(async () => { pending.resolve(spatialEvidence(0.2, 0.3)); });
+
+    expect(container?.querySelector('img')?.getAttribute('src')).toContain('replacement.png');
+    expect(container?.textContent).not.toContain('Spatial evidence: focal (0.20, 0.30)');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('rejects applied spatial evidence after a project transition', async () => {
+    const pending = deferred<ReturnType<typeof spatialEvidence>>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial.mockReturnValueOnce(pending.promise);
+    saveStudioDraft(draftWithImage(APPLIED_MEDIA_A));
+    const root = await renderStudio();
+    await flush();
+
+    await clickButton('Analyze framing');
+    await act(async () => {
+      useProjectStore.setState({ currentProject: { id: 'project-b', name: 'Project B', updatedAt: '2026-09-03T00:00:00.000Z' }, drafts: [] });
+    });
+    await flush();
+    await act(async () => { pending.resolve(spatialEvidence(0.2, 0.3)); });
+
+    expect(container?.textContent).not.toContain('Spatial evidence: focal (0.20, 0.30)');
     await act(async () => { root.unmount(); });
   });
 
@@ -640,6 +766,42 @@ describe('Studio provider availability', () => {
     await act(async () => { root.unmount(); });
   });
 
+  function configureSpatialDiscovery(): void {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: true }, elevenlabs: { configured: false }, pexels: { configured: true } });
+    mocks.planVisualQueries.mockImplementation(async (input: unknown) => {
+      const request = input as { readonly scenes: readonly [{ readonly sceneBinding: SceneVisualBinding }] };
+      const sceneBinding = request.scenes[0].sceneBinding;
+      const brief = {
+        version: 1, sceneBinding, subject: 'Spatial subject', editorialRole: 'evidence', preferredMedia: 'image',
+        visualStyleHints: [], visualExclusions: [], noveltyConstraints: [],
+        sourceIntent: { allowedSourceKinds: ['licensed-stock'], commerciallyUsableSourceRequired: true, attributionPreference: 'no-preference' },
+      } as const;
+      return {
+        status: 'planned',
+        planning: {
+          version: 1, briefs: [brief], queryPlans: [{
+            version: 1, sceneBinding, briefFingerprint: visualBriefFingerprint(brief),
+            concepts: [
+              { query: 'spatial candidate', targetMedia: 'image', priority: 1, category: 'detail' },
+              { query: 'spatial subject', targetMedia: 'image', priority: 2, category: 'evidence' },
+              { query: 'spatial atmosphere', targetMedia: 'image', priority: 3, category: 'atmosphere' },
+            ],
+          }],
+        },
+      };
+    });
+    mocks.searchImages.mockResolvedValue([
+      { id: 42, url: 'https://images.pexels.com/42.jpg', alt: 'Candidate A' },
+      { id: 43, url: 'https://images.pexels.com/43.jpg', alt: 'Candidate B' },
+    ]);
+  }
+
+  async function discoverCandidates(): Promise<void> {
+    await clickButton('Find Visuals');
+    await flush();
+    expect(container?.querySelectorAll('img[src*="images.pexels.com"]')).toHaveLength(2);
+  }
+
   async function renderStudio() {
     container = document.createElement('div'); document.body.append(container);
     const root = createRoot(container);
@@ -660,6 +822,27 @@ function deferred<T>() {
   let reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((next, fail) => { resolve = next; reject = fail; });
   return { promise, resolve, reject };
+}
+
+const APPLIED_MEDIA_A = '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000010.png';
+const APPLIED_MEDIA_B = '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000011.png';
+
+function spatialEvidence(x: number, y: number) {
+  return {
+    status: 'evaluated' as const, contractVersion: 'visual-spatial-v1' as const, analyzerVersion: 'openai:gpt-test',
+    sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x, y }, confidenceBand: 'medium' as const,
+  };
+}
+
+function draftWithImage(objectPath: string): StudioDraft {
+  const current = draft('script');
+  return {
+    ...current,
+    scenes: [{
+      ...current.scenes[0], imageUrl: 'https://signed.example/current.png',
+      imageStorage: { bucket: 'media', objectPath },
+    }],
+  };
 }
 
 function pngFile() {

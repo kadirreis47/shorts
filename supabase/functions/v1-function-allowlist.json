@@ -18,7 +18,9 @@
     "visual-query-planner",
     "media-analysis-reference",
     "analyze-visual-semantics",
-    "analyze-discovery-candidate-semantics"
+    "analyze-discovery-candidate-semantics",
+    "analyze-visual-spatial",
+    "analyze-discovery-candidate-spatial"
   ],
   "retiredFailClosed": [
     "youtube-auth",

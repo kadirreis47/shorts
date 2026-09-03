@@ -36,6 +36,12 @@ describe('opaque media reference cryptography', () => {
     await expect(openMediaAnalysisCapability(first, encodedSecret(1))).rejects.toThrow(/invalid-reference/u);
   });
 
+  it('preserves a distinct encrypted spatial capability scope', async () => {
+    const spatial = { ...payload, s: 'spatial-image-analysis' as const };
+    const reference = await sealMediaAnalysisCapability(spatial, encodedSecret());
+    await expect(openMediaAnalysisCapability(reference, encodedSecret())).resolves.toEqual(spatial);
+  });
+
   it('rejects oversized, unversioned, or structurally incomplete tokens before use', async () => {
     await expect(openMediaAnalysisCapability('omr1.short.bad', encodedSecret())).rejects.toThrow(/invalid-reference/u);
     await expect(openMediaAnalysisCapability(`omr1.${'a'.repeat(16)}.${'b'.repeat(4097)}`, encodedSecret())).rejects.toThrow(/invalid-reference/u);

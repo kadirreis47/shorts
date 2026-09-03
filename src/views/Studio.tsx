@@ -12,7 +12,7 @@ import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalo
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
   searchImages, searchVideos, ingestPexelsImage, ingestPexelsVideo, discardPexelsVideoQuarantine,
-  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, issueOpaqueMediaAnalysisReference, analyzeVisualSemantics, analyzeDiscoveryCandidateSemantics, type SubtitleTranslationUnavailableReason,
+  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, issueOpaqueMediaAnalysisReference, issueOpaqueSpatialMediaAnalysisReference, analyzeVisualSemantics, analyzeDiscoveryCandidateSemantics, analyzeVisualSpatial, analyzeDiscoveryCandidateSpatial, type SubtitleTranslationUnavailableReason,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
 import {
@@ -24,7 +24,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
-import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { assignNewCanonicalSceneIds, createCanonicalSceneId } from '@/lib/sceneIdentity';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
@@ -89,6 +89,14 @@ function providerActionError(action: string, error: unknown): string {
 }
 
 class StaleVisualSelectionError extends Error {}
+
+function filterSpatialEvidence(
+  current: Record<string, VisualSpatialEvidenceRecord>,
+  keep: (record: VisualSpatialEvidenceRecord) => boolean,
+): Record<string, VisualSpatialEvidenceRecord> {
+  const entries = Object.entries(current).filter(([, record]) => keep(record));
+  return entries.length === Object.keys(current).length ? current : Object.fromEntries(entries);
+}
 
 type PremiumVisualDiscoveryDiagnosticCode =
   | 'VISUAL_PLANNER_REQUEST_FAILED'
@@ -342,6 +350,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [candidateSemanticAssessments, setCandidateSemanticAssessments] = useState<Record<string, { readonly briefFingerprint: string; readonly assessment: VisualSemanticAssessment }>>({});
   const candidateSemanticRequests = useRef(createVisualSemanticRequestRegistry());
   const [candidateSemanticBusy, setCandidateSemanticBusy] = useState<Set<string>>(new Set());
+  const visualSpatialGenerations = useRef(new Map<string, number>());
+  const visualSpatialRequests = useRef(createVisualSpatialRequestRegistry());
+  const candidateSpatialRequests = useRef(createVisualSpatialRequestRegistry());
+  const [visualSpatialBusy, setVisualSpatialBusy] = useState<Set<string>>(new Set());
+  const [candidateSpatialBusy, setCandidateSpatialBusy] = useState<Set<string>>(new Set());
+  const [visualSpatialEvidence, setVisualSpatialEvidence] = useState<Record<string, VisualSpatialEvidenceRecord>>({});
+  const [candidateSpatialEvidence, setCandidateSpatialEvidence] = useState<Record<string, VisualSpatialEvidenceRecord>>({});
   const [cinematographyOutcome, setCinematographyOutcome] = useState<Record<string, string>>({});
   const cinematographyApplyActive = useRef(new Set<string>());
   const cinematographyProposalsRef = useRef<Record<string, CinematographyApplicationProposal>>({});
@@ -352,6 +367,29 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   useEffect(() => { visualShortlistsRef.current = visualShortlists; }, [visualShortlists]);
   useEffect(() => { visualPlanningRef.current = visualIntelligence; }, [visualIntelligence]);
   useEffect(() => { directorProjectIdRef.current = directorProjectId; }, [directorProjectId]);
+
+  // Spatial evidence is session-only and remains visible only while its exact
+  // project, scene/order, and media binding is current.
+  useEffect(() => {
+    setVisualSpatialEvidence((current) => filterSpatialEvidence(current, (record) => {
+      const scene = scenes[record.binding.sceneIndex];
+      return Boolean(scene?.sceneId === record.binding.sceneId && scene.imageStorage && !scene.videoStorage
+        && isVisualSpatialEvidenceRecordCurrent(record, {
+          projectId: directorProjectId, sceneId: scene.sceneId, sceneIndex: record.binding.sceneIndex,
+          scope: 'applied-image', mediaIdentity: `media:${scene.imageStorage.objectPath}`,
+        }));
+    }));
+    setCandidateSpatialEvidence((current) => filterSpatialEvidence(current, (record) => {
+      const scene = scenes[record.binding.sceneIndex]; const shortlist = scene ? visualShortlists[scene.sceneId] : undefined;
+      const selectedId = scene ? selectedVisualCandidates[scene.sceneId] : undefined;
+      const candidate = shortlist?.candidates.find((item) => item.candidateId === selectedId);
+      return Boolean(scene?.sceneId === record.binding.sceneId && candidate?.mediaType === 'image'
+        && isVisualSpatialEvidenceRecordCurrent(record, {
+          projectId: directorProjectId, sceneId: scene.sceneId, sceneIndex: record.binding.sceneIndex,
+          scope: 'discovery-candidate-image', mediaIdentity: `pexels:image:${candidate.providerMediaIdentity}`,
+        }));
+    }));
+  }, [directorProjectId, scenes, selectedVisualCandidates, visualShortlists]);
 
   function isCurrentSceneOperation(projectId: string, epoch: number, current: readonly Scene[], sceneIndex: number, expected: Scene): boolean {
     return directorProjectIdRef.current === projectId
@@ -483,6 +521,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     // Owner-scoped state must never cross an authenticated owner transition.
     setVisualShortlists({});
     setSelectedVisualCandidates({});
+    setVisualSpatialEvidence({});
+    setCandidateSpatialEvidence({});
+    setVisualSpatialBusy(new Set());
+    setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
     cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
@@ -520,6 +562,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     // and must never follow a project hydration transition.
     setVisualShortlists({});
     setSelectedVisualCandidates({});
+    setVisualSpatialEvidence({});
+    setCandidateSpatialEvidence({});
+    setVisualSpatialBusy(new Set());
+    setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
     cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
@@ -700,6 +746,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setVisualIntelligence(undefined);
     setVisualShortlists({});
     setSelectedVisualCandidates({});
+    setVisualSpatialEvidence({});
+    setCandidateSpatialEvidence({});
+    setVisualSpatialBusy(new Set());
+    setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
     cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
@@ -1211,6 +1261,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     // discovery awaits, so retained candidates cannot recreate an old Apply.
     setVisualShortlists((current) => { const next = { ...current }; delete next[binding.sceneId]; return next; });
     setSelectedVisualCandidates((current) => { const next = { ...current }; delete next[binding.sceneId]; return next; });
+    visualSpatialGenerations.current.set(`candidate:${binding.sceneId}`, (visualSpatialGenerations.current.get(`candidate:${binding.sceneId}`) ?? 0) + 1);
+    setCandidateSpatialEvidence((current) => { const { [binding.sceneId]: _ignored, ...rest } = current; return rest; });
+    setCandidateSpatialBusy((current) => { const next = new Set(current); next.delete(binding.sceneId); return next; });
     const projectId = directorProjectIdRef.current;
     const sessionEpoch = visualSessionEpoch.current;
     let owner: ValidatedMediaOwnerContext;
@@ -1274,6 +1327,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const shortlist = sceneId ? visualShortlists[sceneId] : undefined; const selectedId = sceneId ? selectedVisualCandidates[sceneId] : undefined;
     const candidate = shortlist?.candidates.find((item) => item.candidateId === selectedId);
     if (!scene || !sceneId || !candidate || visualApplyActive.current.has(`${visualSessionEpoch.current}:${sceneId}`)) return;
+    visualSpatialGenerations.current.set(`applied:${sceneId}`, (visualSpatialGenerations.current.get(`applied:${sceneId}`) ?? 0) + 1);
+    visualSpatialGenerations.current.set(`candidate:${sceneId}`, (visualSpatialGenerations.current.get(`candidate:${sceneId}`) ?? 0) + 1);
+    setVisualSpatialEvidence((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
+    setCandidateSpatialEvidence((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
+    setVisualSpatialBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
+    setCandidateSpatialBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
     delete cinematographyProposalsRef.current[sceneId];
     setCinematographyOutcome((current) => {
       const { [sceneId]: _ignored, ...rest } = current;
@@ -1437,6 +1496,75 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         }));
       }
     } finally { candidateSemanticRequests.current.release(operation); if (visualSemanticGenerations.current.get(sceneId) === generation) setCandidateSemanticBusy((current) => { const next = new Set(current); next.delete(candidate.candidateId); return next; }); }
+  }
+
+  async function handleAnalyzeSceneSpatial(sceneIndex: number) {
+    const scene = scenesRef.current[sceneIndex]; const sceneId = scene?.sceneId;
+    if (!scene || !sceneId || !scene.imageStorage || scene.videoStorage) return;
+    const projectId = directorProjectIdRef.current; const epoch = visualSessionEpoch.current;
+    const mediaPath = scene.imageStorage.objectPath;
+    const binding: VisualSpatialEvidenceBinding = { projectId, sceneId, sceneIndex, scope: 'applied-image', mediaIdentity: `media:${mediaPath}` };
+    const generationKey = `applied:${sceneId}`;
+    const owner = captureValidatedMediaOwnerContext();
+    if (!visualSpatialRequests.current.tryAcquire(binding)) return;
+    const generation = (visualSpatialGenerations.current.get(generationKey) ?? 0) + 1;
+    visualSpatialGenerations.current.set(generationKey, generation);
+    setVisualSpatialBusy((current) => new Set(current).add(sceneId));
+    try {
+      const reference = await issueOpaqueSpatialMediaAnalysisReference(scene.imageStorage);
+      const response = await analyzeVisualSpatial({ reference: reference.reference, requestId: crypto.randomUUID() });
+      const current = scenesRef.current[sceneIndex];
+      if (!current || current !== scene || current.sceneId !== sceneId || current.imageStorage?.objectPath !== mediaPath || current.videoStorage
+        || visualSpatialGenerations.current.get(generationKey) !== generation || visualSessionEpoch.current !== epoch
+        || directorProjectIdRef.current !== projectId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return;
+      setVisualSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, response) }));
+    } catch {
+      const current = scenesRef.current[sceneIndex];
+      if (current === scene && current.sceneId === sceneId && current.imageStorage?.objectPath === mediaPath && !current.videoStorage
+        && visualSpatialGenerations.current.get(generationKey) === generation && visualSessionEpoch.current === epoch
+        && directorProjectIdRef.current === projectId && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) {
+        setVisualSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, unavailableVisualSpatialAnalysis('provider-unavailable')) }));
+      }
+    } finally {
+      visualSpatialRequests.current.release(binding);
+      if (visualSpatialGenerations.current.get(generationKey) === generation && visualSessionEpoch.current === epoch) setVisualSpatialBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
+    }
+  }
+
+  async function handleAnalyzeDiscoveryCandidateSpatial(sceneIndex: number, candidateId: string) {
+    const scene = scenesRef.current[sceneIndex]; const sceneId = scene?.sceneId;
+    const shortlist = sceneId ? visualShortlistsRef.current[sceneId] : undefined;
+    const candidate = shortlist?.candidates.find((item) => item.candidateId === candidateId);
+    if (!scene || !sceneId || !candidate || candidate.provider !== 'pexels' || candidate.mediaType !== 'image'
+      || !/^\d+$/u.test(candidate.providerMediaIdentity) || selectedVisualCandidatesRef.current[sceneId] !== candidateId) return;
+    const projectId = directorProjectIdRef.current; const epoch = visualSessionEpoch.current;
+    const binding: VisualSpatialEvidenceBinding = { projectId, sceneId, sceneIndex, scope: 'discovery-candidate-image', mediaIdentity: `pexels:image:${candidate.providerMediaIdentity}` };
+    const generationKey = `candidate:${sceneId}`;
+    const owner = captureValidatedMediaOwnerContext();
+    if (!candidateSpatialRequests.current.tryAcquire(binding)) return;
+    const generation = (visualSpatialGenerations.current.get(generationKey) ?? 0) + 1;
+    const discoveryGeneration = visualDiscoveryGenerations.current.get(sceneId) ?? 0;
+    visualSpatialGenerations.current.set(generationKey, generation);
+    setCandidateSpatialBusy((current) => new Set(current).add(sceneId));
+    try {
+      const response = await analyzeDiscoveryCandidateSpatial({ candidate: { provider: 'pexels', providerAssetId: Number(candidate.providerMediaIdentity), mediaType: 'image' }, requestId: crypto.randomUUID() });
+      const currentScene = scenesRef.current[sceneIndex]; const currentShortlist = visualShortlistsRef.current[sceneId];
+      if (currentScene !== scene || currentScene.sceneId !== sceneId || selectedVisualCandidatesRef.current[sceneId] !== candidateId
+        || !currentShortlist?.candidates.some((item) => item.candidateId === candidateId && item.providerMediaIdentity === candidate.providerMediaIdentity && item.mediaType === 'image')
+        || visualDiscoveryGenerations.current.get(sceneId) !== discoveryGeneration || visualSpatialGenerations.current.get(generationKey) !== generation
+        || visualSessionEpoch.current !== epoch || directorProjectIdRef.current !== projectId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return;
+      setCandidateSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, response) }));
+    } catch {
+      const currentScene = scenesRef.current[sceneIndex];
+      if (currentScene === scene && currentScene.sceneId === sceneId && selectedVisualCandidatesRef.current[sceneId] === candidateId
+        && visualDiscoveryGenerations.current.get(sceneId) === discoveryGeneration && visualSpatialGenerations.current.get(generationKey) === generation
+        && visualSessionEpoch.current === epoch && directorProjectIdRef.current === projectId && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) {
+        setCandidateSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, unavailableVisualSpatialAnalysis('provider-unavailable')) }));
+      }
+    } finally {
+      candidateSpatialRequests.current.release(binding);
+      if (visualSpatialGenerations.current.get(generationKey) === generation && visualSessionEpoch.current === epoch) setCandidateSpatialBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
+    }
   }
 
   async function handleGenerateSceneImage(sceneIndex: number) {
@@ -2353,19 +2481,32 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                       const record = sceneId ? visualSemanticAssessments[sceneId] : undefined;
                       const assessment = record && record.mediaPath === s.imageStorage?.objectPath && record.briefFingerprint === plan?.briefFingerprint ? record.assessment : undefined;
                       const busy = Boolean(sceneId && visualSemanticBusy.has(sceneId));
+                      const spatialRecord = sceneId ? visualSpatialEvidence[sceneId] : undefined;
+                      const spatial = spatialRecord && isVisualSpatialEvidenceRecordCurrent(spatialRecord, {
+                        projectId: directorProjectId, sceneId, sceneIndex: i, scope: 'applied-image', mediaIdentity: `media:${s.imageStorage.objectPath}`,
+                      }) ? spatialRecord.response : undefined;
+                      const spatialBusy = Boolean(sceneId && visualSpatialBusy.has(sceneId));
                       const score = assessment ? semanticRankingAdjustment(assessment) : 0;
                       const fit = score >= 3 ? 'High' : score <= -3 ? 'Low' : 'Medium';
                       return <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50/60 p-2 text-xs text-slate-700">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-medium">Semantic analysis: {assessment?.status === 'available' ? 'Evaluated' : assessment?.unavailableReason === 'unsupported-media' ? 'Unsupported' : assessment?.status === 'unavailable' ? 'Unavailable' : 'Not analyzed'}</span>
-                          <button type="button" onClick={() => void handleAnalyzeSceneVisual(i)} disabled={!eligible || busy}
-                            className="rounded border border-sky-300 bg-white px-2 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
-                            {busy ? 'Analyzing…' : 'Analyze image'}
-                          </button>
+                          <div className="flex flex-wrap gap-1">
+                            <button type="button" onClick={() => void handleAnalyzeSceneVisual(i)} disabled={!eligible || busy}
+                              className="rounded border border-sky-300 bg-white px-2 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
+                              {busy ? 'Analyzing…' : 'Analyze semantics'}
+                            </button>
+                            <button type="button" onClick={() => void handleAnalyzeSceneSpatial(i)} disabled={spatialBusy}
+                              className="rounded border border-sky-300 bg-white px-2 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
+                              {spatialBusy ? 'Analyzing…' : 'Analyze framing'}
+                            </button>
+                          </div>
                         </div>
                         {!eligible && <p className="mt-1 text-[11px] text-slate-500">Create or refresh the visual plan before analysis.</p>}
                         {assessment?.status === 'available' && <p className="mt-1 text-[11px]">Semantic fit: {fit}. {assessment.signals.filter((signal) => signal.state === 'evaluated').slice(0, 3).map((signal) => `${signal.dimension}: ${signal.interpretation}`).join(' · ')}</p>}
                         {assessment?.status === 'unavailable' && <p className="mt-1 text-[11px] text-slate-500">Analysis unavailable: {assessment.unavailableReason?.replace(/-/gu, ' ') ?? 'provider unavailable'}.</p>}
+                        {spatial?.status === 'evaluated' && <p className="mt-1 text-[11px]">Spatial evidence: focal ({spatial.focalPoint.x.toFixed(2)}, {spatial.focalPoint.y.toFixed(2)}) · {spatial.sourceDimensions.width}×{spatial.sourceDimensions.height} encoded raster · {spatial.confidenceBand} confidence{spatial.primarySubjectRegion ? ' · primary subject region available' : ' · no primary subject region'}.</p>}
+                        {spatial && spatial.status !== 'evaluated' && <p className="mt-1 text-[11px] text-slate-500">Spatial analysis {spatial.status}: {spatial.reason.replace(/-/gu, ' ')}.</p>}
                       </div>;
                     })()}
                     {hasPexels && (
@@ -2395,6 +2536,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                           const selectedId = sceneId ? selectedVisualCandidates[sceneId] : undefined;
                           const selectedCandidate = shortlist?.candidates.find((candidate) => candidate.candidateId === selectedId);
                           const selectedCandidateAssessment = selectedCandidate && plan ? candidateSemanticAssessments[selectedCandidate.candidateId]?.briefFingerprint === plan.briefFingerprint ? candidateSemanticAssessments[selectedCandidate.candidateId]?.assessment : undefined : undefined;
+                          const selectedCandidateSpatialRecord = sceneId ? candidateSpatialEvidence[sceneId] : undefined;
+                          const selectedCandidateSpatial = selectedCandidate && selectedCandidateSpatialRecord && sceneId
+                            && isVisualSpatialEvidenceRecordCurrent(selectedCandidateSpatialRecord, {
+                              projectId: directorProjectId, sceneId, sceneIndex: i, scope: 'discovery-candidate-image', mediaIdentity: `pexels:image:${selectedCandidate.providerMediaIdentity}`,
+                            }) ? selectedCandidateSpatialRecord.response : undefined;
                           const cinematography = selectedCandidate && sceneId ? assessCinematography({ sceneId, mediaType: selectedCandidate.mediaType, durationMs: Math.round(s.duration * 1_000), width: selectedCandidate.width, height: selectedCandidate.height, quality: selectedCandidate.quality, semantic: selectedCandidateAssessment ?? selectedCandidate.semantic, continuityBoundary: selectedCandidate.continuity.reasons.includes('continuity-group-support'), repeatedMedia: selectedCandidate.continuity.reasons.includes('repeated-provider-media') }) : undefined;
                           const candidateIsCurrentCanonicalMedia = Boolean(selectedCandidate && (
                             selectedCandidate.mediaType === 'image'
@@ -2412,6 +2558,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                             else delete cinematographyProposalsRef.current[sceneId];
                           }
                           const candidateAnalyzing = Boolean(selectedCandidate && candidateSemanticBusy.has(selectedCandidate.candidateId));
+                          const candidateSpatialAnalyzing = Boolean(sceneId && candidateSpatialBusy.has(sceneId));
                           const applying = sceneId ? visualApplyBusy.has(sceneId) : false;
                           return <>
                             {brief && (
@@ -2447,6 +2594,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                             const { [sceneId]: _ignored, ...rest } = current;
                                             return rest;
                                           });
+                                          visualSpatialGenerations.current.set(`candidate:${sceneId}`, (visualSpatialGenerations.current.get(`candidate:${sceneId}`) ?? 0) + 1);
+                                          setCandidateSpatialEvidence((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
+                                          setCandidateSpatialBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
                                           setSelectedVisualCandidates((current) => ({ ...current, [sceneId]: candidate.candidateId }));
                                         }}
                                         className={classNames('overflow-hidden rounded-md border text-left transition-colors focus:outline-none focus:ring-2 focus:ring-violet-500', selected ? 'border-violet-600 ring-1 ring-violet-500' : 'border-slate-200 hover:border-violet-300')}
@@ -2474,8 +2624,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                     className="rounded-md border border-sky-300 bg-white px-2 py-1 text-xs text-sky-800 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50">
                                     {candidateAnalyzing ? 'Analyzing…' : 'Analyze selected'}
                                   </button>
+                                  <button type="button" onClick={() => selectedCandidate && void handleAnalyzeDiscoveryCandidateSpatial(i, selectedCandidate.candidateId)} disabled={!selectedCandidate || selectedCandidate.mediaType !== 'image' || candidateSpatialAnalyzing}
+                                    className="rounded-md border border-sky-300 bg-white px-2 py-1 text-xs text-sky-800 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                    {candidateSpatialAnalyzing ? 'Analyzing…' : 'Analyze framing'}
+                                  </button>
                                 </div>
                                 {selectedCandidateAssessment && <p className="mt-2 text-xs text-sky-800">Semantic analysis: {selectedCandidateAssessment.status === 'available' ? `Evaluated — fit ${semanticRankingAdjustment(selectedCandidateAssessment) >= 3 ? 'High' : semanticRankingAdjustment(selectedCandidateAssessment) <= -3 ? 'Low' : 'Medium'}` : selectedCandidateAssessment.unavailableReason === 'unsupported-media' ? 'Unsupported' : 'Unavailable'}</p>}
+                                {selectedCandidateSpatial?.status === 'evaluated' && <p className="mt-2 text-xs text-sky-800">Spatial evidence: focal ({selectedCandidateSpatial.focalPoint.x.toFixed(2)}, {selectedCandidateSpatial.focalPoint.y.toFixed(2)}) · {selectedCandidateSpatial.confidenceBand} confidence{selectedCandidateSpatial.primarySubjectRegion ? ' · primary subject region available' : ' · no primary subject region'}.</p>}
+                                {selectedCandidateSpatial && selectedCandidateSpatial.status !== 'evaluated' && <p className="mt-2 text-xs text-slate-500">Spatial analysis {selectedCandidateSpatial.status}: {selectedCandidateSpatial.reason.replace(/-/gu, ' ')}.</p>}
                                 {cinematography && !cinematographyProposal && <p className="mt-2 text-xs text-slate-500">Apply cinematography is available after this visual is the current scene media.</p>}
                                 {cinematographyProposal && <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50/60 p-2 text-xs text-slate-700">
                                   {cinematographyProposal.status === 'ready' && <>

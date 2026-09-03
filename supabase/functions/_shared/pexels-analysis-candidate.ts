@@ -1,4 +1,4 @@
-import { validateAnalysisImage, type AnalysisImageContentType } from "./analysis-image-validation.ts";
+import { validateAnalysisImageWithGeometry, type AnalysisImageContentType } from "./analysis-image-validation.ts";
 import { MAX_SEMANTIC_PROVIDER_IMAGE_BYTES } from "./openai-visual-semantic-provider.ts";
 import { isApprovedPexelsUrl, resolvePexelsImageSource, type PexelsPhotoSource } from "../ingest-pexels-image/pexels-image-source.ts";
 
@@ -10,7 +10,7 @@ export class PexelsAnalysisCandidateError extends Error {
 }
 
 /** Server-resolved transient bytes only. No URL or storage identity escapes this boundary. */
-export async function resolvePexelsAnalysisCandidate(assetId: number, apiKey: string, fetchImpl: typeof fetch = fetch, timeoutMs = TIMEOUT_MS): Promise<{ readonly bytes: Uint8Array; readonly contentType: AnalysisImageContentType }> {
+export async function resolvePexelsAnalysisCandidate(assetId: number, apiKey: string, fetchImpl: typeof fetch = fetch, timeoutMs = TIMEOUT_MS): Promise<{ readonly bytes: Uint8Array; readonly contentType: AnalysisImageContentType; readonly width: number; readonly height: number }> {
   let response: Response;
   try { response = await fetchImpl(`https://api.pexels.com/v1/photos/${assetId}`, { headers: { Authorization: apiKey }, redirect: "error", signal: AbortSignal.timeout(timeoutMs) }); }
   catch { throw new PexelsAnalysisCandidateError("candidate-provider-unavailable"); }
@@ -24,7 +24,10 @@ export async function resolvePexelsAnalysisCandidate(assetId: number, apiKey: st
   if (!source) throw new PexelsAnalysisCandidateError("candidate-media-unavailable");
   const downloaded = await download(source.downloadUrl, fetchImpl, timeoutMs);
   const extension = downloaded.contentType === "image/png" ? ".png" : ".jpg";
-  try { return Object.freeze({ bytes: downloaded.bytes, contentType: validateAnalysisImage(`candidate${extension}`, downloaded.contentType, downloaded.bytes) }); }
+  try {
+    const validated = validateAnalysisImageWithGeometry(`candidate${extension}`, downloaded.contentType, downloaded.bytes);
+    return Object.freeze({ bytes: downloaded.bytes, contentType: validated.contentType, width: validated.width, height: validated.height });
+  }
   catch { throw new PexelsAnalysisCandidateError("unsupported-media"); }
 }
 

@@ -8,3 +8,6 @@ export * from './cinematography';
 export * from './cinematographyApplication';
 export * from './opaqueMediaReference';
 export * from './visualSemanticAnalysis';
+export * from './visualSpatialAnalysis';
+export * from './spatial';
+export * from './spatialRequestRegistry';

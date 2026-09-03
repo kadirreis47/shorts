@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   renderVideo: vi.fn(),
   uploadMedia: vi.fn(),
   translateSubtitles: vi.fn(),
+  issueOpaqueSpatialMediaAnalysisReference: vi.fn(),
+  analyzeVisualSpatial: vi.fn(),
   getProviderStatus: vi.fn(async () => ({ openai: { configured: true }, elevenlabs: { configured: true }, pexels: { configured: true } })),
   from: vi.fn(() => ({
     select: vi.fn(() => Object.assign(Promise.resolve({ data: [] }), {
@@ -47,6 +49,8 @@ vi.mock('@/lib/api', () => ({
   searchImages: vi.fn(async () => []),
   searchVideos: vi.fn(async () => []), ingestPexelsImage: vi.fn(), ingestPexelsVideo: vi.fn(), discardPexelsVideoQuarantine: vi.fn(), generateAIImage: vi.fn(), researchFootage: vi.fn(),
   translateSubtitles: mocks.translateSubtitles,
+  issueOpaqueSpatialMediaAnalysisReference: mocks.issueOpaqueSpatialMediaAnalysisReference,
+  analyzeVisualSpatial: mocks.analyzeVisualSpatial,
 }));
 vi.mock('@/lib/videoRenderer', () => ({ renderVideo: mocks.renderVideo }));
 
@@ -401,6 +405,78 @@ describe('Studio canonical silent export', () => {
     expect(usePublishingStore.getState().handoff).toMatchObject({ kind: 'verified-export', exportJobId: exportJob.id });
     expect(useUIStore.getState().currentView).toBe('publishing-studio');
     expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('keeps a verified export current across spatial evidence success and failure', async () => {
+    const fixture = await editingFixture();
+    const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };
+    const exportJob = verifiedExportJob();
+    const ownerId = '00000000-0000-4000-8000-000000000001';
+    const ownedImagePath = `${ownerId}/generated-images/00000000-0000-4000-8000-000000000010.png`;
+    setValidatedOwnerId(ownerId);
+    useAuthSessionStore.setState({ status: 'authenticated', user: { id: ownerId } as never, session: { access_token: 'token' } as never, error: null });
+    mocks.buildProject.mockResolvedValue(validBuild);
+    mocks.loadExportCapabilities.mockResolvedValue(undefined);
+    mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
+    mocks.enqueueActiveExport.mockResolvedValue(exportJob);
+    mocks.waitForActiveExport.mockResolvedValue(exportJob);
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial
+      .mockResolvedValueOnce({
+        status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+        sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.4, y: 0.3 }, confidenceBand: 'medium',
+      })
+      .mockRejectedValueOnce(new Error('provider unavailable'));
+    window.electronAPI = {
+      ...window.electronAPI,
+      ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/silent.mp4') },
+    } as typeof window.electronAPI;
+    const draft = silentDraft();
+    saveStudioDraft({
+      ...draft,
+      step: 'render',
+      scenes: draft.scenes.map((scene) => ({
+        ...scene,
+        imageUrl: undefined,
+        imageStorage: { bucket: 'media', objectPath: ownedImagePath },
+      })),
+    });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+
+    const click = async (label: string, exact = false) => {
+      const button = Array.from(container!.querySelectorAll('button')).find((candidate) => exact
+        ? candidate.textContent?.trim() === label
+        : candidate.textContent?.includes(label));
+      expect(button, `button ${label}`).toBeDefined();
+      await act(async () => { button?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    };
+    await click('Render Video');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    await click('Script', true);
+    await click('Analyze framing', true);
+    expect(container.textContent).toContain('Spatial evidence: focal (0.40, 0.30)');
+    await click('Continue');
+    await click('Continue');
+    await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    await click('Script', true);
+    await click('Analyze framing', true);
+    expect(container.textContent).toContain('Spatial analysis unavailable: provider unavailable.');
+    await click('Continue');
+    await click('Continue');
+    await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    expect(mocks.issueOpaqueSpatialMediaAnalysisReference).toHaveBeenCalledTimes(2);
+    expect(mocks.issueOpaqueSpatialMediaAnalysisReference).toHaveBeenCalledWith({ bucket: 'media', objectPath: ownedImagePath });
+    expect(mocks.analyzeVisualSpatial).toHaveBeenCalledTimes(2);
     await act(async () => { root.unmount(); });
   });
 

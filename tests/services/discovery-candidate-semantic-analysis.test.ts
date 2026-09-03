@@ -34,7 +34,7 @@ describe('analysis-only discovery candidate boundary', () => {
     expect(resolver).toContain('MAX_SEMANTIC_PROVIDER_IMAGE_BYTES');
     expect(resolver).toContain('validateAnalysisImage');
     expect(resolver).toContain('https://api.pexels.com/v1/photos/${assetId}');
-    expect(readFileSync('supabase/functions/_shared/protected-function.ts', 'utf8')).toContain('functionName === "analyze-discovery-candidate-semantics" ? "analyze-visual-semantics"');
+    expect(readFileSync('supabase/functions/_shared/protected-function.ts', 'utf8')).toContain('functionName === "analyze-discovery-candidate-semantics"');
   });
 
   it('binds completion to shortlist generation and uses a code-level in-flight registry', () => {

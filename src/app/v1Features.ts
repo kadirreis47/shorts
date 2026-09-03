@@ -46,6 +46,8 @@ export const V1_EDGE_FUNCTIONS = [
   'media-analysis-reference',
   'analyze-visual-semantics',
   'analyze-discovery-candidate-semantics',
+  'analyze-visual-spatial',
+  'analyze-discovery-candidate-spatial',
 ] as const;
 
 export type V1EdgeFunction = (typeof V1_EDGE_FUNCTIONS)[number];

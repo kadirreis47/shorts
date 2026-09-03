@@ -8,7 +8,7 @@ import {
   normalizeVisualIntelligencePlanningState,
   type VisualIntelligencePlanningState,
 } from '@/core/visual-intelligence';
-import { normalizeOpaqueMediaReferenceRequest, normalizeOpaqueMediaReferenceResponse, normalizeSemanticImageAnalysisRequest, normalizeSemanticImageAnalysisResponse, normalizeDiscoveryCandidateSemanticAnalysisRequest, type OpaqueMediaReferenceResponse, type SemanticImageAnalysisRequest, type SemanticImageAnalysisResponse, type DiscoveryCandidateSemanticAnalysisRequest } from '@/core/visual-intelligence';
+import { normalizeOpaqueMediaReferenceRequest, normalizeOpaqueMediaReferenceResponse, normalizeSemanticImageAnalysisRequest, normalizeSemanticImageAnalysisResponse, normalizeDiscoveryCandidateSemanticAnalysisRequest, normalizeVisualSpatialAnalysisRequest, normalizeVisualSpatialAnalysisResponse, normalizeDiscoveryCandidateSpatialAnalysisRequest, type OpaqueMediaReferenceResponse, type SemanticImageAnalysisRequest, type SemanticImageAnalysisResponse, type DiscoveryCandidateSemanticAnalysisRequest, type VisualSpatialAnalysisRequest, type VisualSpatialAnalysisResponse, type DiscoveryCandidateSpatialAnalysisRequest } from '@/core/visual-intelligence';
 import type { VisualQueryPlannerRequest } from '../../supabase/functions/_shared/visual-query-planner';
 
 import type {
@@ -594,9 +594,16 @@ export async function planVisualQueries(params: VisualQueryPlannerRequest): Prom
 
 /** Requests a short-lived analysis capability for one existing private image identity; it never returns a URL. */
 export async function issueOpaqueMediaAnalysisReference(media: MediaStorageObject): Promise<OpaqueMediaReferenceResponse> {
-  const request = normalizeOpaqueMediaReferenceRequest({ media });
+  const request = normalizeOpaqueMediaReferenceRequest({ media, scope: 'semantic-image-analysis' });
   const result = await apiClient.post<unknown>('media-analysis-reference', request, { retryCount: 0, timeoutMs: 15_000 });
-  return normalizeOpaqueMediaReferenceResponse(result);
+  return normalizeOpaqueMediaReferenceResponse(result, 'semantic-image-analysis');
+}
+
+/** Requests a spatial-only capability; the returned token cannot authorize semantic analysis. */
+export async function issueOpaqueSpatialMediaAnalysisReference(media: MediaStorageObject): Promise<OpaqueMediaReferenceResponse> {
+  const request = normalizeOpaqueMediaReferenceRequest({ media, scope: 'spatial-image-analysis' });
+  const result = await apiClient.post<unknown>('media-analysis-reference', request, { retryCount: 0, timeoutMs: 15_000 });
+  return normalizeOpaqueMediaReferenceResponse(result, 'spatial-image-analysis');
 }
 
 /** Server-only pixel analysis of a Slice 8 reference. The renderer never sends a URL, path, bytes, or provider credential. */
@@ -617,6 +624,20 @@ export async function analyzeDiscoveryCandidateSemantics(request: DiscoveryCandi
   const response = normalizeSemanticImageAnalysisResponse(result);
   if (response.status === 'evaluated' && (response.observations.length !== normalized.intent.dimensions.length || response.observations.some((observation) => !normalized.intent.dimensions.includes(observation.dimension)))) throw new Error('Discovery candidate semantic analysis returned an invalid result.');
   return response;
+}
+
+/** Protected image-only focal geometry for one owned spatial capability. */
+export async function analyzeVisualSpatial(request: VisualSpatialAnalysisRequest): Promise<VisualSpatialAnalysisResponse> {
+  const normalized = normalizeVisualSpatialAnalysisRequest(request);
+  const result = await apiClient.post<unknown>('analyze-visual-spatial', normalized, { retryCount: 0, timeoutMs: 45_000 });
+  return normalizeVisualSpatialAnalysisResponse(result);
+}
+
+/** Protected focal geometry for one server-resolved Pexels image identity. */
+export async function analyzeDiscoveryCandidateSpatial(request: DiscoveryCandidateSpatialAnalysisRequest): Promise<VisualSpatialAnalysisResponse> {
+  const normalized = normalizeDiscoveryCandidateSpatialAnalysisRequest(request);
+  const result = await apiClient.post<unknown>('analyze-discovery-candidate-spatial', normalized, { retryCount: 0, timeoutMs: 45_000 });
+  return normalizeVisualSpatialAnalysisResponse(result);
 }
 
 function bindingKey(binding: { sceneId: string; sceneIndex: number; sceneTextFingerprint: string }): string {
