@@ -1,4 +1,5 @@
 import type { VisualMediaPreference } from './types';
+import type { SemanticImageAnalysisResponse } from './visualSemanticAnalysis';
 
 /** Strict, provider-neutral semantic contract. Slice 6 has no media-capable provider adapter. */
 export const VISUAL_SEMANTIC_VERSION = 1 as const;
@@ -7,7 +8,7 @@ export type VisualSemanticSignalState = 'evaluated' | 'unsupported' | 'unavailab
 export type VisualSemanticInterpretation = 'match' | 'mismatch' | 'uncertain';
 export type VisualSemanticConfidenceBand = 'low' | 'medium' | 'high';
 export type VisualSemanticObservation = 'provider-observed-match' | 'provider-observed-mismatch' | 'provider-observed-uncertain';
-export type VisualSemanticUnavailableReason = 'no-media-reference' | 'provider-unavailable' | 'provider-failure' | 'invalid-provider-result';
+export type VisualSemanticUnavailableReason = 'no-media-reference' | 'provider-unavailable' | 'provider-failure' | 'invalid-provider-result' | 'provider-not-configured' | 'provider-credit-exhausted' | 'provider-rate-limited' | 'provider-timeout' | 'provider-malformed-response' | 'unsupported-media' | 'invalid-reference' | 'expired-reference';
 
 export interface VisualSemanticCandidateBinding {
   readonly candidateId: string;
@@ -53,7 +54,7 @@ const states = new Set<VisualSemanticSignalState>(['evaluated', 'unsupported', '
 const interpretations = new Set<VisualSemanticInterpretation>(['match', 'mismatch', 'uncertain']);
 const confidenceBands = new Set<VisualSemanticConfidenceBand>(['low', 'medium', 'high']);
 const observations = new Set<VisualSemanticObservation>(['provider-observed-match', 'provider-observed-mismatch', 'provider-observed-uncertain']);
-const unavailableReasons = new Set<VisualSemanticUnavailableReason>(['no-media-reference', 'provider-unavailable', 'provider-failure', 'invalid-provider-result']);
+const unavailableReasons = new Set<VisualSemanticUnavailableReason>(['no-media-reference', 'provider-unavailable', 'provider-failure', 'invalid-provider-result', 'provider-not-configured', 'provider-credit-exhausted', 'provider-rate-limited', 'provider-timeout', 'provider-malformed-response', 'unsupported-media', 'invalid-reference', 'expired-reference']);
 const urlLike = /(?:https?:\/\/|www\.)/iu;
 
 export function unavailableVisualSemanticAssessment(request: VisualSemanticAnalysisRequest, reason: VisualSemanticUnavailableReason = 'no-media-reference'): VisualSemanticAssessment {
@@ -111,6 +112,21 @@ export function semanticRankingAdjustment(assessment: VisualSemanticAssessment):
 
 export function createUnavailableVisualSemanticProvider(reason: VisualSemanticUnavailableReason = 'no-media-reference'): VisualSemanticAnalysisProvider {
   return Object.freeze({ id: 'unavailable-semantic-analysis', capability: () => ({ status: 'unavailable' as const, reason }), analyze: async (request: VisualSemanticAnalysisRequest) => unavailableVisualSemanticAssessment(request, reason) });
+}
+
+/** Deterministic conversion of bounded pixel evidence into the existing advisory assessment. */
+export function interpretVisualSemanticAnalysis(request: VisualSemanticAnalysisRequest, response: SemanticImageAnalysisResponse): VisualSemanticAssessment {
+  const normalized = normalizeVisualSemanticAnalysisRequest(request);
+  if (response.status !== 'evaluated') return unavailableVisualSemanticAssessment(normalized, response.reason);
+  try {
+    return normalizeVisualSemanticProviderResult({ status: 'available', signals: response.observations.map((item) => ({
+      dimension: item.dimension,
+      state: 'evaluated',
+      interpretation: item.evidence === 'supports-intent' ? 'match' : item.evidence === 'contradicts-intent' ? 'mismatch' : 'uncertain',
+      confidenceBand: item.confidenceBand,
+      observation: item.evidence === 'supports-intent' ? 'provider-observed-match' : item.evidence === 'contradicts-intent' ? 'provider-observed-mismatch' : 'provider-observed-uncertain',
+    })) }, normalized);
+  } catch { return unavailableVisualSemanticAssessment(normalized, 'invalid-provider-result'); }
 }
 
 function normalizeSignal(value: unknown): VisualSemanticSignal {

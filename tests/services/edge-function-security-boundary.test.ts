@@ -19,7 +19,7 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(manifest.active).toEqual([
       'provider-status', 'generate-script', 'generate-hooks', 'generate-seo',
       'analyze-script', 'generate-image', 'ingest-pexels-image', 'ingest-pexels-video', 'generate-voiceover', 'list-voices',
-      'research-footage', 'search-images', 'search-videos', 'translate-subtitles', 'visual-query-planner', 'media-analysis-reference',
+      'research-footage', 'search-images', 'search-videos', 'translate-subtitles', 'visual-query-planner', 'media-analysis-reference', 'analyze-visual-semantics',
     ]);
 
     for (const name of manifest.active) {
@@ -62,6 +62,7 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(protectedSource).toContain('"research-footage": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
     expect(protectedSource).toContain('"visual-query-planner": { operationClass: "medium", burstMax: 6, dailyMax: 80 }');
     expect(protectedSource).toContain('"media-analysis-reference": { operationClass: "low", burstMax: 12, dailyMax: 120 }');
+    expect(protectedSource).toContain('"analyze-visual-semantics": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
     expect(protectedSource).toContain('Request limit reached. Please try again shortly.');
     expect(protectedSource).toContain('}, 429)');
     expect(protectedSource).toContain('Service is temporarily unavailable.');

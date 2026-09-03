@@ -8,7 +8,7 @@ import {
   normalizeVisualIntelligencePlanningState,
   type VisualIntelligencePlanningState,
 } from '@/core/visual-intelligence';
-import { normalizeOpaqueMediaReferenceRequest, normalizeOpaqueMediaReferenceResponse, type OpaqueMediaReferenceResponse } from '@/core/visual-intelligence';
+import { normalizeOpaqueMediaReferenceRequest, normalizeOpaqueMediaReferenceResponse, normalizeSemanticImageAnalysisRequest, normalizeSemanticImageAnalysisResponse, type OpaqueMediaReferenceResponse, type SemanticImageAnalysisRequest, type SemanticImageAnalysisResponse } from '@/core/visual-intelligence';
 import type { VisualQueryPlannerRequest } from '../../supabase/functions/_shared/visual-query-planner';
 
 import type {
@@ -597,6 +597,17 @@ export async function issueOpaqueMediaAnalysisReference(media: MediaStorageObjec
   const request = normalizeOpaqueMediaReferenceRequest({ media });
   const result = await apiClient.post<unknown>('media-analysis-reference', request, { retryCount: 0, timeoutMs: 15_000 });
   return normalizeOpaqueMediaReferenceResponse(result);
+}
+
+/** Server-only pixel analysis of a Slice 8 reference. The renderer never sends a URL, path, bytes, or provider credential. */
+export async function analyzeVisualSemantics(request: SemanticImageAnalysisRequest): Promise<SemanticImageAnalysisResponse> {
+  const normalized = normalizeSemanticImageAnalysisRequest(request);
+  const result = await apiClient.post<unknown>('analyze-visual-semantics', normalized, { retryCount: 0, timeoutMs: 45_000 });
+  const response = normalizeSemanticImageAnalysisResponse(result);
+  if (response.status === 'evaluated' && (response.observations.length !== normalized.intent.dimensions.length || response.observations.some((observation) => !normalized.intent.dimensions.includes(observation.dimension)) || new Set(response.observations.map((observation) => observation.dimension)).size !== normalized.intent.dimensions.length)) {
+    throw new Error('Visual semantic analysis returned an invalid result.');
+  }
+  return response;
 }
 
 function bindingKey(binding: { sceneId: string; sceneIndex: number; sceneTextFingerprint: string }): string {

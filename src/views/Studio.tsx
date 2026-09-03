@@ -12,7 +12,7 @@ import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalo
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
   searchImages, searchVideos, ingestPexelsImage, ingestPexelsVideo, discardPexelsVideoQuarantine,
-  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, type SubtitleTranslationUnavailableReason,
+  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, issueOpaqueMediaAnalysisReference, analyzeVisualSemantics, type SubtitleTranslationUnavailableReason,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
 import {
@@ -24,7 +24,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
-import { createSceneVisualBinding, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
@@ -333,6 +333,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const visualDiscoveryGenerations = useRef(new Map<string, number>());
   const visualApplyGenerations = useRef(new Map<string, number>());
   const visualApplyActive = useRef(new Set<string>());
+  const visualSemanticGenerations = useRef(new Map<string, number>());
+  const visualSemanticRequests = useRef(createVisualSemanticRequestRegistry());
+  const [visualSemanticBusy, setVisualSemanticBusy] = useState<Set<string>>(new Set());
+  const [visualSemanticAssessments, setVisualSemanticAssessments] = useState<Record<string, { readonly mediaPath: string; readonly briefFingerprint: string; readonly assessment: VisualSemanticAssessment }>>({});
   const visualSessionEpoch = useRef(0);
   const directorProjectIdRef = useRef(directorProjectId);
   useEffect(() => { scenesRef.current = scenes; }, [scenes]);
@@ -1209,6 +1213,41 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     } finally {
       visualApplyActive.current.delete(operationKey);
       if (visualApplyGenerations.current.get(sceneId) === generation) setVisualApplyBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
+    }
+  }
+
+  async function handleAnalyzeSceneVisual(sceneIndex: number) {
+    const scene = scenesRef.current[sceneIndex];
+    const sceneId = scene?.visualPlanningId;
+    if (!scene || !sceneId || !scene.imageStorage || scene.videoStorage) return;
+    const plan = visualPlanningRef.current?.queryPlans.find((item) => item.sceneBinding.sceneId === sceneId);
+    const brief = visualPlanningRef.current?.briefs.find((item) => item.sceneBinding.sceneId === sceneId);
+    if (!plan || !brief || !isSceneVisualBindingCurrent(brief.sceneBinding, scenesRef.current) || !isVisualQueryPlanCurrent(plan, brief, scenesRef.current)) return;
+    const mediaPath = scene.imageStorage.objectPath;
+    const operation = { sceneId, mediaPath, briefFingerprint: plan.briefFingerprint };
+    const owner = captureValidatedMediaOwnerContext();
+    if (!visualSemanticRequests.current.tryAcquire(operation)) return;
+    const generation = (visualSemanticGenerations.current.get(sceneId) ?? 0) + 1;
+    const epoch = visualSessionEpoch.current; const projectId = directorProjectIdRef.current;
+    visualSemanticGenerations.current.set(sceneId, generation);
+    setVisualSemanticBusy((current) => new Set(current).add(sceneId));
+    try {
+      const reference = await issueOpaqueMediaAnalysisReference(scene.imageStorage);
+      const response = await analyzeVisualSemantics({ reference: reference.reference, requestId: crypto.randomUUID(), intent: { brief, briefFingerprint: visualBriefFingerprint(brief), dimensions: VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS } });
+      const current = scenesRef.current[sceneIndex];
+      if (!current || current !== scene || current.imageStorage?.objectPath !== mediaPath || current.videoStorage
+        || visualSemanticGenerations.current.get(sceneId) !== generation || visualSessionEpoch.current !== epoch || directorProjectIdRef.current !== projectId
+        || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation) || !isSceneVisualBindingCurrent(brief.sceneBinding, scenesRef.current) || !isVisualQueryPlanCurrent(plan, brief, scenesRef.current)) return;
+      const assessment = interpretVisualSemanticAnalysis({ version: 1, analyzerVersion: 'visual-semantic-v1', briefFingerprint: plan.briefFingerprint, candidate: { candidateId: `durable-image:${sceneId}`, provider: 'durable-owner-media', providerMediaIdentity: sceneId, mediaType: 'image' } }, response);
+      setVisualSemanticAssessments((currentAssessments) => ({ ...currentAssessments, [sceneId]: { mediaPath, briefFingerprint: plan.briefFingerprint, assessment } }));
+    } catch {
+      const current = scenesRef.current[sceneIndex];
+      if (current === scene && visualSemanticGenerations.current.get(sceneId) === generation && visualSessionEpoch.current === epoch && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) {
+        setVisualSemanticAssessments((currentAssessments) => ({ ...currentAssessments, [sceneId]: { mediaPath, briefFingerprint: plan.briefFingerprint, assessment: { version: 1, status: 'unavailable', analyzerVersion: 'visual-semantic-v1', briefFingerprint: plan.briefFingerprint, candidate: { candidateId: `durable-image:${sceneId}`, provider: 'durable-owner-media', providerMediaIdentity: sceneId, mediaType: 'image' }, signals: [], unavailableReason: 'provider-unavailable' } } }));
+      }
+    } finally {
+      visualSemanticRequests.current.release(operation);
+      if (visualSemanticGenerations.current.get(sceneId) === generation && visualSessionEpoch.current === epoch && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) setVisualSemanticBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
     }
   }
 
@@ -2093,6 +2132,29 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                         <img src={s.imageUrl} alt="Scene visual" className="h-24 w-full object-cover" />
                       </div>
                     )}
+                    {s.imageStorage && !s.videoStorage && (() => {
+                      const sceneId = s.visualPlanningId;
+                      const brief = sceneId ? visualIntelligence?.briefs.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
+                      const plan = sceneId ? visualIntelligence?.queryPlans.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
+                      const eligible = Boolean(sceneId && brief && plan && isSceneVisualBindingCurrent(brief.sceneBinding, scenes) && isVisualQueryPlanCurrent(plan, brief, scenes));
+                      const record = sceneId ? visualSemanticAssessments[sceneId] : undefined;
+                      const assessment = record && record.mediaPath === s.imageStorage?.objectPath && record.briefFingerprint === plan?.briefFingerprint ? record.assessment : undefined;
+                      const busy = Boolean(sceneId && visualSemanticBusy.has(sceneId));
+                      const score = assessment ? semanticRankingAdjustment(assessment) : 0;
+                      const fit = score >= 3 ? 'High' : score <= -3 ? 'Low' : 'Medium';
+                      return <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50/60 p-2 text-xs text-slate-700">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium">Semantic analysis: {assessment?.status === 'available' ? 'Evaluated' : assessment?.unavailableReason === 'unsupported-media' ? 'Unsupported' : assessment?.status === 'unavailable' ? 'Unavailable' : 'Not analyzed'}</span>
+                          <button type="button" onClick={() => void handleAnalyzeSceneVisual(i)} disabled={!eligible || busy}
+                            className="rounded border border-sky-300 bg-white px-2 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
+                            {busy ? 'Analyzing…' : 'Analyze image'}
+                          </button>
+                        </div>
+                        {!eligible && <p className="mt-1 text-[11px] text-slate-500">Create or refresh the visual plan before analysis.</p>}
+                        {assessment?.status === 'available' && <p className="mt-1 text-[11px]">Semantic fit: {fit}. {assessment.signals.filter((signal) => signal.state === 'evaluated').slice(0, 3).map((signal) => `${signal.dimension}: ${signal.interpretation}`).join(' · ')}</p>}
+                        {assessment?.status === 'unavailable' && <p className="mt-1 text-[11px] text-slate-500">Analysis unavailable: {assessment.unavailableReason?.replace(/-/gu, ' ') ?? 'provider unavailable'}.</p>}
+                      </div>;
+                    })()}
                     {hasPexels && (
                       <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
                         <div className="flex flex-wrap items-start justify-between gap-2">

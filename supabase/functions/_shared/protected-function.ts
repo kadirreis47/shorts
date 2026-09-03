@@ -33,6 +33,8 @@ export const FUNCTION_POLICIES = {
   "visual-query-planner": { operationClass: "medium", burstMax: 6, dailyMax: 80 },
   // Short-lived analysis capabilities may perform one bounded Storage metadata lookup.
   "media-analysis-reference": { operationClass: "low", burstMax: 12, dailyMax: 120 },
+  // Explicit, paid image analysis. One request resolves one already-owned image and makes one provider call.
+  "analyze-visual-semantics": { operationClass: "high", burstMax: 2, dailyMax: 20 },
 } as const;
 
 export type ProtectedFunctionName = keyof typeof FUNCTION_POLICIES;

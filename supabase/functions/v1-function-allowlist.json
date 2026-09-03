@@ -16,7 +16,8 @@
     "search-videos",
     "translate-subtitles",
     "visual-query-planner",
-    "media-analysis-reference"
+    "media-analysis-reference",
+    "analyze-visual-semantics"
   ],
   "retiredFailClosed": [
     "youtube-auth",
