@@ -5,5 +5,6 @@ export * from './semantic';
 export * from './semanticRequestRegistry';
 export * from './continuity';
 export * from './cinematography';
+export * from './cinematographyApplication';
 export * from './opaqueMediaReference';
 export * from './visualSemanticAnalysis';

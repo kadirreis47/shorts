@@ -24,7 +24,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
-import { assessCinematography, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
@@ -341,6 +341,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [candidateSemanticAssessments, setCandidateSemanticAssessments] = useState<Record<string, { readonly briefFingerprint: string; readonly assessment: VisualSemanticAssessment }>>({});
   const candidateSemanticRequests = useRef(createVisualSemanticRequestRegistry());
   const [candidateSemanticBusy, setCandidateSemanticBusy] = useState<Set<string>>(new Set());
+  const [cinematographyOutcome, setCinematographyOutcome] = useState<Record<string, string>>({});
+  const cinematographyApplyActive = useRef(new Set<string>());
+  const cinematographyProposalsRef = useRef<Record<string, CinematographyApplicationProposal>>({});
   const visualSessionEpoch = useRef(0);
   const directorProjectIdRef = useRef(directorProjectId);
   useEffect(() => { scenesRef.current = scenes; }, [scenes]);
@@ -472,6 +475,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     // Owner-scoped state must never cross an authenticated owner transition.
     setVisualShortlists({});
     setSelectedVisualCandidates({});
+    setCinematographyOutcome({});
+    cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
     visualApplyActive.current.clear();
   }, [authenticatedUserId]);
@@ -496,6 +501,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     // and must never follow a project hydration transition.
     setVisualShortlists({});
     setSelectedVisualCandidates({});
+    setCinematographyOutcome({});
+    cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
     visualApplyActive.current.clear();
     if (draft) {
@@ -657,6 +664,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setVisualIntelligence(undefined);
     setVisualShortlists({});
     setSelectedVisualCandidates({});
+    setCinematographyOutcome({});
+    cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
     visualApplyActive.current.clear();
     setAudioBlob(null);
@@ -1119,6 +1128,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const normalizedScenes = ensureSceneVisualPlanningIds(scenes);
     const target = normalizedScenes[sceneIndex];
     const binding = createSceneVisualBinding(normalizedScenes, sceneIndex);
+    delete cinematographyProposalsRef.current[binding.sceneId];
+    setCinematographyOutcome((current) => {
+      const { [binding.sceneId]: _ignored, ...rest } = current;
+      return rest;
+    });
+    // A fresh search invalidates its predecessor before either planning or
+    // discovery awaits, so retained candidates cannot recreate an old Apply.
+    setVisualShortlists((current) => { const next = { ...current }; delete next[binding.sceneId]; return next; });
+    setSelectedVisualCandidates((current) => { const next = { ...current }; delete next[binding.sceneId]; return next; });
     const projectId = directorProjectIdRef.current;
     const sessionEpoch = visualSessionEpoch.current;
     let owner: ValidatedMediaOwnerContext;
@@ -1182,6 +1200,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const shortlist = sceneId ? visualShortlists[sceneId] : undefined; const selectedId = sceneId ? selectedVisualCandidates[sceneId] : undefined;
     const candidate = shortlist?.candidates.find((item) => item.candidateId === selectedId);
     if (!scene || !sceneId || !candidate || visualApplyActive.current.has(`${visualSessionEpoch.current}:${sceneId}`)) return;
+    delete cinematographyProposalsRef.current[sceneId];
+    setCinematographyOutcome((current) => {
+      const { [sceneId]: _ignored, ...rest } = current;
+      return rest;
+    });
     const providerMediaId = Number(candidate.providerMediaIdentity);
     if (!Number.isSafeInteger(providerMediaId) || providerMediaId <= 0) {
       setError(t('studio.visualApplyFailed'));
@@ -1232,6 +1255,47 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     } finally {
       visualApplyActive.current.delete(operationKey);
       if (visualApplyGenerations.current.get(sceneId) === generation) setVisualApplyBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
+    }
+  }
+
+  function handleApplyCinematography(proposal: CinematographyApplicationProposal): void {
+    const operationKey = `${proposal.projectId}:${proposal.sceneId}`;
+    if (cinematographyApplyActive.current.has(operationKey)) return;
+    cinematographyApplyActive.current.add(operationKey);
+    try {
+      if (currentProject?.id && currentProject.id !== proposal.projectId) {
+        setCinematographyOutcome((current) => ({ ...current, [proposal.sceneId]: 'Scene changed — review recommendation again' }));
+        return;
+      }
+      const currentProposal = cinematographyProposalsRef.current[proposal.sceneId];
+      if (!currentProposal || currentProposal.authority !== proposal.authority) {
+        setCinematographyOutcome((current) => ({ ...current, [proposal.sceneId]: 'Scene changed — review recommendation again' }));
+        return;
+      }
+      const defaults = { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) } as const;
+      const result = applyCinematographyApplicationProposal({
+        projectId: directorProjectIdRef.current,
+        scenes: scenesRef.current,
+        sceneIndex: currentProposal.sceneIndex,
+        defaults,
+        recommendation: currentProposal.recommendation,
+        recommendationMediaIdentity: currentProposal.canonicalMediaIdentity,
+        proposal: currentProposal,
+      });
+      if (result.status === 'applied') {
+        const next = [...result.scenes];
+        scenesRef.current = next;
+        setScenes(next);
+      }
+      const message = result.status === 'applied' ? 'Applied to current scene'
+        : result.status === 'no-op' ? 'Already matches current scene'
+          : result.status === 'stale' || result.status === 'conflict' ? 'Scene changed — review recommendation again'
+            : result.status === 'invalid-media' ? 'Current media changed — review recommendation again'
+              : result.status === 'unsupported' ? 'This recommendation is advisory only'
+                : 'Scene is no longer available';
+      setCinematographyOutcome((current) => ({ ...current, [proposal.sceneId]: message }));
+    } finally {
+      cinematographyApplyActive.current.delete(operationKey);
     }
   }
 
@@ -2233,6 +2297,21 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                           const selectedCandidate = shortlist?.candidates.find((candidate) => candidate.candidateId === selectedId);
                           const selectedCandidateAssessment = selectedCandidate && plan ? candidateSemanticAssessments[selectedCandidate.candidateId]?.briefFingerprint === plan.briefFingerprint ? candidateSemanticAssessments[selectedCandidate.candidateId]?.assessment : undefined : undefined;
                           const cinematography = selectedCandidate && sceneId ? assessCinematography({ sceneId, mediaType: selectedCandidate.mediaType, durationMs: Math.round(s.duration * 1_000), width: selectedCandidate.width, height: selectedCandidate.height, quality: selectedCandidate.quality, semantic: selectedCandidateAssessment ?? selectedCandidate.semantic, continuityBoundary: selectedCandidate.continuity.reasons.includes('continuity-group-support'), repeatedMedia: selectedCandidate.continuity.reasons.includes('repeated-provider-media') }) : undefined;
+                          const candidateIsCurrentCanonicalMedia = Boolean(selectedCandidate && (
+                            selectedCandidate.mediaType === 'image'
+                              ? s.imageStorage && !s.videoStorage && s.imageProvenance?.provider === 'pexels' && String(s.imageProvenance.providerMediaId) === selectedCandidate.providerMediaIdentity
+                              : s.videoStorage && !s.imageStorage && s.videoProvenance?.provider === 'pexels' && String(s.videoProvenance.providerMediaId) === selectedCandidate.providerMediaIdentity
+                          ));
+                          const canonicalMediaIdentity = selectedCandidate?.mediaType === 'image' && s.imageStorage
+                            ? `image:media:${s.imageStorage.objectPath}`
+                            : selectedCandidate?.mediaType === 'video' && s.videoStorage ? `video:media:${s.videoStorage.objectPath}` : undefined;
+                          const cinematographyProposal = cinematography && candidateIsCurrentCanonicalMedia && canonicalMediaIdentity && sceneId
+                            ? createCinematographyApplicationProposal({ projectId: directorProjectId, scenes, sceneIndex: i, defaults: { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) }, recommendation: cinematography, recommendationMediaIdentity: canonicalMediaIdentity })
+                            : undefined;
+                          if (sceneId) {
+                            if (cinematographyProposal) cinematographyProposalsRef.current[sceneId] = cinematographyProposal;
+                            else delete cinematographyProposalsRef.current[sceneId];
+                          }
                           const candidateAnalyzing = Boolean(selectedCandidate && candidateSemanticBusy.has(selectedCandidate.candidateId));
                           const applying = sceneId ? visualApplyBusy.has(sceneId) : false;
                           return <>
@@ -2264,6 +2343,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                         onClick={() => {
                                           if (!sceneId || applying) return;
                                           visualApplyGenerations.current.set(sceneId, (visualApplyGenerations.current.get(sceneId) ?? 0) + 1);
+                                          delete cinematographyProposalsRef.current[sceneId];
+                                          setCinematographyOutcome((current) => {
+                                            const { [sceneId]: _ignored, ...rest } = current;
+                                            return rest;
+                                          });
                                           setSelectedVisualCandidates((current) => ({ ...current, [sceneId]: candidate.candidateId }));
                                         }}
                                         className={classNames('overflow-hidden rounded-md border text-left transition-colors focus:outline-none focus:ring-2 focus:ring-violet-500', selected ? 'border-violet-600 ring-1 ring-violet-500' : 'border-slate-200 hover:border-violet-300')}
@@ -2293,6 +2377,17 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                   </button>
                                 </div>
                                 {selectedCandidateAssessment && <p className="mt-2 text-xs text-sky-800">Semantic analysis: {selectedCandidateAssessment.status === 'available' ? `Evaluated — fit ${semanticRankingAdjustment(selectedCandidateAssessment) >= 3 ? 'High' : semanticRankingAdjustment(selectedCandidateAssessment) <= -3 ? 'Low' : 'Medium'}` : selectedCandidateAssessment.unavailableReason === 'unsupported-media' ? 'Unsupported' : 'Unavailable'}</p>}
+                                {cinematography && !cinematographyProposal && <p className="mt-2 text-xs text-slate-500">Apply cinematography is available after this visual is the current scene media.</p>}
+                                {cinematographyProposal && <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50/60 p-2 text-xs text-slate-700">
+                                  {cinematographyProposal.status === 'ready' && <>
+                                    <p className="font-medium">Proposed changes</p>
+                                    {cinematographyProposal.changes.map((change) => <p key={change.field} className="mt-0.5">{change.field === 'motion' ? 'Motion' : 'Transition'}: {String(change.before).replace(/_/gu, ' ')} → {String(change.after).replace(/_/gu, ' ')}</p>)}
+                                    <button type="button" onClick={() => handleApplyCinematography(cinematographyProposal)} className="mt-2 rounded-md bg-indigo-700 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-800">Apply cinematography</button>
+                                  </>}
+                                  {cinematographyProposal.status === 'no-op' && <p>Already matches current scene.</p>}
+                                  {cinematographyProposal.status === 'unsupported' && <p>This recommendation is advisory only: {cinematographyProposal.reasons.join(', ').replace(/-/gu, ' ')}.</p>}
+                                  {sceneId && cinematographyOutcome[sceneId] && <p role="status" className="mt-1 text-indigo-800">{cinematographyOutcome[sceneId]}</p>}
+                                </div>}
                                 {cinematography && <p className="mt-2 text-xs text-slate-600">Cinematography advisory · {cinematography.strategy.replace(/-/gu, ' ')} · motion {cinematography.motion} · crop {cinematography.crop.replace(/-/gu, ' ')} · transition {cinematography.transition} · {cinematography.reasons.slice(0, 3).join(' · ')}</p>}
                               </div>
                             )}

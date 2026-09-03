@@ -56,4 +56,12 @@ describe('Premium Visual Discovery Studio boundary', () => {
     expect(studio).toContain("t('studio.visualPlanningUnavailable')");
     expect(studio).toContain("t('studio.visualDiscoveryUnavailable')");
   });
+
+  it('invalidates an old cinematography proposal before Search Again awaits new discovery', () => {
+    const start = studio.indexOf('async function handleFindPremiumVisuals');
+    const searchAgainBoundary = studio.slice(start, start + 3_000);
+    expect(searchAgainBoundary).toContain('delete cinematographyProposalsRef.current[binding.sceneId]');
+    expect(searchAgainBoundary).toContain('setVisualShortlists((current) => { const next = { ...current }; delete next[binding.sceneId]; return next; });');
+    expect(searchAgainBoundary.indexOf('setVisualShortlists((current) => { const next = { ...current }; delete next[binding.sceneId]; return next; });')).toBeLessThan(searchAgainBoundary.indexOf('await planVisualQueries'));
+  });
 });
