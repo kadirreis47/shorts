@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSceneVisualBinding,
-  ensureSceneVisualPlanningIds,
   isSceneVisualBindingCurrent,
   isVisualQueryPlanCurrent,
   normalizeSceneVisualBrief,
@@ -12,6 +11,7 @@ import {
 import type { Scene } from '@/lib/types';
 import { canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
 import { normalizeStudioDraft, type StudioDraft } from '@/lib/studioDraft';
+import { materializeCanonicalSceneIds } from '@/lib/sceneIdentity';
 
 const SCENE_A = 'visual-scene-00000000-0000-4000-8000-000000000001';
 const SCENE_B = 'visual-scene-00000000-0000-4000-8000-000000000002';
@@ -84,23 +84,35 @@ describe('Premium visual-intelligence planning domain', () => {
     expect(draft.visualIntelligence?.queryPlans[0]?.briefFingerprint).toBe(visualBriefFingerprint(currentBrief));
   });
 
-  it('assigns missing planning IDs without altering authored scene content or durable media identity', () => {
-    const legacy: Scene[] = [{ text: 'Legacy scene', duration: 3, visual: 'Visual', imageStorage: { bucket: 'media', objectPath: 'owner/generated-images/00000000-0000-4000-8000-000000000001.png' } }];
-    const normalized = ensureSceneVisualPlanningIds(legacy);
-    expect(normalized[0]).toMatchObject({ text: 'Legacy scene', duration: 3, imageStorage: legacy[0].imageStorage, visualPlanningId: expect.stringMatching(/^visual-scene-/) });
+  it('drops advisory planning when canonical scene order or identity no longer matches its binding', () => {
+    const scenes = sceneList();
+    const currentBrief = normalizeSceneVisualBrief(brief(createSceneVisualBinding(scenes, 0)));
+    const visualIntelligence = { version: 1, briefs: [currentBrief], queryPlans: [plan(currentBrief)] } as const;
+
+    const reordered = normalizeStudioDraft({ scenes: [scenes[1], scenes[0]], visualIntelligence } as unknown as StudioDraft);
+    const replaced = normalizeStudioDraft({ scenes: [{ ...scenes[0], sceneId: 'malformed' }, scenes[1]], visualIntelligence } as unknown as StudioDraft);
+
+    expect(reordered.visualIntelligence).toBeUndefined();
+    expect(replaced.visualIntelligence).toBeUndefined();
   });
 
-  it('excludes planning-only scene identity from canonical Studio output freshness inputs', () => {
+  it('materializes missing canonical IDs without altering authored scene content or durable media identity', () => {
+    const legacy = [{ text: 'Legacy scene', duration: 3, visual: 'Visual', imageStorage: { bucket: 'media' as const, objectPath: 'owner/generated-images/00000000-0000-4000-8000-000000000001.png' } }];
+    const normalized = materializeCanonicalSceneIds(legacy);
+    expect(normalized[0]).toMatchObject({ text: 'Legacy scene', duration: 3, imageStorage: legacy[0].imageStorage, sceneId: expect.stringMatching(/^visual-scene-/) });
+  });
+
+  it('excludes opaque canonical scene identity from Studio output freshness inputs', () => {
     const first = sceneList();
-    const changed = [{ ...first[0], visualPlanningId: SCENE_B }, first[1]];
+    const changed = [{ ...first[0], sceneId: SCENE_B }, first[1]];
     expect(canonicalStudioOutputScenes(first)).toEqual(canonicalStudioOutputScenes(changed));
   });
 });
 
 function sceneList(): Scene[] {
   return [
-    { visualPlanningId: SCENE_A, text: 'İstanbul’da tarihi tramvay', duration: 4, visual: 'Tramvay' },
-    { visualPlanningId: SCENE_B, text: 'Yağmurlu sokakta yolcular', duration: 4, visual: 'Sokak' },
+    { sceneId: SCENE_A, text: 'İstanbul’da tarihi tramvay', duration: 4, visual: 'Tramvay' },
+    { sceneId: SCENE_B, text: 'Yağmurlu sokakta yolcular', duration: 4, visual: 'Sokak' },
   ];
 }
 

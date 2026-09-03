@@ -160,11 +160,11 @@ describe('private media renderer boundary', () => {
 
   it('keeps signed URLs transient when serializing canonical scene identity', () => {
     expect(toDurableScene({
-      text: 'scene', duration: 3, visual: 'visual',
+      sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'scene', duration: 3, visual: 'visual',
       imageUrl: 'https://signed.example/expiring',
       imageStorage: { bucket: 'media', objectPath: '11111111-1111-4111-8111-111111111111/generated-images/image.png' },
     })).toEqual({
-      text: 'scene', duration: 3, visual: 'visual',
+      sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'scene', duration: 3, visual: 'visual',
       imageStorage: { bucket: 'media', objectPath: '11111111-1111-4111-8111-111111111111/generated-images/image.png' },
     });
   });
@@ -174,7 +174,7 @@ describe('private media renderer boundary', () => {
     const mediaScene = {
       id: 'scene-1', durationMs: 3_000,
       sourceScene: {
-        text: 'scene', duration: 3, visual: 'visual',
+        sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'scene', duration: 3, visual: 'visual',
         imageStorage: { bucket: 'media', objectPath },
       },
     } as never;

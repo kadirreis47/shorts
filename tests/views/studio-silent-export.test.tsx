@@ -494,7 +494,7 @@ function silentDraft(): StudioDraft {
     version: 1, projectId: 'silent-project', savedAt: '2026-08-12T00:00:00.000Z', step: 'publish',
     channelId: 'youtube:UC-SILENT', topic: 'Silent topic', niche: '', tone: 'engaging', duration: 30,
     title: 'Silent video', hook: '', script: 'Silent script', cta: '',
-    scenes: [{ text: 'Silent scene', duration: 3, visual: 'Silent visual', imageUrl: 'https://example.test/silent.jpg' }],
+    scenes: [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'Silent scene', duration: 3, visual: 'Silent visual', imageUrl: 'https://example.test/silent.jpg' }],
     captionStyle: 'karaoke', transitionStyle: 'crossfade', motionStyle: 'kenburns', useBroll: false,
     musicId: '', musicVolume: 0.25, visualMode: 'auto', selectedStyleId: '', characterName: '',
     characterAppearance: '', characterArtStyle: 'realistic', characterProfileId: '', watermarkText: '',

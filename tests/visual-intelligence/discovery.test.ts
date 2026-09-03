@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createSceneVisualBinding, discoverVisualCandidates, ensureSceneVisualPlanningIds,
+  createSceneVisualBinding, discoverVisualCandidates,
   rankVisualCandidates, visualBriefFingerprint, type VisualDiscoveryCandidate, type VisualStoryPlan,
 } from '@/core/visual-intelligence';
+import { materializeCanonicalSceneIds } from '@/lib/sceneIdentity';
 
-const scenes = ensureSceneVisualPlanningIds([{ visualPlanningId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'A historic tram crosses a rainy city.' }]);
+const scenes = materializeCanonicalSceneIds([{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'A historic tram crosses a rainy city.' }]);
 const binding = createSceneVisualBinding(scenes, 0);
 const brief = { version: 1, sceneBinding: binding, subject: 'historic tram', editorialRole: 'hook', preferredMedia: 'either', visualStyleHints: [], visualExclusions: [], noveltyConstraints: ['vary-media-type'], sourceIntent: { allowedSourceKinds: ['licensed-stock'], commerciallyUsableSourceRequired: true, attributionPreference: 'no-preference' } } as const;
 const plan = { version: 1, sceneBinding: binding, briefFingerprint: visualBriefFingerprint(brief), concepts: [

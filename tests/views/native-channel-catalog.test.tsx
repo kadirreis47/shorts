@@ -75,7 +75,7 @@ function restoredDraft(channelId: string, step: StudioDraft['step'] = 'topic'): 
     hook: '',
     script: 'Restored script',
     cta: '',
-    scenes: [{ text: 'Restored scene', duration: 3, visual: 'Visual' }],
+    scenes: [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'Restored scene', duration: 3, visual: 'Visual' }],
     captionStyle: 'karaoke',
     transitionStyle: 'crossfade',
     motionStyle: 'kenburns',

@@ -30,6 +30,21 @@ describe('StudioProductionRecipeV1', () => {
     expect(first.recipe.scenes[0]).toMatchObject({ id: 'scene-1', order: 0 });
   });
 
+  it('preserves execution slots separately and rejects duplicate canonical Media Engine identities', async () => {
+    const normalized = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
+    const compiled = compileStudioProductionRecipeV1(normalized);
+    expect(normalized.recipe.scenes.map((scene) => scene.id)).toEqual(['scene-1']);
+    expect(compiled.scenes[0].sceneId).toBe(normalized.recipe.scenes[0].canonicalSceneId);
+
+    const duplicate = { ...compiled.scenes[0] };
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    await expect(createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject({
+      ...compiled,
+      scenes: [compiled.scenes[0], duplicate],
+      sceneComposition: compiled.sceneComposition ? [compiled.sceneComposition[0], compiled.sceneComposition[0]] : undefined,
+    })).rejects.toThrow(/unique canonical scene identities/i);
+  });
+
   it('uses stable private identity instead of transient playback URLs', () => {
     const first = normalizeStudioProductionRecipeV1(recipeInput(), ownerContext());
     const rotated = recipeInput();
@@ -75,7 +90,7 @@ describe('StudioProductionRecipeV1', () => {
   it('keeps durable Pexels video provenance informational while rejecting its quarantine as canonical media', () => {
     const input = recipeInput();
     input.scenes = [{
-      text: 'Video scene', duration: 4, visual: 'Visual', keywords: ['visual'],
+      sceneId: 'visual-scene-00000000-0000-4000-8000-000000000042', text: 'Video scene', duration: 4, visual: 'Visual', keywords: ['visual'],
       videoStorage: { bucket: 'media', objectPath: 'owner-a/videos/00000000-0000-4000-8000-000000000042.mp4' },
       videoUrl: 'https://signed.example/private-video.mp4?token=rotated',
       videoProvenance: { provider: 'pexels', providerMediaId: 42, originalSourceUrl: 'https://www.pexels.com/video/42/', creator: 'Creator', providerPageUrl: 'https://www.pexels.com/video/42/', query: 'first query' },
@@ -103,17 +118,18 @@ describe('StudioProductionRecipeV1', () => {
     expect(normalizeStudioProductionRecipeV1(changed, ownerContext()).identity).not.toBe(baseline.identity);
   });
 
-  it('keeps visual-planning identity outside Recipe V1 while durable media remains significant', () => {
+  it('carries canonical scene identity as non-executable Recipe metadata while durable media remains significant', () => {
     const baseline = recipeInput();
-    baseline.scenes[0].visualPlanningId = 'visual-scene-00000000-0000-4000-8000-000000000001';
+    baseline.scenes[0].sceneId = 'visual-scene-00000000-0000-4000-8000-000000000001';
     const planningOnly = structuredClone(baseline);
-    planningOnly.scenes[0].visualPlanningId = 'visual-scene-00000000-0000-4000-8000-000000000099';
+    planningOnly.scenes[0].sceneId = 'visual-scene-00000000-0000-4000-8000-000000000099';
     const changedMedia = structuredClone(planningOnly);
     changedMedia.scenes[0].imageStorage!.objectPath = 'owner-a/generated-images/00000000-0000-4000-8000-000000000099.png';
 
     const normalized = normalizeStudioProductionRecipeV1(baseline, ownerContext());
-    expect(normalizeStudioProductionRecipeV1(planningOnly, ownerContext()).identity).toBe(normalized.identity);
-    expect(normalizeStudioProductionRecipeV1(planningOnly, ownerContext()).recipe).toEqual(normalized.recipe);
+    const identityOnly = normalizeStudioProductionRecipeV1(planningOnly, ownerContext());
+    expect(identityOnly.identity).toBe(normalized.identity);
+    expect(identityOnly.recipe.scenes[0].canonicalSceneId).not.toBe(normalized.recipe.scenes[0].canonicalSceneId);
     expect(normalizeStudioProductionRecipeV1(changedMedia, ownerContext()).identity).not.toBe(normalized.identity);
   });
 
@@ -206,15 +222,15 @@ describe('StudioProductionRecipeV1', () => {
     expect(() => normalizeStudioProductionRecipeV1(foreign, ownerContext())).toThrow(/not owned/i);
 
     const signed = recipeInput();
-    signed.scenes = [{ text: 'Scene one', duration: 4, visual: 'Visual', imageUrl: 'https://example.test/storage/v1/object/sign/media/a.jpg?token=signed' }];
+    signed.scenes = [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'Scene one', duration: 4, visual: 'Visual', imageUrl: 'https://example.test/storage/v1/object/sign/media/a.jpg?token=signed' }];
     expect(() => normalizeStudioProductionRecipeV1(signed, ownerContext())).toThrow(/durable private identity|trusted HTTPS/i);
 
     const tokenizedExternal = recipeInput();
-    tokenizedExternal.scenes = [{ text: 'Scene one', duration: 4, visual: 'Visual', imageUrl: 'https://example.test/a.jpg?access_token=secret' }];
+    tokenizedExternal.scenes = [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'Scene one', duration: 4, visual: 'Visual', imageUrl: 'https://example.test/a.jpg?access_token=secret' }];
     expect(() => normalizeStudioProductionRecipeV1(tokenizedExternal, ownerContext())).toThrow(/durable private identity|trusted HTTPS/i);
 
     const blob = recipeInput();
-    blob.scenes = [{ text: 'Scene one', duration: 4, visual: 'Visual', imageUrl: 'blob:preview' }];
+    blob.scenes = [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'Scene one', duration: 4, visual: 'Visual', imageUrl: 'blob:preview' }];
     expect(() => normalizeStudioProductionRecipeV1(blob, ownerContext())).toThrow(/durable private identity|trusted HTTPS/i);
   });
 
@@ -402,6 +418,18 @@ describe('StudioProductionRecipeV1', () => {
     expect(first.assContent).toBe(second.assContent);
   });
 
+  it('uses canonical cue input order rather than opaque scene ID lexical order for equal times', () => {
+    const style = canonicalSubtitleStyle({ enabled: true, preset: 'minimal', textColor: null, highlightColor: null });
+    const renderStyle: SubtitleStyle = { fontFamily: 'Inter', fontSize: 64, fontWeight: 800, lineSpacing: 1, strokeWidth: 4, shadowDepth: 1, textColor: style.textColor!, highlightColor: style.highlightColor!, backgroundColor: '#000000', backgroundOpacity: .34, position: 'bottom', maxWordsPerCue: 4, maxCharactersPerLine: 26, animation: style.animation!, uppercase: false };
+    const cues: SubtitleCue[] = [
+      { id: 'first', sceneId: 'visual-scene-ffffffff-ffff-4fff-8fff-ffffffffffff', startMs: 0, endMs: 1_000, durationMs: 1_000, text: 'Input first', wordIds: [], emphasisWordIds: [], lineCount: 1 },
+      { id: 'second', sceneId: 'visual-scene-00000000-0000-4000-8000-000000000000', startMs: 0, endMs: 1_000, durationMs: 1_000, text: 'Input second', wordIds: [], emphasisWordIds: [], lineCount: 1 },
+    ];
+    const plan = buildCanonicalSubtitleRenderPlan({ cues, width: 1080, height: 1920, style: renderStyle });
+
+    expect(plan.assContent!.indexOf('Input first')).toBeLessThan(plan.assContent!.indexOf('Input second'));
+  });
+
   it('renders the highlight preset through the bounded emphasized-word ASS path', () => {
     const canonical = canonicalSubtitleStyle({ enabled: true, preset: 'highlight', textColor: '#FFFFFF', highlightColor: '#00FF00' });
     const style: SubtitleStyle = { fontFamily: 'Inter', fontSize: 64, fontWeight: canonical.fontWeight ?? 800, lineSpacing: 1, strokeWidth: canonical.strokeWidth ?? 4, shadowDepth: canonical.shadowDepth ?? 1, textColor: canonical.textColor!, highlightColor: canonical.highlightColor!, backgroundColor: '#000000', backgroundOpacity: canonical.backgroundOpacity ?? .34, position: canonical.position ?? 'bottom', maxWordsPerCue: 4, maxCharactersPerLine: 26, animation: canonical.animation!, uppercase: false };
@@ -460,7 +488,7 @@ describe('StudioProductionRecipeV1', () => {
     const input = recipeInput();
     input.transitionStyle = 'none';
     input.scenes = ['One', 'Two', 'Three'].map((text, index) => ({
-      text, duration: 5, visual: 'Visual', keywords: ['visual'],
+      sceneId: `visual-scene-00000000-0000-4000-8000-00000000000${index}`, text, duration: 5, visual: 'Visual', keywords: ['visual'],
       imageStorage: { bucket: 'media', objectPath: `owner-a/generated-images/00000000-0000-4000-8000-00000000000${index}.png` },
     }));
     const characters = [...'One Two Three'];
@@ -482,7 +510,7 @@ describe('StudioProductionRecipeV1', () => {
   it('keeps the production-shaped scene-two onset inside a narration-informed crossfade window', async () => {
     const input = recipeInput();
     input.scenes = ['First', 'Second', 'Third'].map((text, index) => ({
-      text, duration: 5, visual: 'Visual', keywords: ['visual'],
+      sceneId: `visual-scene-00000000-0000-4000-8000-00000000001${index}`, text, duration: 5, visual: 'Visual', keywords: ['visual'],
       imageStorage: { bucket: 'media', objectPath: `owner-a/generated-images/00000000-0000-4000-8000-00000000001${index}.png` },
     }));
     const characters = [...'First Second Third'];
@@ -628,7 +656,7 @@ function recipeInput(): StudioProductionRecipeInput {
   return {
     projectId: 'recipe-project', title: 'Recipe video',
     scenes: [{
-      text: 'Scene one', duration: 4, visual: 'Visual', keywords: ['visual'],
+      sceneId: 'visual-scene-00000000-0000-4000-8000-000000000000', text: 'Scene one', duration: 4, visual: 'Visual', keywords: ['visual'],
       imageStorage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000000.png' },
       imageUrl: 'https://example.test/storage/v1/object/sign/media/owner-a/generated-images/ignored.png?token=signed',
     }],

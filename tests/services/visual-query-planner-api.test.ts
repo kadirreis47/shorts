@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSceneVisualBinding, ensureSceneVisualPlanningIds, visualBriefFingerprint } from '@/core/visual-intelligence';
+import { createSceneVisualBinding, visualBriefFingerprint } from '@/core/visual-intelligence';
+import { materializeCanonicalSceneIds } from '@/lib/sceneIdentity';
 
 const post = vi.fn();
 vi.mock('@/lib/api/client', () => ({ apiClient: { post } }));
 
-const scene = ensureSceneVisualPlanningIds([{ visualPlanningId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'İstanbul tramvayı.' }])[0];
+const scene = materializeCanonicalSceneIds([{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'İstanbul tramvayı.' }])[0];
 const binding = createSceneVisualBinding([scene], 0);
 const brief = {
   version: 1, sceneBinding: binding, subject: 'historic tram', editorialRole: 'hook', preferredMedia: 'video',

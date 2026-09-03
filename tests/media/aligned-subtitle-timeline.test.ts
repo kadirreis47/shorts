@@ -6,7 +6,7 @@ import { normalizeNarrationCharacterAlignment } from '@/shared/voiceoverAlignmen
 const scene = (id: string, index: number, text: string, startMs: number, endMs: number): MediaScene => ({
   id, index, text, subtitleText: text, startMs, endMs, durationMs: endMs - startMs, overlapBeforeMs: 0, overlapAfterMs: 0,
   role: 'setup', visualPrompt: '', keywords: [], assetIds: [], cameraMotion: 'none', transition: { type: 'cut', durationMs: 0 }, intensity: 0,
-  sourceScene: { text, duration: (endMs - startMs) / 1000, visual: '' },
+  sourceScene: { sceneId: `visual-scene-00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, text, duration: (endMs - startMs) / 1000, visual: '' },
 });
 
 describe('aligned subtitle timeline', () => {

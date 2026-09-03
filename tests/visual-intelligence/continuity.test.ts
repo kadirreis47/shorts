@@ -4,7 +4,6 @@ import {
   assessVisualSequence,
   createSceneVisualBinding,
   createVisualStoryPlan,
-  ensureSceneVisualPlanningIds,
   isVisualStoryPlanCurrent,
   neutralCandidateContinuity,
   visualBriefFingerprint,
@@ -12,11 +11,12 @@ import {
 } from '@/core/visual-intelligence';
 import { canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
 import type { Scene } from '@/lib/types';
+import { materializeCanonicalSceneIds } from '@/lib/sceneIdentity';
 
-const scenes = ensureSceneVisualPlanningIds([
-  { visualPlanningId: 'visual-scene-00000000-0000-4000-8000-000000000011', text: 'Opening scene.' },
-  { visualPlanningId: 'visual-scene-00000000-0000-4000-8000-000000000012', text: 'Evidence scene.' },
-  { visualPlanningId: 'visual-scene-00000000-0000-4000-8000-000000000013', text: 'Payoff scene.' },
+const scenes = materializeCanonicalSceneIds([
+  { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000011', text: 'Opening scene.' },
+  { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000012', text: 'Evidence scene.' },
+  { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000013', text: 'Payoff scene.' },
 ]);
 const bindings = scenes.map((_, index) => createSceneVisualBinding(scenes, index));
 const briefs = bindings.map((sceneBinding, index) => ({
@@ -53,7 +53,7 @@ describe('visual continuity and storytelling intelligence', () => {
     expect(isVisualStoryPlanCurrent(story, planning, scenes)).toBe(true);
     expect(isVisualStoryPlanCurrent(story, planning, [{ ...scenes[0], text: 'Edited.' }, scenes[1], scenes[2]])).toBe(false);
     expect(isVisualStoryPlanCurrent(story, planning, [scenes[1], scenes[0], scenes[2]])).toBe(false);
-    expect(isVisualStoryPlanCurrent(story, planning, [{ text: 'Inserted.' }, ...scenes])).toBe(false);
+    expect(isVisualStoryPlanCurrent(story, planning, [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000099', text: 'Inserted.' }, ...scenes])).toBe(false);
     expect(isVisualStoryPlanCurrent(story, planning, scenes.slice(0, 2))).toBe(false);
   });
 
@@ -84,7 +84,7 @@ describe('visual continuity and storytelling intelligence', () => {
 
   it('keeps story planning and sequence assessment outside canonical output identity', () => {
     const story = createVisualStoryPlan(planning, scenes);
-    const canonical: Scene[] = [{ text: 'Canonical scene.', duration: 3, visual: 'tram', imageStorage: { bucket: 'media', objectPath: 'owner/images/tram.png' } }];
+    const canonical: Scene[] = [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000099', text: 'Canonical scene.', duration: 3, visual: 'tram', imageStorage: { bucket: 'media', objectPath: 'owner/images/tram.png' } }];
     const before = canonicalStudioOutputScenes(canonical);
     const assessment = assessVisualSequence(story, []);
     expect(canonicalStudioOutputScenes(canonical)).toEqual(before);

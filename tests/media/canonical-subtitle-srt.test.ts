@@ -61,9 +61,9 @@ async function buildProject({ alignment }: { alignment?: { characters: string[];
     projectId: 'canonical-srt',
     title: 'Canonical SRT',
     scenes: [
-      { text: 'One', duration: 5, visual: 'One' },
-      { text: 'Two', duration: 5, visual: 'Two' },
-      { text: 'Three', duration: 5, visual: 'Three' },
+      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'One', duration: 5, visual: 'One' },
+      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000002', text: 'Two', duration: 5, visual: 'Two' },
+      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'Three', duration: 5, visual: 'Three' },
     ],
     subtitles: { enabled: true, preset: 'classic', textColor: null, highlightColor: null },
     transition: { type: 'cut' },

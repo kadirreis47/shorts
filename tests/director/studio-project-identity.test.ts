@@ -57,7 +57,7 @@ describe('Studio project identity lifecycle', () => {
   it('yeni taslak başladığında stale manifesti temizler', async () => {
     const mediaEngine = createMediaEngine(new TypedEventBus<ApplicationEventMap>(), assetEngine);
     const result = await mediaEngine.buildProject({ projectId: 'old-project', title: 'Old', scenes: [
-      { text: 'Eski sahne', duration: 3, visual: 'Eski görsel' },
+      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'Eski sahne', duration: 3, visual: 'Eski görsel' },
     ] });
     useMediaStore.getState().setBuildResult(result.project, result.manifest, result.renderReady, result.assetResolution, result.validation);
     const identity = createStudioProjectIdentity('old-project');

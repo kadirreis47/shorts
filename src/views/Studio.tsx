@@ -24,7 +24,8 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
-import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { assignNewCanonicalSceneIds, createCanonicalSceneId } from '@/lib/sceneIdentity';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
@@ -205,7 +206,7 @@ function visualStoryMediaContexts(
     contexts.push(Object.freeze({ sceneId, mediaType: selected.mediaType, origin: 'selection', provider: selected.provider, providerMediaIdentity: selected.providerMediaIdentity, categories: selected.conceptCategories }));
   }
   for (const scene of scenes) {
-    const sceneId = scene.visualPlanningId;
+    const sceneId = scene.sceneId;
     if (!sceneId || selectedSceneIds.has(sceneId)) continue;
     const provenance = scene.imageStorage ? scene.imageProvenance : scene.videoStorage ? scene.videoProvenance : undefined;
     const mediaType = scene.videoStorage ? 'video' : scene.imageStorage ? 'image' : undefined;
@@ -309,9 +310,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [hasElevenLabs, setHasElevenLabs] = useState(false);
   const [providerStatusError, setProviderStatusError] = useState('');
   const [fetchingImages, setFetchingImages] = useState(false);
-  const [ingestingPexelsImages, setIngestingPexelsImages] = useState<Set<number>>(new Set());
+  const [ingestingPexelsImages, setIngestingPexelsImages] = useState<Set<string>>(new Set());
   const [fetchingVideos, setFetchingVideos] = useState(false);
-  const [ingestingPexelsVideos, setIngestingPexelsVideos] = useState<Set<number>>(new Set());
+  const [ingestingPexelsVideos, setIngestingPexelsVideos] = useState<Set<string>>(new Set());
   const [voiceoverMode, setVoiceoverMode] = useState<StudioVoiceoverMode>('none');
   const [browserTtsFinalIntent, setBrowserTtsFinalIntent] = useState<BrowserTtsFinalIntent | null>(null);
 
@@ -352,6 +353,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   useEffect(() => { visualPlanningRef.current = visualIntelligence; }, [visualIntelligence]);
   useEffect(() => { directorProjectIdRef.current = directorProjectId; }, [directorProjectId]);
 
+  function isCurrentSceneOperation(projectId: string, epoch: number, current: readonly Scene[], sceneIndex: number, expected: Scene): boolean {
+    return directorProjectIdRef.current === projectId
+      && visualSessionEpoch.current === epoch
+      && current[sceneIndex]?.sceneId === expected.sceneId
+      && current[sceneIndex] === expected;
+  }
+
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('karaoke');
   const [transitionStyle, setTransitionStyle] = useState<TransitionStyle>('crossfade');
   const [motionStyle, setMotionStyle] = useState<MotionStyle>('kenburns');
@@ -375,15 +383,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [characterProfiles, setCharacterProfiles] = useState<CharacterProfile[]>([]);
   const [generatingVisuals, setGeneratingVisuals] = useState(false);
   const [researchingFootage, setResearchingFootage] = useState(false);
-  const [researchingSceneMedia, setResearchingSceneMedia] = useState<ReadonlySet<number>>(() => new Set());
+  const [researchingSceneMedia, setResearchingSceneMedia] = useState<ReadonlySet<string>>(() => new Set());
   const [generatingSEOState, setGeneratingSEOState] = useState(false);
   const [seoResult, setSeoResult] = useState<{ optimizedTitle: string; optimizedDescription: string; tags: string[]; hashtags: string[]; thumbnailText: string } | null>(null);
   const [watermarkText, setWatermarkText] = useState('');
   const [watermarkPosition, setWatermarkPosition] = useState('bottom-right');
-  const [generatingSceneImage, setGeneratingSceneImage] = useState<number | null>(null);
-  const [importingSceneImages, setImportingSceneImages] = useState<ReadonlySet<number>>(() => new Set());
-  const [importingSceneVideos, setImportingSceneVideos] = useState<ReadonlySet<number>>(() => new Set());
-  const sceneImportGenerations = useRef(new Map<number, number>());
+  const [generatingSceneImage, setGeneratingSceneImage] = useState<string | null>(null);
+  const [importingSceneImages, setImportingSceneImages] = useState<ReadonlySet<string>>(() => new Set());
+  const [importingSceneVideos, setImportingSceneVideos] = useState<ReadonlySet<string>>(() => new Set());
+  const sceneImportGenerations = useRef(new Map<string, number>());
   const pexelsRequestGenerations = useRef({ images: 0, broll: 0, research: 0 });
 
   // New AI tools & subtitle state
@@ -440,7 +448,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const compositionDefaults = { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) };
     let canonicalOutput: { scenes: unknown[]; sceneComposition: unknown[] };
     try {
-      canonicalOutput = canonicalStudioCompositionOutput(outputScenes, compositionDefaults);
+      canonicalOutput = canonicalStudioCompositionOutput(scenes, compositionDefaults);
     } catch {
       // Malformed hydrated state remains visible for correction and will fail
       // closed at Recipe normalization; it must not crash Studio rendering.
@@ -479,6 +487,17 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
     visualApplyActive.current.clear();
+    setIngestingPexelsImages(new Set());
+    setIngestingPexelsVideos(new Set());
+    setResearchingSceneMedia(new Set());
+    setGeneratingSceneImage(null);
+    setImportingSceneImages(new Set());
+    setImportingSceneVideos(new Set());
+    setFetchingImages(false);
+    setFetchingVideos(false);
+    setResearchingFootage(false);
+    setGeneratingVisuals(false);
+    setGenerating(false);
   }, [authenticatedUserId]);
 
   useEffect(() => {
@@ -505,6 +524,17 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
     visualApplyActive.current.clear();
+    setIngestingPexelsImages(new Set());
+    setIngestingPexelsVideos(new Set());
+    setResearchingSceneMedia(new Set());
+    setGeneratingSceneImage(null);
+    setImportingSceneImages(new Set());
+    setImportingSceneVideos(new Set());
+    setFetchingImages(false);
+    setFetchingVideos(false);
+    setResearchingFootage(false);
+    setGeneratingVisuals(false);
+    setGenerating(false);
     if (draft) {
       const restoredChannelId = resolveRestoredStudioChannelId(draft.channelId, channels.map((candidate) => candidate.id));
       const savedChannelUnavailable = Boolean(draft.channelId.trim() && !restoredChannelId);
@@ -524,7 +554,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setVisualIntelligence(draft.visualIntelligence);
       if (restoredScenes.some((scene) => scene.imageStorage || scene.videoStorage)) {
         void resolvePrivateSceneMedia(restoredScenes)
-          .then((resolvedScenes) => { if (!cancelled) setScenes(resolvedScenes); })
+          .then((resolvedScenes) => {
+            if (cancelled) return;
+            setScenes((current) => current.length === restoredScenes.length
+              && current.every((scene, index) => scene === restoredScenes[index] && scene.sceneId === resolvedScenes[index]?.sceneId)
+              ? resolvedScenes
+              : current);
+          })
           .catch(() => { /* Stable identity remains available for a later signed-URL retry. */ });
       }
       setCaptionStyle(draft.captionStyle);
@@ -642,8 +678,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const timer = window.setTimeout(() => {
       const savedAt = new Date().toISOString();
       const savedDraft = { ...draft, savedAt };
-      saveStudioDraft(savedDraft);
-      useProjectStore.getState().upsertDraft(createStudioProjectDraft(savedDraft));
+      const normalizedDraft = saveStudioDraft(savedDraft);
+      useProjectStore.getState().upsertDraft(createStudioProjectDraft(normalizedDraft));
       setDraftSavedAt(savedAt);
       setDraftStatus('saved');
     }, 650);
@@ -668,6 +704,17 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     cinematographyProposalsRef.current = {};
     visualSessionEpoch.current += 1;
     visualApplyActive.current.clear();
+    setIngestingPexelsImages(new Set());
+    setIngestingPexelsVideos(new Set());
+    setResearchingSceneMedia(new Set());
+    setGeneratingSceneImage(null);
+    setImportingSceneImages(new Set());
+    setImportingSceneVideos(new Set());
+    setFetchingImages(false);
+    setFetchingVideos(false);
+    setResearchingFootage(false);
+    setGeneratingVisuals(false);
+    setGenerating(false);
     setAudioBlob(null);
     setAudioUrl('');
     setNarration(null);
@@ -774,22 +821,27 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   async function handleGenerateScript() {
     setGenerating(true);
     setError('');
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
     try {
       const result = await aiService.generateScript(
         { topic, niche, tone, duration },
         { metadata: { source: 'studio', action: 'generate-script' } },
       );
+      if (directorProjectIdRef.current !== projectId || visualSessionEpoch.current !== sessionEpoch) return;
       setTitle(result.title);
       setHook(result.hook);
       setScript(result.script);
       invalidateNarration();
       setCta(result.cta);
-      setScenes(result.scenes ?? []);
+      setScenes(assignNewCanonicalSceneIds(result.scenes ?? []));
       setStep('script');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to generate script');
+      if (directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) {
+        setError(e instanceof Error ? e.message : 'Failed to generate script');
+      }
     } finally {
-      setGenerating(false);
+      if (directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) setGenerating(false);
     }
   }
 
@@ -798,7 +850,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setHook('');
     setScript('');
     setCta('');
-    setScenes([{ text: '', duration: duration, visual: '', keywords: [] }]);
+    setScenes([{ sceneId: createCanonicalSceneId(), text: '', duration: duration, visual: '', keywords: [] }]);
     setStep('script');
   }
 
@@ -820,11 +872,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setGeneratingVisuals(true);
     setError('');
     const ownerContext = captureValidatedMediaOwnerContext();
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
+    const targetScenes = [...scenes];
     try {
       const charDesc = characterName.trim()
         ? `${characterName.trim()}, ${characterAppearance.trim()}`
         : undefined;
-      const updatedScenes = [...scenes];
+      const updatedScenes = [...targetScenes];
       let succeeded = 0;
       let failed = 0;
       let firstFailure: unknown;
@@ -859,12 +914,21 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         }
       }
       assertCurrentMediaOwnerContext(ownerContext);
-      setScenes(updatedScenes);
-      if (failed) setError(succeeded ? `${succeeded} scene visuals were generated; ${failed} could not be generated.` : providerActionError('scene visuals', firstFailure));
+      setScenes((current) => {
+        if (directorProjectIdRef.current !== projectId || visualSessionEpoch.current !== sessionEpoch
+          || current.length !== targetScenes.length
+          || current.some((scene, index) => scene.sceneId !== targetScenes[index].sceneId || scene !== targetScenes[index])) return current;
+        return updatedScenes;
+      });
+      if (failed && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) {
+        setError(succeeded ? `${succeeded} scene visuals were generated; ${failed} could not be generated.` : providerActionError('scene visuals', firstFailure));
+      }
     } catch (generationError) {
-      setError(providerActionError('scene visuals', generationError));
+      if (directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) {
+        setError(providerActionError('scene visuals', generationError));
+      }
     } finally {
-      setGeneratingVisuals(false);
+      if (directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) setGeneratingVisuals(false);
     }
   }
 
@@ -876,11 +940,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const ownerContext = captureValidatedMediaOwnerContext();
     const requestGeneration = ++pexelsRequestGenerations.current.research;
     const targetScenes = [...scenes];
-    const selectionGenerations = new Map<number, number>();
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
+    const selectionGenerations = new Map<string, number>();
     for (let index = 0; index < targetScenes.length; index += 1) {
-      const generation = (sceneImportGenerations.current.get(index) ?? 0) + 1;
-      sceneImportGenerations.current.set(index, generation);
-      selectionGenerations.set(index, generation);
+      const sceneId = targetScenes[index].sceneId;
+      const generation = (sceneImportGenerations.current.get(sceneId) ?? 0) + 1;
+      sceneImportGenerations.current.set(sceneId, generation);
+      selectionGenerations.set(sceneId, generation);
     }
     setResearchingSceneMedia(new Set(selectionGenerations.keys()));
     try {
@@ -897,12 +964,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       for (const result of results) {
         const index = result.sceneIndex;
         const scene = targetScenes[index];
-        const selectionGeneration = selectionGenerations.get(index);
+        const sceneId = scene?.sceneId;
+        const selectionGeneration = sceneId ? selectionGenerations.get(sceneId) : undefined;
         if (!scene || selectionGeneration === undefined) continue;
         const assertCurrent = () => {
           assertCurrentMediaOwnerContext(ownerContext);
           if (pexelsRequestGenerations.current.research !== requestGeneration
-            || sceneImportGenerations.current.get(index) !== selectionGeneration) throw new StaleVisualSelectionError();
+            || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+            || !isCurrentSceneOperation(projectId, sessionEpoch, scenesRef.current, index, scene)) throw new StaleVisualSelectionError();
         };
         try {
           assertCurrent();
@@ -911,7 +980,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             assertCurrent();
             setScenes((current) => {
               if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-                || sceneImportGenerations.current.get(index) !== selectionGeneration || current[index] !== scene) return current;
+                || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+                || !isCurrentSceneOperation(projectId, sessionEpoch, current, index, scene)) return current;
               const next = [...current];
               next[index] = { ...scene, imageStorage: ingested.media, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance, videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined };
               return next;
@@ -922,7 +992,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             researchClientDiagnostic('RESEARCH_VIDEO_PREPARED', { sceneIndex: index });
             setScenes((current) => {
               if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-                || sceneImportGenerations.current.get(index) !== selectionGeneration || current[index] !== scene) return current;
+                || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+                || !isCurrentSceneOperation(projectId, sessionEpoch, current, index, scene)) return current;
               const next = [...current];
               next[index] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined };
               return next;
@@ -934,15 +1005,16 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           if (error instanceof StaleVisualSelectionError) {
             researchClientDiagnostic('RESEARCH_STALE', { sceneIndex: index });
             if (result.kind === 'video') researchClientDiagnostic('RESEARCH_VIDEO_STALE', { sceneIndex: index });
-          } else if (sceneImportGenerations.current.get(index) === selectionGeneration) {
+          } else if (sceneImportGenerations.current.get(sceneId) === selectionGeneration
+            && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) {
             researchClientDiagnostic(result.kind === 'image' ? 'RESEARCH_IMAGE_INGEST_FAILED' : 'RESEARCH_VIDEO_INGEST_FAILED', { sceneIndex: index });
             failed += 1;
             firstFailure ??= error;
           }
         } finally {
           if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-            && sceneImportGenerations.current.get(index) === selectionGeneration) {
-            setResearchingSceneMedia((current) => { const next = new Set(current); next.delete(index); return next; });
+            && sceneImportGenerations.current.get(sceneId) === selectionGeneration) {
+            setResearchingSceneMedia((current) => { const next = new Set(current); next.delete(sceneId); return next; });
           }
         }
       }
@@ -958,6 +1030,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (
         pexelsRequestGenerations.current.research === requestGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+        && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch
       ) {
         setError(providerActionError('footage research', researchError));
       }
@@ -965,6 +1038,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (
         pexelsRequestGenerations.current.research === requestGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+        && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch
       ) { setResearchingFootage(false); setResearchingSceneMedia(new Set()); }
     }
   }
@@ -1125,7 +1199,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
   async function handleFindPremiumVisuals(sceneIndex: number, regeneratePlan = false) {
     if (!hasPexels || visualDiscoveryBusy.size || !scenes[sceneIndex]) return;
-    const normalizedScenes = ensureSceneVisualPlanningIds(scenes);
+    const normalizedScenes = scenes;
     const target = normalizedScenes[sceneIndex];
     const binding = createSceneVisualBinding(normalizedScenes, sceneIndex);
     delete cinematographyProposalsRef.current[binding.sceneId];
@@ -1196,7 +1270,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleApplyPremiumVisual(sceneIndex: number) {
-    const scene = scenes[sceneIndex]; const sceneId = scene?.visualPlanningId;
+    const scene = scenes[sceneIndex]; const sceneId = scene?.sceneId;
     const shortlist = sceneId ? visualShortlists[sceneId] : undefined; const selectedId = sceneId ? selectedVisualCandidates[sceneId] : undefined;
     const candidate = shortlist?.candidates.find((item) => item.candidateId === selectedId);
     if (!scene || !sceneId || !candidate || visualApplyActive.current.has(`${visualSessionEpoch.current}:${sceneId}`)) return;
@@ -1223,7 +1297,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     try {
       const assertCurrent = () => {
         assertCurrentMediaOwnerContext(owner);
-        const current = scenesRef.current.find((item) => item.visualPlanningId === sceneId);
+        const current = scenesRef.current.find((item) => item.sceneId === sceneId);
         if (!current || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, scenesRef.current) || current.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId) throw new StaleVisualSelectionError();
       };
       assertCurrent();
@@ -1231,9 +1305,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         const ingested = await ingestPexelsImage(providerMediaId, scene.visual || scene.text);
         assertCurrent();
         setScenes((current) => {
-          const currentScene = current.find((item) => item.visualPlanningId === sceneId);
+          const currentScene = current.find((item) => item.sceneId === sceneId);
           if (!currentScene || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, current) || currentScene.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return current;
-          return current.map((item) => item.visualPlanningId !== sceneId ? item : {
+          return current.map((item) => item.sceneId !== sceneId ? item : {
             ...item, imageStorage: ingested.media, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance,
             videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined,
           });
@@ -1242,9 +1316,9 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         const prepared = await prepareDurablePexelsVideo(providerMediaId, scene.visual || scene.text, assertCurrent);
         assertCurrent();
         setScenes((current) => {
-          const currentScene = current.find((item) => item.visualPlanningId === sceneId);
+          const currentScene = current.find((item) => item.sceneId === sceneId);
           if (!currentScene || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, current) || currentScene.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return current;
-          return current.map((item) => item.visualPlanningId !== sceneId ? item : {
+          return current.map((item) => item.sceneId !== sceneId ? item : {
             ...item, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance,
             imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined,
           });
@@ -1301,7 +1375,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
   async function handleAnalyzeSceneVisual(sceneIndex: number) {
     const scene = scenesRef.current[sceneIndex];
-    const sceneId = scene?.visualPlanningId;
+    const sceneId = scene?.sceneId;
     if (!scene || !sceneId || !scene.imageStorage || scene.videoStorage) return;
     const plan = visualPlanningRef.current?.queryPlans.find((item) => item.sceneBinding.sceneId === sceneId);
     const brief = visualPlanningRef.current?.briefs.find((item) => item.sceneBinding.sceneId === sceneId);
@@ -1335,7 +1409,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleAnalyzeDiscoveryCandidate(sceneIndex: number, candidateId: string) {
-    const scene = scenesRef.current[sceneIndex]; const sceneId = scene?.visualPlanningId;
+    const scene = scenesRef.current[sceneIndex]; const sceneId = scene?.sceneId;
     const plan = sceneId ? visualPlanningRef.current?.queryPlans.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
     const brief = sceneId ? visualPlanningRef.current?.briefs.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
     const shortlist = sceneId ? visualShortlistsRef.current[sceneId] : undefined;
@@ -1368,11 +1442,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   async function handleGenerateSceneImage(sceneIndex: number) {
     const scene = scenes[sceneIndex];
     if (!scene) return;
+    const sceneId = scene.sceneId;
     if (!hasOpenAI) { setError('OpenAI image generation is not configured. Contact an administrator.'); return; }
-    const selectionGeneration = (sceneImportGenerations.current.get(sceneIndex) ?? 0) + 1;
-    sceneImportGenerations.current.set(sceneIndex, selectionGeneration);
-    setGeneratingSceneImage(sceneIndex);
+    const selectionGeneration = (sceneImportGenerations.current.get(sceneId) ?? 0) + 1;
+    sceneImportGenerations.current.set(sceneId, selectionGeneration);
+    setGeneratingSceneImage(sceneId);
     const ownerContext = captureValidatedMediaOwnerContext();
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
     try {
       const charDesc = characterName.trim()
         ? `${characterName.trim()}, ${characterAppearance.trim()}`
@@ -1387,8 +1464,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       assertCurrentMediaOwnerContext(ownerContext);
       setScenes((current) => {
         if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-          || sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration
-          || current[sceneIndex] !== scene) return current;
+          || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+          || !isCurrentSceneOperation(projectId, sessionEpoch, current, sceneIndex, scene)) return current;
         const next = [...current];
         next[sceneIndex] = {
           ...scene,
@@ -1403,14 +1480,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         return next;
       });
     } catch (generationError) {
-      if (sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
-        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+      if (sceneImportGenerations.current.get(sceneId) === selectionGeneration
+        && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+        && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) {
         setError(providerActionError('this scene image', generationError));
       }
     } finally {
-      if (sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
+      if (sceneImportGenerations.current.get(sceneId) === selectionGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
-        setGeneratingSceneImage((current) => current === sceneIndex ? null : current);
+        setGeneratingSceneImage((current) => current === sceneId ? null : current);
       }
     }
   }
@@ -1427,13 +1505,16 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleImportSceneImage(sceneIndex: number, files: readonly File[]) {
-    const selectionGeneration = (sceneImportGenerations.current.get(sceneIndex) ?? 0) + 1;
-    sceneImportGenerations.current.set(sceneIndex, selectionGeneration);
     const targetScene = scenes[sceneIndex];
     if (!targetScene) return;
+    const sceneId = targetScene.sceneId;
+    const selectionGeneration = (sceneImportGenerations.current.get(sceneId) ?? 0) + 1;
+    sceneImportGenerations.current.set(sceneId, selectionGeneration);
     const ownerContext = captureValidatedMediaOwnerContext();
-    setImportingSceneImages((current) => new Set(current).add(sceneIndex));
-    setImportingSceneVideos((current) => { const next = new Set(current); next.delete(sceneIndex); return next; });
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
+    setImportingSceneImages((current) => new Set(current).add(sceneId));
+    setImportingSceneVideos((current) => { const next = new Set(current); next.delete(sceneId); return next; });
     setError('');
     try {
       const file = requireOneManualSceneImage(files);
@@ -1441,12 +1522,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       assertCurrentMediaOwnerContext(ownerContext);
       const upload = await uploadMedia(file, 'generated-images');
       assertCurrentMediaOwnerContext(ownerContext);
-      if (sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration) return;
+      if (sceneImportGenerations.current.get(sceneId) !== selectionGeneration) return;
       setScenes((current) => {
         if (
           !isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-          || sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration
-          || current[sceneIndex] !== targetScene
+          || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+          || !isCurrentSceneOperation(projectId, sessionEpoch, current, sceneIndex, targetScene)
         ) return current;
         const updated = [...current];
         updated[sceneIndex] = {
@@ -1462,14 +1543,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       });
     } catch (importError) {
       if (
-        sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
+        sceneImportGenerations.current.get(sceneId) === selectionGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+        && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch
       ) setError(sceneImportError(importError));
     } finally {
       if (
-        sceneImportGenerations.current.get(sceneIndex) === selectionGeneration
+        sceneImportGenerations.current.get(sceneId) === selectionGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-      ) setImportingSceneImages((current) => { const next = new Set(current); next.delete(sceneIndex); return next; });
+      ) setImportingSceneImages((current) => { const next = new Set(current); next.delete(sceneId); return next; });
     }
   }
 
@@ -1486,13 +1568,16 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }
 
   async function handleImportSceneVideo(sceneIndex: number, files: readonly File[]) {
-    const selectionGeneration = (sceneImportGenerations.current.get(sceneIndex) ?? 0) + 1;
-    sceneImportGenerations.current.set(sceneIndex, selectionGeneration);
     const targetScene = scenes[sceneIndex];
     if (!targetScene) return;
+    const sceneId = targetScene.sceneId;
+    const selectionGeneration = (sceneImportGenerations.current.get(sceneId) ?? 0) + 1;
+    sceneImportGenerations.current.set(sceneId, selectionGeneration);
     const ownerContext = captureValidatedMediaOwnerContext();
-    setImportingSceneVideos((current) => new Set(current).add(sceneIndex));
-    setImportingSceneImages((current) => { const next = new Set(current); next.delete(sceneIndex); return next; });
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
+    setImportingSceneVideos((current) => new Set(current).add(sceneId));
+    setImportingSceneImages((current) => { const next = new Set(current); next.delete(sceneId); return next; });
     setError('');
     try {
       const file = requireOneManualSceneVideo(files);
@@ -1502,14 +1587,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (!bridge?.probeManualMp4) throw new ManualSceneVideoImportError('probe');
       await bridge.probeManualMp4(await file.arrayBuffer());
       assertCurrentMediaOwnerContext(ownerContext);
-      if (sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration) return;
+      if (sceneImportGenerations.current.get(sceneId) !== selectionGeneration) return;
       const upload = await uploadMedia(file, 'videos');
       assertCurrentMediaOwnerContext(ownerContext);
-      if (sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration) return;
+      if (sceneImportGenerations.current.get(sceneId) !== selectionGeneration) return;
       setScenes((current) => {
         if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-          || sceneImportGenerations.current.get(sceneIndex) !== selectionGeneration
-          || current[sceneIndex] !== targetScene) return current;
+          || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+          || !isCurrentSceneOperation(projectId, sessionEpoch, current, sceneIndex, targetScene)) return current;
         const updated = [...current];
         updated[sceneIndex] = {
           ...targetScene,
@@ -1523,12 +1608,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         return updated;
       });
     } catch (importError) {
-      if (sceneImportGenerations.current.get(sceneIndex) === selectionGeneration && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+      if (sceneImportGenerations.current.get(sceneId) === selectionGeneration && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+        && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) {
         setError(sceneVideoImportError(importError));
       }
     } finally {
-      if (sceneImportGenerations.current.get(sceneIndex) === selectionGeneration && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
-        setImportingSceneVideos((current) => { const next = new Set(current); next.delete(sceneIndex); return next; });
+      if (sceneImportGenerations.current.get(sceneId) === selectionGeneration && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {
+        setImportingSceneVideos((current) => { const next = new Set(current); next.delete(sceneId); return next; });
       }
     }
   }
@@ -1590,6 +1676,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setError('');
     const ownerContext = captureValidatedMediaOwnerContext();
     const requestGeneration = ++pexelsRequestGenerations.current.images;
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
     try {
       let succeeded = 0;
       let failed = 0;
@@ -1597,24 +1685,27 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       let firstFailure: unknown;
       for (let i = 0; i < scenes.length; i++) {
         const scene = scenes[i];
-        const selectionGeneration = (sceneImportGenerations.current.get(i) ?? 0) + 1;
-        sceneImportGenerations.current.set(i, selectionGeneration);
+        const sceneId = scene.sceneId;
+        const selectionGeneration = (sceneImportGenerations.current.get(sceneId) ?? 0) + 1;
+        sceneImportGenerations.current.set(sceneId, selectionGeneration);
         const query = scene.visual || scene.keywords?.[0] || topic;
         try {
           const images = await searchImages(query, 1);
           assertCurrentMediaOwnerContext(ownerContext);
           if (pexelsRequestGenerations.current.images !== requestGeneration) return;
-          if (sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
+          if (sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+            || !isCurrentSceneOperation(projectId, sessionEpoch, scenesRef.current, i, scene)) continue;
           if (images.length > 0) {
-            setIngestingPexelsImages((current) => new Set(current).add(i));
+            setIngestingPexelsImages((current) => new Set(current).add(sceneId));
             const ingested = await ingestPexelsImage(images[0].id, query);
             assertCurrentMediaOwnerContext(ownerContext);
-            if (pexelsRequestGenerations.current.images !== requestGeneration || sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
+            if (pexelsRequestGenerations.current.images !== requestGeneration || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+              || !isCurrentSceneOperation(projectId, sessionEpoch, scenesRef.current, i, scene)) continue;
             let attached = false;
             setScenes((current) => {
               if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-                || sceneImportGenerations.current.get(i) !== selectionGeneration
-                || current[i] !== scene) return current;
+                || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+                || !isCurrentSceneOperation(projectId, sessionEpoch, current, i, scene)) return current;
               const next = [...current];
               next[i] = {
                 ...scene,
@@ -1634,8 +1725,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         } catch (sceneError) { failed += 1; firstFailure ??= sceneError; }
         finally {
           if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-            && sceneImportGenerations.current.get(i) === selectionGeneration) {
-            setIngestingPexelsImages((current) => { const next = new Set(current); next.delete(i); return next; });
+            && sceneImportGenerations.current.get(sceneId) === selectionGeneration) {
+            setIngestingPexelsImages((current) => { const next = new Set(current); next.delete(sceneId); return next; });
           }
         }
       }
@@ -1646,6 +1737,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (
         pexelsRequestGenerations.current.images === requestGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+        && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch
       ) setError(providerActionError('images', e));
     } finally {
       if (
@@ -1661,6 +1753,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setError('');
     const ownerContext = captureValidatedMediaOwnerContext();
     const requestGeneration = ++pexelsRequestGenerations.current.broll;
+    const projectId = directorProjectIdRef.current;
+    const sessionEpoch = visualSessionEpoch.current;
     try {
       let succeeded = 0;
       let failed = 0;
@@ -1668,24 +1762,28 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       let firstFailure: unknown;
       for (let i = 0; i < scenes.length; i++) {
         const scene = scenes[i];
-        const selectionGeneration = (sceneImportGenerations.current.get(i) ?? 0) + 1;
-        sceneImportGenerations.current.set(i, selectionGeneration);
+        const sceneId = scene.sceneId;
+        const selectionGeneration = (sceneImportGenerations.current.get(sceneId) ?? 0) + 1;
+        sceneImportGenerations.current.set(sceneId, selectionGeneration);
         const query = scene.visual || scene.keywords?.[0] || topic;
         try {
           const videos = await searchVideos(query, 1);
           assertCurrentMediaOwnerContext(ownerContext);
           if (pexelsRequestGenerations.current.broll !== requestGeneration) return;
-          if (sceneImportGenerations.current.get(i) !== selectionGeneration) continue;
+          if (sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+            || !isCurrentSceneOperation(projectId, sessionEpoch, scenesRef.current, i, scene)) continue;
           if (videos.length > 0) {
-            setIngestingPexelsVideos((current) => new Set(current).add(i));
+            setIngestingPexelsVideos((current) => new Set(current).add(sceneId));
             const prepared = await prepareDurablePexelsVideo(videos[0].id, query, () => {
               assertCurrentMediaOwnerContext(ownerContext);
-              if (pexelsRequestGenerations.current.broll !== requestGeneration || sceneImportGenerations.current.get(i) !== selectionGeneration) throw new StaleVisualSelectionError();
+              if (pexelsRequestGenerations.current.broll !== requestGeneration || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+                || !isCurrentSceneOperation(projectId, sessionEpoch, scenesRef.current, i, scene)) throw new StaleVisualSelectionError();
             });
             let attached = false;
             setScenes((current) => {
               if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-                || sceneImportGenerations.current.get(i) !== selectionGeneration || current[i] !== scene) return current;
+                || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
+                || !isCurrentSceneOperation(projectId, sessionEpoch, current, i, scene)) return current;
               const next = [...current];
               next[i] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined };
               attached = true;
@@ -1696,8 +1794,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         } catch (sceneError) { if (!(sceneError instanceof StaleVisualSelectionError)) { failed += 1; firstFailure ??= sceneError; } }
         finally {
           if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
-            && sceneImportGenerations.current.get(i) === selectionGeneration) {
-            setIngestingPexelsVideos((current) => { const next = new Set(current); next.delete(i); return next; });
+            && sceneImportGenerations.current.get(sceneId) === selectionGeneration) {
+            setIngestingPexelsVideos((current) => { const next = new Set(current); next.delete(sceneId); return next; });
           }
         }
       }
@@ -1708,6 +1806,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (
         pexelsRequestGenerations.current.broll === requestGeneration
         && isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+        && directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch
       ) setError(providerActionError('video clips', e));
     } finally {
       if (
@@ -2196,13 +2295,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                       </button>
                     </>
                   )}
-                  <button onClick={() => setScenes([...scenes, { text: '', duration: 5, visual: '', keywords: [] }])}
+                  <button onClick={() => setScenes([...scenes, { sceneId: createCanonicalSceneId(), text: '', duration: 5, visual: '', keywords: [] }])}
                     className="text-xs font-medium text-blue-600 hover:underline">{t('studio.addScene')}</button>
                 </div>
               </div>
               <div className="mt-2 space-y-2">
                 {scenes.map((s, i) => (
-                  <div key={i} className="rounded-lg bg-slate-50 p-3">
+                  <div key={s.sceneId} className="rounded-lg bg-slate-50 p-3">
                     <div className="flex items-center justify-between text-xs text-slate-400">
                       <span>{t('studio.scene')} {i + 1}</span>
                       <div className="flex items-center gap-2">
@@ -2247,7 +2346,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                       </div>
                     )}
                     {s.imageStorage && !s.videoStorage && (() => {
-                      const sceneId = s.visualPlanningId;
+                      const sceneId = s.sceneId;
                       const brief = sceneId ? visualIntelligence?.briefs.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
                       const plan = sceneId ? visualIntelligence?.queryPlans.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
                       const eligible = Boolean(sceneId && brief && plan && isSceneVisualBindingCurrent(brief.sceneBinding, scenes) && isVisualQueryPlanCurrent(plan, brief, scenes));
@@ -2282,12 +2381,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                             disabled={!s.text.trim() || visualDiscoveryBusy.size > 0}
                             className="flex items-center gap-1 rounded-lg border border-violet-300 bg-white px-2 py-1 text-xs font-medium text-violet-800 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {visualDiscoveryBusy.has(s.visualPlanningId ?? '') ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                            {visualDiscoveryBusy.has(s.sceneId) ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
                             {t('studio.findVisuals')}
                           </button>
                         </div>
                         {(() => {
-                          const sceneId = s.visualPlanningId;
+                          const sceneId = s.sceneId;
                           const rawBrief = sceneId ? visualIntelligence?.briefs.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
                           const plan = sceneId ? visualIntelligence?.queryPlans.find((item) => item.sceneBinding.sceneId === sceneId) : undefined;
                           const brief = rawBrief && plan && isSceneVisualBindingCurrent(rawBrief.sceneBinding, scenes) && isVisualQueryPlanCurrent(plan, rawBrief, scenes) ? rawBrief : undefined;
@@ -2395,33 +2494,33 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                         })()}
                       </div>
                     )}
-                    {ingestingPexelsImages.has(i) && (
+                    {ingestingPexelsImages.has(s.sceneId) && (
                       <div className="mt-2 flex items-center gap-1 text-xs text-blue-600"><Loader2 size={12} className="animate-spin" /> Ingesting Pexels image…</div>
                     )}
-                    {ingestingPexelsVideos.has(i) && (
+                    {ingestingPexelsVideos.has(s.sceneId) && (
                       <div className="mt-2 flex items-center gap-1 text-xs text-blue-600"><Loader2 size={12} className="animate-spin" /> {t('studio.preparingPexelsBroll')}</div>
                     )}
-                    {researchingSceneMedia.has(i) && !ingestingPexelsImages.has(i) && !ingestingPexelsVideos.has(i) && (
+                    {researchingSceneMedia.has(s.sceneId) && !ingestingPexelsImages.has(s.sceneId) && !ingestingPexelsVideos.has(s.sceneId) && (
                       <div className="mt-2 flex items-center gap-1 text-xs text-blue-600"><Loader2 size={12} className="animate-spin" /> {t('studio.researchingFootage')}</div>
                     )}
                     {/* Per-scene AI image generation */}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <button
                         onClick={() => handleGenerateSceneImage(i)}
-                        disabled={!hasOpenAI || generatingSceneImage === i}
+                        disabled={!hasOpenAI || generatingSceneImage === s.sceneId}
                         className="flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50"
                       >
-                        {generatingSceneImage === i ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        {generatingSceneImage === s.sceneId ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
                         {t('studio.generateImage')}
                       </button>
                       <label className="flex cursor-pointer items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100">
-                        {importingSceneImages.has(i) ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
-                        {importingSceneImages.has(i) ? t('studio.importingImage') : t('studio.importImage')}
+                        {importingSceneImages.has(s.sceneId) ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
+                        {importingSceneImages.has(s.sceneId) ? t('studio.importingImage') : t('studio.importImage')}
                         <input
                           type="file"
                           accept="image/png,image/jpeg"
                           className="sr-only"
-                          disabled={importingSceneImages.has(i)}
+                          disabled={importingSceneImages.has(s.sceneId)}
                           onChange={(event) => {
                             const files = Array.from(event.currentTarget.files ?? []);
                             event.currentTarget.value = '';
@@ -2430,13 +2529,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                         />
                       </label>
                       <label className="flex cursor-pointer items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100">
-                        {importingSceneVideos.has(i) ? <Loader2 size={12} className="animate-spin" /> : <Video size={12} />}
-                        {importingSceneVideos.has(i) ? t('studio.importingVideo') : t('studio.importVideo')}
+                        {importingSceneVideos.has(s.sceneId) ? <Loader2 size={12} className="animate-spin" /> : <Video size={12} />}
+                        {importingSceneVideos.has(s.sceneId) ? t('studio.importingVideo') : t('studio.importVideo')}
                         <input
                           type="file"
                           accept="video/mp4"
                           className="sr-only"
-                          disabled={importingSceneVideos.has(i)}
+                          disabled={importingSceneVideos.has(s.sceneId)}
                           onChange={(event) => {
                             const files = Array.from(event.currentTarget.files ?? []);
                             event.currentTarget.value = '';

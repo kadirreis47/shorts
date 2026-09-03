@@ -31,7 +31,7 @@ describe('Studio draft restore isolation', () => {
   it('eşleşen global draftı doğru projeye hydrate eder', () => {
     const matching = draft('project-a', 'A content');
     expect(resolveStudioDraftRestore({ currentProjectId: 'project-a', globalDraft: matching, projectDrafts: [], fallbackProjectId: 'fallback' }).draft)
-      .toBe(matching);
+      .toEqual(matching);
   });
 
   it('alakasız global draft varken kayıtlı projenin kendi Project Store draftını bulur', () => {
@@ -50,7 +50,7 @@ describe('Studio draft restore isolation', () => {
   it('autosave kaydını yalnızca draftın gerçek projectId değeriyle oluşturur', () => {
     const saved = createStudioProjectDraft(draft('project-a', 'A content'));
     expect(saved).toMatchObject({ id: 'studio-project-a', projectId: 'project-a' });
-    expect(saved.data).toMatchObject({ projectId: 'project-a', scenes: [{ text: 'A content' }] });
+    expect(saved.data).toMatchObject({ projectId: 'project-a', scenes: [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'A content' }] });
   });
 
   it('proje A ve B içeriklerini restore kararlarında birbirine karıştırmaz', () => {
@@ -64,17 +64,32 @@ describe('Studio draft restore isolation', () => {
   it('hydrates legacy drafts without planning metadata and strips malformed advisory planning only', () => {
     const legacy = normalizeStudioDraft(draft('project-a', 'A content'));
     expect(legacy.visualIntelligence).toBeUndefined();
-    expect(legacy.scenes[0].visualPlanningId).toMatch(/^visual-scene-/);
+    expect(legacy.scenes[0].sceneId).toMatch(/^visual-scene-/);
     const malformed = normalizeStudioDraft({ ...legacy, visualIntelligence: { version: 1, briefs: [{ unsafe: true }], queryPlans: [] } as never });
     expect(malformed.visualIntelligence).toBeUndefined();
     expect(malformed.scenes[0].text).toBe('A content');
+  });
+
+  it('promotes a legacy visual identity once and reuses one normalized identity set for both autosave copies', () => {
+    const source = draft('project-a', 'Legacy content');
+    const { sceneId: _sceneId, ...legacyScene } = source.scenes[0];
+    const legacy = { ...source, scenes: [{ ...legacyScene, visualPlanningId: 'visual-scene-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }] } as unknown as StudioDraft;
+
+    const normalized = normalizeStudioDraft(legacy as unknown as StudioDraft);
+    const repeated = normalizeStudioDraft(normalized);
+    const projectCopy = createStudioProjectDraft(normalized);
+
+    expect(normalized.scenes[0].sceneId).toBe('visual-scene-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    expect('visualPlanningId' in normalized.scenes[0]).toBe(false);
+    expect(repeated.scenes[0].sceneId).toBe(normalized.scenes[0].sceneId);
+    expect((projectCopy.data as unknown as StudioDraft).scenes).toBe(normalized.scenes);
   });
 });
 
 function draft(projectId: string, text: string): StudioDraft {
   return { version: 1, projectId, savedAt: '2026-08-03T00:00:00.000Z', step: 'script', channelId: 'channel',
     topic: 'Topic', niche: 'Niche', tone: 'engaging', duration: 30, title: projectId, hook: '', script: text, cta: '',
-    scenes: [{ text, duration: 3, visual: 'Visual' }], captionStyle: 'karaoke', transitionStyle: 'crossfade',
+    scenes: [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text, duration: 3, visual: 'Visual' }], captionStyle: 'karaoke', transitionStyle: 'crossfade',
     motionStyle: 'kenburns', useBroll: false, musicId: '', musicVolume: 0.25, visualMode: 'auto', selectedStyleId: '',
     characterName: '', characterAppearance: '', characterArtStyle: 'realistic', characterProfileId: '', watermarkText: '',
     watermarkPosition: 'bottom-right', showSubtitles: true, captionTextColor: '', captionHighlightColor: '', beatSync: false,

@@ -1,4 +1,5 @@
 import { normalizeStudioDraft, type StudioDraft } from '@/lib/studioDraft';
+import { hasUniqueCanonicalSceneIds } from '@/lib/sceneIdentity';
 import type { ProjectDraft } from '@/store/types';
 
 export interface StudioDraftRestoreDecision {
@@ -16,11 +17,11 @@ export function resolveRestoredStudioChannelId(
 }
 
 export function createStudioProjectDraft(draft: StudioDraft): ProjectDraft {
-  const normalized = normalizeStudioDraft(draft);
-  const projectId = normalized.projectId?.trim();
+  const projectId = draft.projectId?.trim();
   if (!projectId) throw new Error('Studio draft project ID is required for autosave.');
-  return { id: `studio-${projectId}`, projectId, title: normalized.title || 'Untitled Studio Project',
-    updatedAt: normalized.savedAt, data: { ...normalized } };
+  if (!hasUniqueCanonicalSceneIds(draft.scenes)) throw new Error('Studio draft scenes require unique canonical identities before autosave.');
+  return { id: `studio-${projectId}`, projectId, title: draft.title || 'Untitled Studio Project',
+    updatedAt: draft.savedAt, data: { ...draft } };
 }
 
 export function resolveStudioDraftRestore(input: {
@@ -36,10 +37,10 @@ export function resolveStudioDraftRestore(input: {
       ? stored.data
       : null;
     const matchingGlobal = input.globalDraft?.projectId === currentProjectId ? input.globalDraft : null;
-    return { projectId: currentProjectId, draft: projectDraft ?? matchingGlobal };
+    return { projectId: currentProjectId, draft: projectDraft || matchingGlobal ? normalizeStudioDraft((projectDraft ?? matchingGlobal)!) : null };
   }
   if (input.globalDraft) {
-    return { projectId: input.globalDraft.projectId?.trim() || input.fallbackProjectId, draft: input.globalDraft };
+    return { projectId: input.globalDraft.projectId?.trim() || input.fallbackProjectId, draft: normalizeStudioDraft(input.globalDraft) };
   }
   return { projectId: input.fallbackProjectId, draft: null };
 }

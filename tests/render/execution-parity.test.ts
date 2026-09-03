@@ -159,7 +159,7 @@ describe('full and incremental canonical execution parity', () => {
       startMs: index === 0 ? 0 : 4_000,
       endMs: index === 0 ? 5_000 : 9_000,
       subtitleText: index === 0 ? 'First scene subtitle words' : 'Second scene subtitle words',
-      sourceScene: { text: 'source', duration: 5, visual: 'source' },
+      sourceScene: { sceneId: `visual-scene-00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, text: 'source', duration: 5, visual: 'source' },
     }));
     const timeline = buildSubtitleTimeline(scenes, { fps: 30 } as never, {
       canonical: { enabled: true, preset: 'minimal', textColor: null, highlightColor: null },
@@ -276,6 +276,41 @@ describe('full and incremental canonical execution parity', () => {
     }
   });
 
+  it('associates incremental snapshots by stable scene ID without hashing the opaque ID', async () => {
+    const firstId = 'visual-scene-11111111-1111-4111-8111-111111111111';
+    const replacementId = 'visual-scene-22222222-2222-4222-8222-222222222222';
+    const firstAssetId = `${firstId}-source`;
+    const firstManifest = manifest({
+      projectId: 'canonical-scene-association-project',
+      assets: [{ id: firstAssetId, type: 'image', source: 'https://media.example/same.png', metadata: { sceneId: firstId } }],
+      timeline: {
+        scenes: [{ ...manifest().timeline.scenes[0], id: firstId, assetIds: [firstAssetId] }, manifest().timeline.scenes[1]],
+        tracks: [{ id: 'video-track-a', type: 'video', order: 0, muted: false, volume: 1, clips: [{ id: 'random-clip-a', sceneId: firstId, assetId: firstAssetId, startMs: 0, endMs: 5_000, durationMs: 5_000, offsetMs: 0, metadata: { visualProduction: [{ operationId: `${firstId}-operation`, type: 'brightness', scope: 'scene', parameters: { delta: .1 } }] } }] }],
+      },
+    });
+    const planner = createIncrementalRenderPlanner();
+    try {
+      const first = await planner.createPlan({ manifest: firstManifest, preset, adapterId: 'ffmpeg' });
+      planner.commit({ plan: first, adapterId: 'ffmpeg', presetId: preset.id, outputUri: 'first.mp4' });
+
+      const sameScene = await planner.createPlan({ manifest: firstManifest, preset, adapterId: 'ffmpeg' });
+      expect(sameScene.items[0].decision).toBe('reuse');
+      const replacement = structuredClone(firstManifest);
+      replaceSceneIdentity(replacement, firstId, replacementId);
+      replacement.assets[0].id = `${replacementId}-source`;
+      replacement.timeline.scenes[0].assetIds = [replacement.assets[0].id];
+      replacement.timeline.tracks[0].clips[0].id = 'random-clip-b';
+      replacement.timeline.tracks[0].clips[0].assetId = replacement.assets[0].id;
+      (replacement.timeline.tracks[0].clips[0].metadata.visualProduction as Array<{ operationId: string }>)[0].operationId = `${replacementId}-operation`;
+      expect(await createSceneFingerprint(firstManifest.timeline.scenes[0], firstManifest, preset))
+        .toBe(await createSceneFingerprint(replacement.timeline.scenes[0], replacement, preset));
+      const replacementPlan = await planner.createPlan({ manifest: replacement, preset, adapterId: 'ffmpeg' });
+      expect(replacementPlan.items[0]).toMatchObject({ sceneId: replacementId, previousFingerprint: null, decision: 'render' });
+    } finally {
+      planner.clear('canonical-scene-association-project');
+    }
+  });
+
   it('reuses clean subtitle-free segments for subtitle-only changes while final identity remains separate', async () => {
     const value = manifest();
     const changed = structuredClone(value);
@@ -286,3 +321,15 @@ describe('full and incremental canonical execution parity', () => {
       .toBe(await createSceneFingerprint(changed.timeline.scenes[0], changed, preset));
   });
 });
+
+function replaceSceneIdentity(value: RenderManifest, oldId: string, newId: string): void {
+  const scene = value.timeline.scenes.find((candidate) => candidate.id === oldId);
+  if (!scene) throw new Error('Scene fixture identity is missing.');
+  scene.id = newId;
+  if (scene.sourceScene) scene.sourceScene.sceneId = newId;
+  value.assets.forEach((asset) => { if (asset.metadata.sceneId === oldId) Object.assign(asset.metadata, { sceneId: newId }); });
+  value.timeline.tracks.forEach((track) => track.clips.forEach((clip) => { if (clip.sceneId === oldId) clip.sceneId = newId; }));
+  value.subtitles.cues.forEach((cue) => { if (cue.sceneId === oldId) cue.sceneId = newId; });
+  value.audio.voice.forEach((cue) => { if (cue.sceneId === oldId) cue.sceneId = newId; });
+  value.audio.sfx.forEach((cue) => { if (cue.sceneId === oldId) cue.sceneId = newId; });
+}

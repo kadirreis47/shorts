@@ -5,6 +5,7 @@ import {
 } from '@/core/media/sceneComposition';
 import { isCanonicalPrivateMediaIdentity } from '@/core/media/storageIdentity';
 import type { Scene, SceneCompositionMotion, SceneCompositionTransition } from '@/lib/types';
+import { isCanonicalSceneId } from '@/lib/sceneIdentity';
 import type { CinematographyAssessment } from './cinematography';
 
 export const CINEMATOGRAPHY_APPLICATION_VERSION = 1 as const;
@@ -66,10 +67,10 @@ export function createCinematographyApplicationProposal(
   input: CreateCinematographyApplicationProposalInput,
 ): CinematographyApplicationProposal {
   const scene = validScene(input.scenes, input.sceneIndex);
-  const sceneId = scene?.visualPlanningId ?? '';
+  const sceneId = scene?.sceneId ?? '';
   const media = scene ? canonicalMedia(scene) : undefined;
   const fallback = { motion: input.defaults.motion, transition: input.sceneIndex === 0 ? 'none' : input.defaults.transition } as const;
-  if (!scene || !sceneId || input.recommendation.sceneId !== sceneId) {
+  if (!scene || !isCanonicalSceneId(sceneId) || input.recommendation.sceneId !== sceneId) {
     return proposal(input, 'invalid-scene', ['invalid-scene'], sceneId, '', fallback, fallback, []);
   }
   if (!media) return proposal(input, 'invalid-media', ['missing-canonical-media'], sceneId, '', fallback, fallback, []);
@@ -104,7 +105,7 @@ export function applyCinematographyApplicationProposal(
 ): CinematographyApplicationResult {
   const { proposal, ...currentInput } = input;
   if (proposal.projectId !== input.projectId) return { status: 'stale', scenes: input.scenes };
-  if (proposal.sceneIndex !== input.sceneIndex || proposal.sceneId !== input.scenes[input.sceneIndex]?.visualPlanningId) return { status: 'invalid-scene', scenes: input.scenes };
+  if (proposal.sceneIndex !== input.sceneIndex || proposal.sceneId !== input.scenes[input.sceneIndex]?.sceneId) return { status: 'invalid-scene', scenes: input.scenes };
   const media = validScene(input.scenes, input.sceneIndex) && canonicalMedia(input.scenes[input.sceneIndex]);
   if (!media || media.identity !== proposal.canonicalMediaIdentity) return { status: 'invalid-media', scenes: input.scenes };
   const current = createCinematographyApplicationProposal(currentInput);
@@ -119,7 +120,7 @@ export function applyCinematographyApplicationProposal(
     if (change.field === 'motion') patch.motion = change.after as SceneCompositionMotion;
     else patch.transition = change.after as SceneCompositionTransition;
   }
-  const mutation = setSceneCompositionOverride(input.scenes, input.sceneIndex, patch, input.defaults);
+  const mutation = setSceneCompositionOverride(input.scenes, { sceneId: proposal.sceneId, sceneIndex: input.sceneIndex }, patch, input.defaults);
   if (mutation.status === 'updated') return { status: 'applied', scenes: mutation.scenes };
   if (mutation.status === 'no-op') return { status: 'no-op', scenes: input.scenes };
   return { status: 'conflict', scenes: input.scenes };

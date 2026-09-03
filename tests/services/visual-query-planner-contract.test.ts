@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createSceneVisualBinding, ensureSceneVisualPlanningIds } from '@/core/visual-intelligence';
+import { createSceneVisualBinding } from '@/core/visual-intelligence';
+import { materializeCanonicalSceneIds } from '@/lib/sceneIdentity';
 import {
   MAX_VISUAL_PLANNER_SCENES,
   normalizeVisualQueryPlannerModelResult,
@@ -7,9 +8,9 @@ import {
 } from '../../supabase/functions/_shared/visual-query-planner';
 
 const ids = ['visual-scene-00000000-0000-4000-8000-000000000001', 'visual-scene-00000000-0000-4000-8000-000000000002'];
-const scenes = ensureSceneVisualPlanningIds([
-  { visualPlanningId: ids[0], text: 'İstanbul’da tarihi tramvay yağmur altında ilerliyor.' },
-  { visualPlanningId: ids[1], text: 'Yolcular sıcak ışıklı sokakta bekliyor.' },
+const scenes = materializeCanonicalSceneIds([
+  { sceneId: ids[0], text: 'İstanbul’da tarihi tramvay yağmur altında ilerliyor.' },
+  { sceneId: ids[1], text: 'Yolcular sıcak ışıklı sokakta bekliyor.' },
 ]);
 
 function request() {

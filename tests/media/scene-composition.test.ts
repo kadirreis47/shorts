@@ -13,10 +13,11 @@ import { TypedEventBus } from '@/core/events/eventBus';
 import type { ApplicationEventMap } from '@/core/events';
 import { captureValidatedMediaOwnerContext } from '@/lib/mediaStorage';
 import { setValidatedOwnerId } from '@/auth/identity';
-import { buildFFmpegCommand, createRenderFingerprint } from '@/core/render';
+import { buildFFmpegCommand, createRenderFingerprint, createSceneFingerprint } from '@/core/render';
 import type { RenderPreset } from '@/core/render';
 import { normalizeStudioDraft, studioProductionRecipeInputFromDraft, type StudioDraft } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput } from '@/lib/studioOutputIdentity';
+import type { Scene } from '@/lib/types';
 
 const PRESET: RenderPreset = { id: 'scene-composition', name: 'Scene composition', container: 'mp4', videoCodec: 'h264', audioCodec: 'aac', frameRate: 30, quality: 'standard', hardwareAcceleration: 'disabled' };
 const DEFAULTS = { motion: 'kenburns', transition: 'crossfade' } as const;
@@ -64,25 +65,26 @@ describe('scene-local canonical composition', () => {
   it('clears fields back to inheritance without changing unrelated scene state', () => {
     const scenes = recipeInput().scenes;
     const original = structuredClone(scenes);
-    const set = setSceneCompositionOverride(scenes, 1, { motion: 'pan', transition: 'none' }, DEFAULTS);
+    const set = setSceneCompositionOverride(scenes, target(scenes, 1), { motion: 'pan', transition: 'none' }, DEFAULTS);
     expect(set.status).toBe('updated');
     expect(scenes).toEqual(original);
     expect(set.scenes[0]).toBe(scenes[0]);
     expect(set.scenes[2]).toBe(scenes[2]);
     expect(set.scenes[1]).not.toBe(scenes[1]);
-    const cleared = clearSceneCompositionOverride(set.scenes, 1, 'motion');
+    const cleared = clearSceneCompositionOverride(set.scenes, target(set.scenes, 1), 'motion');
     expect(cleared.status).toBe('updated');
     expect(cleared.scenes[1]).toMatchObject({ text: scenes[1].text, imageStorage: scenes[1].imageStorage, compositionOverride: { transition: 'none' } });
-    expect(clearSceneCompositionOverride(cleared.scenes, 1).scenes[1].compositionOverride).toBeUndefined();
+    expect(clearSceneCompositionOverride(cleared.scenes, target(cleared.scenes, 1)).scenes[1].compositionOverride).toBeUndefined();
   });
 
   it('updates one override field without silently clearing the other', () => {
     const scenes = recipeInput().scenes;
     scenes[1].compositionOverride = { transition: 'none' };
-    const result = setSceneCompositionOverride(scenes, 1, { motion: 'zoom_in' }, DEFAULTS);
+    const result = setSceneCompositionOverride(scenes, target(scenes, 1), { motion: 'zoom_in' }, DEFAULTS);
     expect(result.scenes[1].compositionOverride).toEqual({ motion: 'zoom_in', transition: 'none' });
-    expect(setSceneCompositionOverride(result.scenes, 1, { motion: 'zoom_in', transition: 'none' }, DEFAULTS).status).toBe('no-op');
-    expect(setSceneCompositionOverride(recipeInput().scenes, 1, { motion: 'kenburns', transition: 'crossfade' }, { motion: 'kenburns', transition: 'crossfade' }).status).toBe('no-op');
+    expect(setSceneCompositionOverride(result.scenes, target(result.scenes, 1), { motion: 'zoom_in', transition: 'none' }, DEFAULTS).status).toBe('no-op');
+    const inherited = recipeInput().scenes;
+    expect(setSceneCompositionOverride(inherited, target(inherited, 1), { motion: 'kenburns', transition: 'crossfade' }, { motion: 'kenburns', transition: 'crossfade' }).status).toBe('no-op');
   });
 
   it('preserves legacy output and collapses redundant overrides to output-semantic identity', async () => {
@@ -102,7 +104,8 @@ describe('scene-local canonical composition', () => {
   });
 
   it('rejects invalid overrides and keeps the first scene free of a phantom transition', async () => {
-    expect(() => setSceneCompositionOverride(recipeInput().scenes, 0, { motion: 'unsafe' as never }, DEFAULTS)).toThrow(/invalid/i);
+    const inputScenes = recipeInput().scenes;
+    expect(() => setSceneCompositionOverride(inputScenes, target(inputScenes, 0), { motion: 'unsafe' as never }, DEFAULTS)).toThrow(/invalid/i);
     const malformed = recipeInput();
     malformed.scenes[1].compositionOverride = { motion: 'zoom_in', unexpected: 'unsafe' } as never;
     expect(() => normalizeStudioProductionRecipeV1(malformed, ownerContext())).toThrow(/scene composition override is invalid/i);
@@ -119,6 +122,48 @@ describe('scene-local canonical composition', () => {
       ...compiled,
       sceneComposition: [{ motion: { mode: 'zoompan=unsafe' }, transition: { type: 'cut' } }, ...compiled.sceneComposition!.slice(1)] as never,
     })).rejects.toThrow(/invalid/i);
+  });
+
+  it('targets composition by canonical identity plus current order context', () => {
+    const scenes = recipeInput().scenes;
+    const moved = [scenes[1], scenes[0], scenes[2]];
+    const staleTarget = { sceneId: scenes[1].sceneId, sceneIndex: 1 };
+    expect(setSceneCompositionOverride(moved, staleTarget, { motion: 'pan' }, DEFAULTS)).toEqual({ status: 'invalid-scene', scenes: moved });
+
+    const result = setSceneCompositionOverride(moved, target(moved, 0), { motion: 'pan', transition: 'none' }, DEFAULTS);
+    expect(result.status).toBe('updated');
+    if (result.status !== 'updated') return;
+    expect(result.scenes[0]).toMatchObject({ sceneId: scenes[1].sceneId, compositionOverride: { motion: 'pan' } });
+    expect(result.scenes[1]).toBe(scenes[0]);
+    expect(result.scenes[2]).toBe(scenes[2]);
+  });
+
+  it('keeps opaque canonical IDs outside Studio, Recipe, scene, and final executable identity', async () => {
+    const firstInput = recipeInput();
+    const secondInput = structuredClone(firstInput);
+    secondInput.scenes.forEach((scene, index) => { scene.sceneId = `visual-scene-99999999-9999-4999-8999-${String(index + 1).padStart(12, '0')}`; });
+
+    expect(canonicalStudioCompositionOutput(firstInput.scenes, DEFAULTS)).toEqual(canonicalStudioCompositionOutput(secondInput.scenes, DEFAULTS));
+    const firstRecipe = normalizeStudioProductionRecipeV1(firstInput, ownerContext());
+    const secondRecipe = normalizeStudioProductionRecipeV1(secondInput, ownerContext());
+    expect(firstRecipe.identity).toBe(secondRecipe.identity);
+    expect(firstRecipe.recipe.scenes.map((scene) => scene.canonicalSceneId)).not.toEqual(secondRecipe.recipe.scenes.map((scene) => scene.canonicalSceneId));
+
+    const first = await build(firstInput);
+    const identityOnly = structuredClone(first.manifest);
+    const oldId = identityOnly.timeline.scenes[0].id;
+    const newId = secondInput.scenes[0].sceneId;
+    identityOnly.timeline.scenes[0].id = newId;
+    identityOnly.timeline.scenes[0].sourceScene.sceneId = newId;
+    identityOnly.assets.forEach((asset) => { if (asset.metadata.sceneId === oldId) Object.assign(asset.metadata, { sceneId: newId }); });
+    identityOnly.timeline.tracks.forEach((track) => track.clips.forEach((clip) => { if (clip.sceneId === oldId) clip.sceneId = newId; }));
+    identityOnly.subtitles.cues.forEach((cue) => { if (cue.sceneId === oldId) cue.sceneId = newId; });
+    identityOnly.audio.voice.forEach((cue) => { if (cue.sceneId === oldId) cue.sceneId = newId; });
+    identityOnly.audio.sfx.forEach((cue) => { if (cue.sceneId === oldId) cue.sceneId = newId; });
+
+    expect(await createSceneFingerprint(first.manifest.timeline.scenes[0], first.manifest, PRESET))
+      .toBe(await createSceneFingerprint(identityOnly.timeline.scenes[0], identityOnly, PRESET));
+    expect(await fingerprint(first.manifest)).toBe(await fingerprint(identityOnly));
   });
 
   it.each([
@@ -160,7 +205,7 @@ describe('scene-local canonical composition', () => {
   it('uses one incoming-boundary authority for a mixed four-scene Media Engine and FFmpeg plan', async () => {
     const input = recipeInput();
     input.scenes = [...input.scenes, {
-      text: 'Scene 4', duration: 4, visual: 'Visual', keywords: ['visual'],
+      sceneId: 'visual-scene-00000000-0000-4000-8000-000000000004', text: 'Scene 4', duration: 4, visual: 'Visual', keywords: ['visual'],
       imageStorage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000003.png' },
     }];
     input.motionStyle = 'static';
@@ -199,7 +244,7 @@ describe('scene-local canonical composition', () => {
   it('computes alternating crossfade/none boundaries without timeline or AV drift', async () => {
     const input = recipeInput();
     input.scenes = Array.from({ length: 5 }, (_, index) => ({
-      text: `Alternating scene ${index + 1}`, duration: 4, visual: 'Visual', keywords: ['visual'],
+      sceneId: `visual-scene-00000000-0000-4000-8000-00000000001${index}`, text: `Alternating scene ${index + 1}`, duration: 4, visual: 'Visual', keywords: ['visual'],
       imageStorage: { bucket: 'media' as const, objectPath: `owner-a/generated-images/10000000-0000-4000-8000-00000000000${index}.png` },
       ...(index === 2 || index === 4 ? { compositionOverride: { transition: 'none' as const } } : {}),
     }));
@@ -278,8 +323,8 @@ describe('scene-local canonical composition', () => {
   it('rejects malformed current mutation state and prototype-shaped compiled composition', async () => {
     const scenes = recipeInput().scenes;
     scenes[1].compositionOverride = { motion: 'zoom_in', unsafe: 'value' } as never;
-    expect(() => setSceneCompositionOverride(scenes, 1, { transition: 'none' }, DEFAULTS)).toThrow(/invalid/i);
-    expect(() => clearSceneCompositionOverride(scenes, 1, 'motion')).toThrow(/invalid/i);
+    expect(() => setSceneCompositionOverride(scenes, target(scenes, 1), { transition: 'none' }, DEFAULTS)).toThrow(/invalid/i);
+    expect(() => clearSceneCompositionOverride(scenes, target(scenes, 1), 'motion')).toThrow(/invalid/i);
 
     const compiled = compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(recipeInput(), ownerContext()));
     const inherited = Object.create({
@@ -338,7 +383,7 @@ function recipeInput(): StudioProductionRecipeInput {
   return {
     projectId: 'scene-composition-project', title: 'Scene composition',
     scenes: [0, 1, 2].map((index) => ({
-      text: `Scene ${index + 1}`, duration: 4, visual: 'Visual', keywords: ['visual'],
+      sceneId: `visual-scene-00000000-0000-4000-8000-00000000000${index}`, text: `Scene ${index + 1}`, duration: 4, visual: 'Visual', keywords: ['visual'],
       imageStorage: { bucket: 'media' as const, objectPath: `owner-a/generated-images/00000000-0000-4000-8000-00000000000${index}.png` },
     })),
     captionStyle: 'karaoke', transitionStyle: 'crossfade', motionStyle: 'kenburns', showSubtitles: true,
@@ -352,4 +397,8 @@ function recipeInput(): StudioProductionRecipeInput {
 function ownerContext() {
   setValidatedOwnerId('owner-a');
   return captureValidatedMediaOwnerContext();
+}
+
+function target(scenes: readonly Scene[], sceneIndex: number) {
+  return { sceneId: scenes[sceneIndex].sceneId, sceneIndex };
 }

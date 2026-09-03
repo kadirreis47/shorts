@@ -59,7 +59,7 @@ export interface VisualContinuityCandidateAssessment {
   readonly localQualityIndependent: true;
 }
 
-export function createVisualStoryPlan(planning: VisualIntelligencePlanningState, scenes: readonly { readonly visualPlanningId?: string; readonly text: string }[]): VisualStoryPlan {
+export function createVisualStoryPlan(planning: VisualIntelligencePlanningState, scenes: readonly { readonly sceneId: string; readonly text: string }[]): VisualStoryPlan {
   const normalized = normalizeVisualIntelligencePlanningState(planning);
   if (!normalized) throw new Error('Visual story planning is required.');
   const plans = new Map(normalized.queryPlans.map((plan) => [plan.sceneBinding.sceneId, plan]));
@@ -80,7 +80,7 @@ export function createVisualStoryPlan(planning: VisualIntelligencePlanningState,
   return Object.freeze({ version: VISUAL_STORY_VERSION, fingerprint: storyFingerprint(beats), beats: Object.freeze(beats), continuityGroups: Object.freeze(groups) });
 }
 
-export function isVisualStoryPlanCurrent(plan: VisualStoryPlan, planning: VisualIntelligencePlanningState, scenes: readonly { readonly visualPlanningId?: string; readonly text: string }[]): boolean {
+export function isVisualStoryPlanCurrent(plan: VisualStoryPlan, planning: VisualIntelligencePlanningState, scenes: readonly { readonly sceneId: string; readonly text: string }[]): boolean {
   try { return plan.fingerprint === createVisualStoryPlan(planning, scenes).fingerprint; } catch { return false; }
 }
 

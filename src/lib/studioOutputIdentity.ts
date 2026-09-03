@@ -3,11 +3,11 @@ import { resolveEffectiveSceneComposition, type SceneCompositionDefaults } from 
 import type { Scene, SceneCompositionOverride } from './types';
 
 /** Removes advisory/private presentation metadata before calculating Studio output freshness. */
-export function canonicalStudioOutputScenes(scenes: readonly Scene[]): Scene[] {
+export function canonicalStudioOutputScenes(scenes: readonly Scene[]): Array<Omit<Scene, 'sceneId'>> {
   return toDurableScenes(scenes).map(({
     imageProvenance: _imageProvenance,
     videoProvenance: _videoProvenance,
-    visualPlanningId: _visualPlanningId,
+    sceneId: _sceneId,
     ...scene
   }) => scene);
 }
@@ -17,7 +17,7 @@ export function canonicalStudioCompositionOutput(
   scenes: readonly Scene[],
   defaults: SceneCompositionDefaults,
 ): {
-  scenes: Array<Omit<Scene, 'compositionOverride'>>;
+  scenes: Array<Omit<Scene, 'sceneId' | 'compositionOverride'>>;
   sceneComposition: Array<Required<SceneCompositionOverride>>;
 } {
   const canonicalScenes = canonicalStudioOutputScenes(scenes);

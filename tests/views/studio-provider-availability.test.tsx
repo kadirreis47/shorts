@@ -5,6 +5,7 @@ import { useAuthSessionStore } from '@/auth/session';
 import { advanceValidatedOwnerGeneration, setValidatedOwnerId } from '@/auth/identity';
 import { I18nProvider } from '@/lib/i18n';
 import { loadStudioDraft, saveStudioDraft, type StudioDraft } from '@/lib/studioDraft';
+import { isCanonicalSceneId } from '@/lib/sceneIdentity';
 import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalog';
 import { reconcileCharacterProfileSelection } from '@/services/characterProfileSelection';
 import { useProjectStore } from '@/store';
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     generateScript: vi.fn(), generateHooks: vi.fn(), generateSEO: vi.fn(), analyzeScript: vi.fn(),
   },
   translateSubtitles: vi.fn(),
+  createSignedUrl: vi.fn(),
   from: vi.fn(() => ({
     select: vi.fn(() => Object.assign(Promise.resolve({ data: [] }), {
       eq: vi.fn(async () => ({ data: [] })),
@@ -25,7 +27,13 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('@/lib/supabase', () => ({ isSupabaseConfigured: false, supabase: { from: mocks.from } }));
+vi.mock('@/lib/supabase', () => ({
+  isSupabaseConfigured: false,
+  supabase: {
+    from: mocks.from,
+    storage: { from: vi.fn(() => ({ createSignedUrl: mocks.createSignedUrl })) },
+  },
+}));
 vi.mock('@/lib/api', () => ({
   getProviderStatus: mocks.getProviderStatus, generateVoiceover: vi.fn(), listVoices: vi.fn(async () => []), uploadMedia: mocks.uploadMedia,
   searchImages: mocks.searchImages, searchVideos: mocks.searchVideos, ingestPexelsImage: mocks.ingestPexelsImage,
@@ -43,6 +51,7 @@ describe('Studio provider availability', () => {
 
   beforeEach(() => {
     setValidatedOwnerId('studio-test-user');
+    mocks.createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://signed.example/restored.png' }, error: null });
     useAuthSessionStore.setState({ status: 'authenticated', user: { id: 'studio-test-user' } as never, session: { access_token: 'token' } as never, error: null });
     useProjectStore.setState({ currentProject: null, drafts: [] });
   });
@@ -417,6 +426,88 @@ describe('Studio provider availability', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it('rejects a late generated scene set after the Studio project is cleared', async () => {
+    const pending = deferred<{ title: string; hook: string; script: string; cta: string; scenes: Array<{ text: string; duration: number; visual: string }> }>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.aiService.generateScript.mockReturnValueOnce(pending.promise);
+    saveStudioDraft(draft('topic'));
+    const root = await renderStudio();
+
+    await clickButton('Generate Script');
+    await clickButton('Sıfırla');
+    expect(container?.textContent).not.toContain('Generating Script');
+    await act(async () => { pending.resolve({ title: 'Late project title', hook: 'Late hook', script: 'Late script', cta: 'Late CTA', scenes: [{ text: 'Late scene', duration: 5, visual: 'Late visual' }] }); });
+    await flush();
+
+    expect(container?.textContent).not.toContain('Late project title');
+    expect(loadStudioDraft()?.scenes.some((scene) => scene.text === 'Late scene') ?? false).toBe(false);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('assigns fresh canonical identities to a generated logical scene set', async () => {
+    const suppliedSceneId = draft('topic').scenes[0].sceneId;
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.aiService.generateScript.mockResolvedValue({
+      title: 'Fresh project title', hook: 'Fresh hook', script: 'Fresh script', cta: 'Fresh CTA',
+      scenes: [{ sceneId: suppliedSceneId, text: 'Fresh logical scene', duration: 5, visual: 'Fresh visual', keywords: [] }],
+    });
+    saveStudioDraft(draft('topic'));
+    const root = await renderStudio();
+
+    await clickButton('Generate Script');
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    const generatedId = loadStudioDraft()?.scenes[0]?.sceneId;
+
+    expect(isCanonicalSceneId(generatedId)).toBe(true);
+    expect(generatedId).not.toBe(suppliedSceneId);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('keeps pending scene state with its canonical ID and rejects a replacement at the same index', async () => {
+    const pending = deferred<{ imageUrl: string; media: { bucket: 'media'; objectPath: string } }>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.uploadMedia.mockReturnValueOnce(pending.promise);
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    await clickButton('Add scene');
+    const input = container?.querySelectorAll<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]')[0];
+    Object.defineProperty(input!, 'files', { configurable: true, value: [pngFile()] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+
+    const deleteFirst = container?.querySelectorAll<HTMLButtonElement>('button.text-red-400')[0];
+    await act(async () => { deleteFirst?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container?.textContent).not.toContain('Importing…');
+    await act(async () => { pending.resolve({ imageUrl: 'https://signed.example/stale.png', media: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000099.png' } }); });
+
+    expect(container?.querySelector('img')).toBeNull();
+    expect(loadStudioDraft()?.scenes).toHaveLength(1);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('does not let late restored-media signing replace a scene collection edited after hydration', async () => {
+    const pending = deferred<{ data: { signedUrl: string }; error: null }>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.createSignedUrl.mockReturnValueOnce(pending.promise);
+    saveStudioDraft({
+      ...draft('script'),
+      scenes: [{
+        ...draft('script').scenes[0],
+        imageStorage: { bucket: 'media', objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000010.png' },
+      }],
+    });
+    const root = await renderStudio();
+    await clickButton('Add scene');
+    expect(container?.querySelectorAll('button.text-red-400')).toHaveLength(2);
+
+    await act(async () => { pending.resolve({ data: { signedUrl: 'https://signed.example/late-restored.png' }, error: null }); });
+    await flush();
+
+    expect(container?.querySelectorAll('button.text-red-400')).toHaveLength(2);
+    expect(container?.querySelector('img')?.getAttribute('src') ?? '').not.toContain('late-restored.png');
+    await act(async () => { root.unmount(); });
+  });
+
   it('does not let a superseded PNG upload overwrite the newer scene selection', async () => {
     const first = deferred<{ imageUrl: string; media: { bucket: 'media'; objectPath: string } }>();
     const second = deferred<{ imageUrl: string; media: { bucket: 'media'; objectPath: string } }>();
@@ -605,5 +696,5 @@ function channel(): CanonicalChannelIdentity {
 }
 
 function draft(step: StudioDraft['step']): StudioDraft {
-  return { version: 1, projectId: 'provider-project', savedAt: '2026-08-13T00:00:00.000Z', step, channelId: 'youtube:UC-PROVIDER', topic: 'Provider test', niche: '', tone: 'engaging', duration: 30, title: 'Provider test', hook: '', script: 'Provider script', cta: '', scenes: [{ text: 'Scene', duration: 5, visual: 'Visual', keywords: [] }], captionStyle: 'karaoke', transitionStyle: 'crossfade', motionStyle: 'kenburns', useBroll: false, musicId: '', musicVolume: 0.25, visualMode: 'auto', selectedStyleId: '', characterName: '', characterAppearance: '', characterArtStyle: 'realistic', characterProfileId: '', watermarkText: '', watermarkPosition: 'bottom-right', showSubtitles: true, captionTextColor: '', captionHighlightColor: '', beatSync: false, voiceoverMode: 'none', selectedVoice: '', targetLanguage: 'tr' };
+  return { version: 1, projectId: 'provider-project', savedAt: '2026-08-13T00:00:00.000Z', step, channelId: 'youtube:UC-PROVIDER', topic: 'Provider test', niche: '', tone: 'engaging', duration: 30, title: 'Provider test', hook: '', script: 'Provider script', cta: '', scenes: [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'Scene', duration: 5, visual: 'Visual', keywords: [] }], captionStyle: 'karaoke', transitionStyle: 'crossfade', motionStyle: 'kenburns', useBroll: false, musicId: '', musicVolume: 0.25, visualMode: 'auto', selectedStyleId: '', characterName: '', characterAppearance: '', characterArtStyle: 'realistic', characterProfileId: '', watermarkText: '', watermarkPosition: 'bottom-right', showSubtitles: true, captionTextColor: '', captionHighlightColor: '', beatSync: false, voiceoverMode: 'none', selectedVoice: '', targetLanguage: 'tr' };
 }

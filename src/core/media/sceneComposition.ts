@@ -1,6 +1,7 @@
 import type { Scene, SceneCompositionOverride } from '@/lib/types';
 
 export type SceneCompositionDefaults = Readonly<Required<SceneCompositionOverride>>;
+export interface SceneCompositionTarget { readonly sceneId: string; readonly sceneIndex: number; }
 
 export type SceneCompositionMutationResult =
   | { readonly status: 'updated'; readonly scenes: readonly Scene[] }
@@ -14,11 +15,13 @@ export type SceneCompositionMutationResult =
  */
 export function setSceneCompositionOverride(
   scenes: readonly Scene[],
-  sceneIndex: number,
+  target: SceneCompositionTarget,
   patch: SceneCompositionOverride,
   defaults: SceneCompositionDefaults,
 ): SceneCompositionMutationResult {
+  const sceneIndex = target.sceneIndex;
   if (!Number.isSafeInteger(sceneIndex) || sceneIndex < 0 || sceneIndex >= scenes.length) return { status: 'invalid-scene', scenes };
+  if (scenes[sceneIndex].sceneId !== target.sceneId) return { status: 'invalid-scene', scenes };
   const current = scenes[sceneIndex].compositionOverride;
   const normalizedCurrent = current === undefined ? undefined : normalizeSceneCompositionOverride(current, defaults, sceneIndex);
   const nextOverride = normalizeSceneCompositionOverride({ ...normalizedCurrent, ...parseOverride(patch) }, defaults, sceneIndex);
@@ -29,10 +32,12 @@ export function setSceneCompositionOverride(
 
 export function clearSceneCompositionOverride(
   scenes: readonly Scene[],
-  sceneIndex: number,
+  target: SceneCompositionTarget,
   field?: keyof SceneCompositionOverride,
 ): SceneCompositionMutationResult {
+  const sceneIndex = target.sceneIndex;
   if (!Number.isSafeInteger(sceneIndex) || sceneIndex < 0 || sceneIndex >= scenes.length) return { status: 'invalid-scene', scenes };
+  if (scenes[sceneIndex].sceneId !== target.sceneId) return { status: 'invalid-scene', scenes };
   const current = scenes[sceneIndex].compositionOverride;
   if (!current) return { status: 'no-op', scenes };
   if (field !== undefined && field !== 'motion' && field !== 'transition') throw new Error('Scene composition override field is invalid.');

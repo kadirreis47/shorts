@@ -1,3 +1,5 @@
+import { isCanonicalSceneId } from "./scene-identity.ts";
+
 /**
  * Shared editorial-planning contract. It never identifies media, enters Recipe
  * V1, or becomes a render source; durable approved media remains canonical.
@@ -11,7 +13,7 @@ export type VisualSourceKind = 'licensed-stock' | 'ai-generated' | 'manual';
 export type VisualAttributionPreference = 'no-preference' | 'prefer-available';
 export type VisualConceptCategory = 'establishing' | 'detail' | 'atmosphere' | 'action' | 'evidence' | 'contrast';
 
-export interface VisualPlanningScene { readonly visualPlanningId?: string; readonly text: string; }
+export interface VisualPlanningScene { readonly sceneId: string; readonly text: string; }
 export interface SceneVisualBinding { readonly sceneId: string; readonly sceneIndex: number; readonly sceneTextFingerprint: string; }
 export interface VisualSourceIntent { readonly allowedSourceKinds: readonly VisualSourceKind[]; readonly commerciallyUsableSourceRequired: boolean; readonly attributionPreference: VisualAttributionPreference; }
 export interface SceneVisualBrief {
@@ -26,7 +28,6 @@ export interface VisualIntelligencePlanningState { readonly version: typeof VISU
 
 const MAX_TEXT = 120; const MAX_QUERY_TEXT = 240; const MAX_STYLE_HINTS = 5; const MAX_EXCLUSIONS = 5; const MAX_NOVELTY = 4;
 const MIN_CONCEPTS = 3; const MAX_CONCEPTS = 6; const MAX_SCENE_ENTRIES = 100;
-const SCENE_ID = /^visual-scene-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const URL_LIKE = /(?:https?:\/\/|www\.)/iu;
 const roles = new Set<VisualEditorialRole>(['hook', 'context', 'explanation', 'evidence', 'contrast', 'escalation', 'payoff', 'cta']);
 const media = new Set<VisualMediaPreference>(['image', 'video', 'either']);
@@ -35,24 +36,14 @@ const sources = new Set<VisualSourceKind>(['licensed-stock', 'ai-generated', 'ma
 const attribution = new Set<VisualAttributionPreference>(['no-preference', 'prefer-available']);
 const categories = new Set<VisualConceptCategory>(['establishing', 'detail', 'atmosphere', 'action', 'evidence', 'contrast']);
 
-export function createSceneVisualPlanningId(): string { return `visual-scene-${crypto.randomUUID()}`; }
-export function ensureSceneVisualPlanningIds<T extends VisualPlanningScene>(scenes: readonly T[]): T[] {
-  const seen = new Set<string>();
-  return scenes.map((scene) => {
-    const existing = typeof scene.visualPlanningId === 'string' && SCENE_ID.test(scene.visualPlanningId) ? scene.visualPlanningId.toLowerCase() : null;
-    const visualPlanningId = existing && !seen.has(existing) ? existing : createSceneVisualPlanningId();
-    seen.add(visualPlanningId);
-    return scene.visualPlanningId === visualPlanningId ? { ...scene } : { ...scene, visualPlanningId };
-  });
-}
 export function createSceneVisualBinding(scenes: readonly VisualPlanningScene[], sceneIndex: number): SceneVisualBinding {
   if (!Number.isSafeInteger(sceneIndex) || sceneIndex < 0 || sceneIndex >= scenes.length) throw new Error('Visual planning scene index is invalid.');
-  const scene = scenes[sceneIndex]; if (!scene || !isSceneVisualPlanningId(scene.visualPlanningId)) throw new Error('Visual planning requires a stable scene identity.');
-  return freeze({ sceneId: scene.visualPlanningId.toLowerCase(), sceneIndex, sceneTextFingerprint: sceneTextFingerprint(scene.text) });
+  const scene = scenes[sceneIndex]; if (!scene || !isCanonicalSceneId(scene.sceneId)) throw new Error('Visual planning requires a stable scene identity.');
+  return freeze({ sceneId: scene.sceneId, sceneIndex, sceneTextFingerprint: sceneTextFingerprint(scene.text) });
 }
 /** Conservative by design: insertions/reorders invalidate planning rather than rebind it. */
 export function isSceneVisualBindingCurrent(binding: SceneVisualBinding, scenes: readonly VisualPlanningScene[]): boolean {
-  try { const normalized = normalizeSceneVisualBinding(binding); const scene = scenes[normalized.sceneIndex]; return Boolean(scene && scene.visualPlanningId === normalized.sceneId && sceneTextFingerprint(scene.text) === normalized.sceneTextFingerprint); } catch { return false; }
+  try { const normalized = normalizeSceneVisualBinding(binding); const scene = scenes[normalized.sceneIndex]; return Boolean(scene && scene.sceneId === normalized.sceneId && sceneTextFingerprint(scene.text) === normalized.sceneTextFingerprint); } catch { return false; }
 }
 export function sceneTextFingerprint(value: unknown): string {
   if (typeof value !== 'string') throw new Error('Visual planning scene text is invalid.');
@@ -85,7 +76,7 @@ export function visualBriefFingerprint(brief: SceneVisualBrief): string { return
 export function isVisualQueryPlanCurrent(plan: VisualQueryPlan, brief: SceneVisualBrief, scenes: readonly VisualPlanningScene[]): boolean {
   try { const normalizedPlan = normalizeVisualQueryPlan(plan); const normalizedBrief = normalizeSceneVisualBrief(brief); return normalizedPlan.sceneBinding.sceneId === normalizedBrief.sceneBinding.sceneId && normalizedPlan.sceneBinding.sceneIndex === normalizedBrief.sceneBinding.sceneIndex && normalizedPlan.sceneBinding.sceneTextFingerprint === normalizedBrief.sceneBinding.sceneTextFingerprint && normalizedPlan.briefFingerprint === visualBriefFingerprint(normalizedBrief) && isSceneVisualBindingCurrent(normalizedPlan.sceneBinding, scenes); } catch { return false; }
 }
-function normalizeSceneVisualBinding(value: unknown): SceneVisualBinding { const source = object(value, 'Visual scene binding'); keys(source, ['sceneId', 'sceneIndex', 'sceneTextFingerprint'], 'Visual scene binding'); if (!isSceneVisualPlanningId(source.sceneId)) throw new Error('Visual scene binding identity is invalid.'); return freeze({ sceneId: source.sceneId.toLowerCase(), sceneIndex: integer(source.sceneIndex, 0, 999, 'Visual scene binding index'), sceneTextFingerprint: fingerprint(source.sceneTextFingerprint, 'Visual scene text fingerprint') }); }
+function normalizeSceneVisualBinding(value: unknown): SceneVisualBinding { const source = object(value, 'Visual scene binding'); keys(source, ['sceneId', 'sceneIndex', 'sceneTextFingerprint'], 'Visual scene binding'); if (!isCanonicalSceneId(source.sceneId)) throw new Error('Visual scene binding identity is invalid.'); return freeze({ sceneId: source.sceneId, sceneIndex: integer(source.sceneIndex, 0, 999, 'Visual scene binding index'), sceneTextFingerprint: fingerprint(source.sceneTextFingerprint, 'Visual scene text fingerprint') }); }
 function normalizeSourceIntent(value: unknown): VisualSourceIntent { const source = object(value, 'Visual source intent'); keys(source, ['allowedSourceKinds', 'commerciallyUsableSourceRequired', 'attributionPreference'], 'Visual source intent'); const allowedSourceKinds = uniqueEnumArray(source.allowedSourceKinds, sources, 'Visual source kinds', 3); if (!allowedSourceKinds.length || typeof source.commerciallyUsableSourceRequired !== 'boolean') throw new Error('Visual source intent is invalid.'); return freeze({ allowedSourceKinds, commerciallyUsableSourceRequired: source.commerciallyUsableSourceRequired, attributionPreference: enumValue(source.attributionPreference, attribution, 'Visual attribution preference') }); }
 function normalizeConcept(value: unknown, ordinal: number): VisualQueryConcept { const source = object(value, 'Visual query concept'); keys(source, ['query', 'targetMedia', 'priority', 'category'], 'Visual query concept'); return freeze({ query: text(source.query, `Visual query concept ${ordinal}`, MAX_QUERY_TEXT), targetMedia: enumValue(source.targetMedia, media, 'Visual query concept target media'), priority: integer(source.priority, 1, MAX_CONCEPTS, 'Visual query concept priority'), category: enumValue(source.category, categories, 'Visual query concept category') }); }
 function object(value: unknown, label: string): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error(`${label} is invalid.`); return value as Record<string, unknown>; }
@@ -101,5 +92,4 @@ function integer(value: unknown, minimum: number, maximum: number, label: string
 function version(value: unknown): typeof VISUAL_INTELLIGENCE_VERSION { if (value !== VISUAL_INTELLIGENCE_VERSION) throw new Error('Visual intelligence planning version is invalid.'); return VISUAL_INTELLIGENCE_VERSION; }
 function fingerprint(value: unknown, label: string): string { if (typeof value !== 'string' || !/^[a-z0-9-]{12,96}$/i.test(value)) throw new Error(`${label} is invalid.`); return value; }
 function hash(value: string): string { let first = 2166136261; let second = 2246822519; for (let index = 0; index < value.length; index += 1) { const code = value.charCodeAt(index); first = Math.imul(first ^ code, 16777619); second = Math.imul(second ^ code, 3266489917); } return `visual-brief-v1-${(first >>> 0).toString(16).padStart(8, '0')}${(second >>> 0).toString(16).padStart(8, '0')}`; }
-function isSceneVisualPlanningId(value: unknown): value is string { return typeof value === 'string' && SCENE_ID.test(value); }
 function freeze<T extends object>(value: T): T { return Object.freeze(value); } function freezeArray<T>(value: readonly T[]): readonly T[] { return Object.freeze([...value]); } function compareText(left: string, right: string): number { return left === right ? 0 : left < right ? -1 : 1; }

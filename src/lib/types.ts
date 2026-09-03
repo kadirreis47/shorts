@@ -28,8 +28,8 @@ export interface ProviderMediaProvenance {
 }
 
 export interface Scene {
-  /** Stable draft-only identity for advisory visual-planning metadata; never Recipe/render authority. */
-  visualPlanningId?: string;
+  /** Durable opaque project-scene identity. It is not authorization or executable-output identity. */
+  sceneId: string;
   text: string;
   duration: number;
   visual: string;

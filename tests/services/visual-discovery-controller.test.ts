@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createSceneVisualBinding, ensureSceneVisualPlanningIds, visualBriefFingerprint } from '@/core/visual-intelligence';
+import { createSceneVisualBinding, visualBriefFingerprint } from '@/core/visual-intelligence';
+import { materializeCanonicalSceneIds } from '@/lib/sceneIdentity';
 import { createVisualDiscoveryController, type VisualDiscoveryLease } from '@/services/visualDiscoveryController';
 import type { Scene } from '@/lib/types';
 
-const scenes = ensureSceneVisualPlanningIds<Scene>([
-  { visualPlanningId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'First visual.', duration: 3, visual: 'first' },
-  { visualPlanningId: 'visual-scene-00000000-0000-4000-8000-000000000002', text: 'Second visual.', duration: 3, visual: 'second' },
+const scenes = materializeCanonicalSceneIds([
+  { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'First visual.', duration: 3, visual: 'first' },
+  { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000002', text: 'Second visual.', duration: 3, visual: 'second' },
 ]);
 const binding = createSceneVisualBinding(scenes, 0);
 const brief = { version: 1, sceneBinding: binding, subject: 'first visual', editorialRole: 'hook', preferredMedia: 'image', visualStyleHints: [], visualExclusions: [], noveltyConstraints: [], sourceIntent: { allowedSourceKinds: ['licensed-stock'], commerciallyUsableSourceRequired: true, attributionPreference: 'no-preference' } } as const;

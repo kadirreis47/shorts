@@ -7,15 +7,22 @@ import type {
   SceneRole,
   TransitionType,
 } from './types';
+import { isCanonicalSceneId } from '@/lib/sceneIdentity';
 
 export function planScenes(scenes: Scene[], settings: MediaProjectSettings): MediaScene[] {
+  const sceneIds = new Set<string>();
+  for (const scene of scenes) {
+    const normalizedId = isCanonicalSceneId(scene.sceneId) ? scene.sceneId.toLowerCase() : null;
+    if (!normalizedId || sceneIds.has(normalizedId)) throw new Error('Media scenes require unique canonical scene identities.');
+    sceneIds.add(normalizedId);
+  }
   const usableScenes = scenes.filter((scene) => scene.text.trim().length > 0);
   return usableScenes.map((scene, index) => {
     const durationMs = estimateSceneDurationMs(scene.text, scene.duration, settings);
     const role = selectRole(index, usableScenes.length, scene.text);
     const intensity = calculateIntensity(scene.text, scene.emphasis === true, role);
     return {
-      id: createId('scene'),
+      id: scene.sceneId,
       index,
       role,
       text: scene.text.trim(),
@@ -75,9 +82,4 @@ function transitionMultiplier(role: SceneRole, intensity: number): number {
   if (intensity >= 0.85) return 0.75;
   if (role === 'outro' || role === 'cta') return 1.15;
   return 1;
-}
-
-function createId(prefix: string): string {
-  const suffix = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  return `${prefix}-${suffix}`;
 }

@@ -4,6 +4,7 @@ import type { CanonicalMotionMode, CanonicalTransitionType, CanonicalWatermarkPo
 import { normalizeCanonicalWatermarkText } from './brandingTypes';
 import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 import { normalizeSceneCompositionOverride, resolveEffectiveSceneComposition } from './sceneComposition';
+import { isCanonicalSceneId } from '@/lib/sceneIdentity';
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
@@ -55,6 +56,8 @@ export interface StudioProductionRecipeV1 {
 
 export interface StudioProductionRecipeSceneV1 {
   readonly id: string;
+  /** Non-executable canonical project-scene identity; `id` remains the Recipe execution slot. */
+  readonly canonicalSceneId: string;
   readonly order: number;
   readonly text: string;
   readonly durationSeconds: number;
@@ -295,7 +298,7 @@ function recipeMotionToCanonical(motion: StudioRecipeMotion): CanonicalMotionMod
 export function recipeIdentity(recipe: StudioProductionRecipeV1): string {
   const serialized = stableStringify({
     ...recipe,
-    scenes: recipe.scenes.map((scene) => ({ ...scene, media: scene.media ? { ...scene.media, provenance: undefined } : null })),
+    scenes: recipe.scenes.map(({ canonicalSceneId: _canonicalSceneId, ...scene }) => ({ ...scene, media: scene.media ? { ...scene.media, provenance: undefined } : null })),
   });
   let first = 2166136261;
   let second = 2246822519;
@@ -310,7 +313,12 @@ export function recipeIdentity(recipe: StudioProductionRecipeV1): string {
 function normalizeScenes(
   scenes: readonly Scene[], ownerId: string, defaults: StudioProductionRecipeV1['composition'],
 ): StudioProductionRecipeSceneV1[] {
+  const sceneIds = new Set<string>();
   const normalized = scenes.map((scene, order) => {
+    const canonicalSceneId = isCanonicalSceneId(scene.sceneId) ? scene.sceneId : null;
+    const identityKey = canonicalSceneId?.toLowerCase();
+    if (!canonicalSceneId || !identityKey || sceneIds.has(identityKey)) throw new Error(`Scene ${order + 1} canonical identity is invalid or duplicated.`);
+    sceneIds.add(identityKey);
     const text = requiredText(scene.text, `Scene ${order + 1} requires text.`);
     const durationSeconds = boundedNumber(scene.duration, .1, 300, `Scene ${order + 1} duration`);
     const compositionOverride = scene.compositionOverride === undefined
@@ -318,6 +326,7 @@ function normalizeScenes(
       : normalizeSceneCompositionOverride(scene.compositionOverride, defaults, order);
     return {
       id: `scene-${order + 1}`,
+      canonicalSceneId,
       order,
       text,
       durationSeconds,
@@ -385,6 +394,7 @@ function isTrustedExternalSource(value: string): boolean {
 
 function recipeSceneToScene(scene: StudioProductionRecipeSceneV1): Scene {
   return {
+    sceneId: scene.canonicalSceneId,
     text: scene.text,
     duration: scene.durationSeconds,
     visual: scene.visual,

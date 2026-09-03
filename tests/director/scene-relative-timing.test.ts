@@ -89,7 +89,7 @@ describe('scene-relative cue timing', () => {
 async function buildManifest() {
   const engine = createMediaEngine(new TypedEventBus<ApplicationEventMap>(), assetEngine);
   return (await engine.buildProject({ projectId: 'timing', title: 'Timing', scenes: [
-    { text: 'İlk sahne', duration: 10, visual: 'İlk' },
-    { text: 'Hook sahnesi', duration: 3, visual: 'Hook' },
+    { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'İlk sahne', duration: 10, visual: 'İlk' },
+    { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000002', text: 'Hook sahnesi', duration: 3, visual: 'Hook' },
   ] })).manifest;
 }

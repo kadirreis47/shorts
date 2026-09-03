@@ -27,8 +27,8 @@ describe('Director analysis controller', () => {
   it('aktif Studio projesini gerçek Media Engine ile manifest haline getirip analiz eder', async () => {
     const report = await analyzeActiveDirectorProject(undefined, { projectId: 'studio-active', buildInput: {
       title: 'Director test', scenes: [
-        { text: '3 sır ile hemen daha iyi video üret.', duration: 3, visual: 'Hızlı açılış', keywords: ['hook'] },
-        { text: 'Bu yöntem sonucu açıklar.', duration: 4, visual: 'Sonuç', keywords: ['result'] },
+        { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: '3 sır ile hemen daha iyi video üret.', duration: 3, visual: 'Hızlı açılış', keywords: ['hook'] },
+        { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000002', text: 'Bu yöntem sonucu açıklar.', duration: 4, visual: 'Sonuç', keywords: ['result'] },
       ],
     } });
     expect(report.projectId).toBe('studio-active');
@@ -37,7 +37,7 @@ describe('Director analysis controller', () => {
 
   it('aktif proje ve stale manifest kimlikleri uyuşmadığında analizi reddeder', async () => {
     const result = await mediaEngine.buildProject({ projectId: 'active', title: 'Active', scenes: [
-      { text: 'Sahne metni', duration: 3, visual: 'Görsel' },
+      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'Sahne metni', duration: 3, visual: 'Görsel' },
     ] });
     result.manifest.projectId = 'stale';
     useMediaStore.getState().setBuildResult(result.project, result.manifest, result.renderReady, result.assetResolution, result.validation);

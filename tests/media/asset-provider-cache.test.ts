@@ -21,15 +21,15 @@ const settings = {
   beatIntervalMs: 1000, snapToFrames: true,
 };
 
-function inputScene(imageUrl?: string) {
-  return { text: 'Same search text', duration: 3, visual: 'Same visual prompt', ...(imageUrl ? { imageUrl } : {}) };
+function inputScene(imageUrl?: string, sceneId = 'visual-scene-00000000-0000-4000-8000-000000000001') {
+  return { sceneId, text: 'Same search text', duration: 3, visual: 'Same visual prompt', ...(imageUrl ? { imageUrl } : {}) };
 }
 
 describe('asset provider cache correctness', () => {
   it('resolves each scene-local source even when search text is identical', async () => {
     const engine = createAssetProviderEngine(new TypedEventBus<ApplicationEventMap>());
     const sources = ['C:\\assets\\scene-one.png', 'C:\\assets\\scene-two.png', 'C:\\assets\\scene-three.png'];
-    const result = await engine.resolve(sources.map(inputScene).map((source, index) => ({
+    const result = await engine.resolve(sources.map((source, index) => inputScene(source, `visual-scene-00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`)).map((source, index) => ({
       id: `scene-${index + 1}`, sourceScene: source, index, text: source.text, visualPrompt: source.visual,
       keywords: [], role: 'hook' as const, startMs: index * 3000, endMs: (index + 1) * 3000,
       durationMs: 3000, intensity: 0.8, assetIds: [], cameraMotion: 'none' as const,

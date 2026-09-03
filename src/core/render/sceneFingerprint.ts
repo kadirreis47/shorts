@@ -9,32 +9,42 @@ export async function createSceneFingerprint(
   manifest: RenderManifest,
   preset: RenderPreset,
 ): Promise<string> {
-  const assets = scene.assetIds
+  const sceneAssetIds = [...scene.assetIds];
+  const assets = sceneAssetIds
     .map((assetId) => manifest.assets.find((asset) => asset.id === assetId))
     .filter((asset): asset is MediaAsset => Boolean(asset))
     .map((asset) => {
-      const { providerProvenance: _providerProvenance, ...metadata } = asset.metadata;
-      return { id: asset.id, type: asset.type, source: canonicalMediaAssetSource(asset), durationMs: asset.durationMs ?? null, mimeType: asset.mimeType ?? null, metadata };
+      const { providerProvenance: _providerProvenance, sceneId: _sceneId, ...metadata } = asset.metadata;
+      return { type: asset.type, source: canonicalMediaAssetSource(asset), durationMs: asset.durationMs ?? null, mimeType: asset.mimeType ?? null, metadata };
     });
 
   const videoClips = manifest.timeline.tracks
     .filter((track) => track.type === 'video')
     .flatMap((track) => track.clips)
     .filter((clip) => clip.sceneId === scene.id)
-    .map((clip) => { const { visualProduction: _visualProduction, ...metadata } = clip.metadata; return { id: clip.id, assetId: clip.assetId ?? null, metadata }; });
+    .map((clip) => {
+      const { visualProduction: _visualProduction, ...metadata } = clip.metadata;
+      return {
+        // Opaque asset/clip IDs are association metadata, not executable
+        // semantics. Preserve the selected asset relationship by stable
+        // position so a different source still changes `assets` above.
+        assetIndex: clip.assetId ? sceneAssetIds.indexOf(clip.assetId) : null,
+        metadata,
+      };
+    });
 
-  const visualProduction = getSceneVisualOperations(manifest, scene.id);
+  const visualProduction = getSceneVisualOperations(manifest, scene.id)
+    .map(({ operationId: _operationId, ...operation }) => operation)
+    .sort((left, right) => stableStringify(left).localeCompare(stableStringify(right)));
   const execution = buildCanonicalSceneExecutionPlan(manifest, scene, preset);
 
   const payload = stableStringify({
     scene: {
-      id: scene.id,
       index: scene.index,
       role: scene.role,
       text: scene.text,
       visualPrompt: scene.visualPrompt,
       durationMs: scene.durationMs,
-      assetIds: scene.assetIds,
       cameraMotion: scene.cameraMotion,
       subtitleText: scene.subtitleText,
       intensity: scene.intensity,

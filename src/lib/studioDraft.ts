@@ -4,10 +4,12 @@ import type { AudioNarrationMode } from '@/core/media';
 import type { StudioProductionRecipeInput } from '@/core/media';
 import type { NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 import {
-  ensureSceneVisualPlanningIds,
+  isSceneVisualBindingCurrent,
+  isVisualQueryPlanCurrent,
   normalizeVisualIntelligencePlanningState,
   type VisualIntelligencePlanningState,
 } from '@/core/visual-intelligence';
+import { materializeCanonicalSceneIds } from './sceneIdentity';
 import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 import { canonicalizeStudioRecipeTransition } from '@/core/media/studioProductionRecipe';
 import { normalizeSceneCompositionOverride } from '@/core/media/sceneComposition';
@@ -91,10 +93,10 @@ export function clearStudioDraft(): void {
   removeUserScopedLocalStorage(STORAGE_KEY);
 }
 
-/** Preserves V1.1 drafts while giving future async planning a stable scene binding. */
+/** Preserves legacy drafts while materializing the canonical project-scene identity exactly once per result. */
 export function normalizeStudioDraft(draft: StudioDraft): StudioDraft {
   const { visualIntelligence: rawVisualIntelligence, ...rest } = draft;
-  const plannedScenes = ensureSceneVisualPlanningIds(Array.isArray(draft.scenes) ? draft.scenes : []);
+  const plannedScenes = materializeCanonicalSceneIds(Array.isArray(draft.scenes) ? draft.scenes : []);
   const compositionDefaults = {
     motion: draft.motionStyle,
     transition: canonicalizeStudioRecipeTransition(draft.transitionStyle),
@@ -107,7 +109,15 @@ export function normalizeStudioDraft(draft: StudioDraft): StudioDraft {
   });
   let visualIntelligence: VisualIntelligencePlanningState | undefined;
   try {
-    visualIntelligence = normalizeVisualIntelligencePlanningState(rawVisualIntelligence);
+    const normalizedPlanning = normalizeVisualIntelligencePlanningState(rawVisualIntelligence);
+    visualIntelligence = normalizedPlanning
+      && normalizedPlanning.briefs.every((brief) => isSceneVisualBindingCurrent(brief.sceneBinding, scenes))
+      && normalizedPlanning.queryPlans.every((plan) => {
+        const brief = normalizedPlanning.briefs.find((candidate) => candidate.sceneBinding.sceneId === plan.sceneBinding.sceneId);
+        return Boolean(brief && isVisualQueryPlanCurrent(plan, brief, scenes));
+      })
+      ? normalizedPlanning
+      : undefined;
   } catch {
     // Advisory planning must fail closed without making an otherwise durable V1.1 draft unreadable.
     visualIntelligence = undefined;

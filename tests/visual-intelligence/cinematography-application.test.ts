@@ -12,13 +12,16 @@ const defaults = { motion: 'static', transition: 'crossfade' } as const;
 const projectId = 'project-a';
 const path = 'owner/generated-images/11111111-1111-4111-8111-111111111111.png';
 const mediaIdentity = `image:media:${path}`;
+const SCENE_A = 'visual-scene-00000000-0000-4000-8000-000000000001';
+const SCENE_B = 'visual-scene-00000000-0000-4000-8000-000000000002';
+const SCENE_ZERO = 'visual-scene-00000000-0000-4000-8000-000000000003';
 
 function scene(overrides: Partial<Scene> = {}): Scene {
-  return { visualPlanningId: 'scene-a', text: 'A scene', duration: 5, visual: 'visual', imageStorage: { bucket: 'media', objectPath: path }, ...overrides };
+  return { sceneId: SCENE_A, text: 'A scene', duration: 5, visual: 'visual', imageStorage: { bucket: 'media', objectPath: path }, ...overrides };
 }
 function recommendation(overrides: Partial<CinematographyAssessment> = {}): CinematographyAssessment {
   return {
-    version: 1, sceneId: 'scene-a', strategy: 'gentle-push', motion: 'low', crop: 'preserve', transition: 'none', strength: 'moderate', supported: true, reasons: ['strong-semantic-fit'],
+    version: 1, sceneId: SCENE_A, strategy: 'gentle-push', motion: 'low', crop: 'preserve', transition: 'none', strength: 'moderate', supported: true, reasons: ['strong-semantic-fit'],
     ...overrides,
   };
 }
@@ -28,7 +31,7 @@ function proposal(scenes: readonly Scene[], assessment = recommendation(), input
 
 describe('explicit scene-local cinematography application', () => {
   it('maps only exact supported advice and exposes exact effective before/after values', () => {
-    const result = proposal([scene({ visualPlanningId: 'scene-0' }), scene()], recommendation({ transition: 'crossfade' }), { sceneIndex: 1 });
+    const result = proposal([scene({ sceneId: SCENE_ZERO }), scene()], recommendation({ transition: 'crossfade' }), { sceneIndex: 1 });
     expect(result).toMatchObject({ status: 'ready', current: { motion: 'static', transition: 'crossfade' }, proposed: { motion: 'zoom_in', transition: 'crossfade' } });
     expect(result.changes).toEqual([{ field: 'motion', before: 'static', after: 'zoom_in' }]);
     expect(proposal([scene()], recommendation({ strategy: 'transition-led', motion: 'low' })).status).toBe('unsupported');
@@ -36,7 +39,7 @@ describe('explicit scene-local cinematography application', () => {
   });
 
   it('does not mutate canonical state while generating a proposal', () => {
-    const scenes = [scene(), scene({ visualPlanningId: 'scene-b' })];
+    const scenes = [scene(), scene({ sceneId: SCENE_B })];
     const before = structuredClone(scenes);
     const outputBefore = canonicalStudioCompositionOutput(scenes, defaults);
     proposal(scenes);
@@ -51,7 +54,7 @@ describe('explicit scene-local cinematography application', () => {
   });
 
   it('applies both fields atomically through the Slice 12A mutation authority', () => {
-    const scenes = [scene({ visualPlanningId: 'scene-0' }), scene({ visualPlanningId: 'scene-a' })];
+    const scenes = [scene({ sceneId: SCENE_ZERO }), scene({ sceneId: SCENE_A })];
     const assessment = recommendation({ transition: 'none' });
     const proposed = proposal(scenes, assessment, { sceneIndex: 1 });
     const outputBefore = canonicalStudioCompositionOutput(scenes, defaults);
@@ -67,7 +70,7 @@ describe('explicit scene-local cinematography application', () => {
 
   it('uses effective state and clears a matching override back to inheritance', () => {
     const inheritedDefaults = { motion: 'zoom_in', transition: 'crossfade' } as const;
-    const scenes = [scene({ visualPlanningId: 'scene-0' }), scene({ visualPlanningId: 'scene-a', compositionOverride: { motion: 'static', transition: 'none' } })];
+    const scenes = [scene({ sceneId: SCENE_ZERO }), scene({ sceneId: SCENE_A, compositionOverride: { motion: 'static', transition: 'none' } })];
     const assessment = recommendation({ transition: 'crossfade' });
     const proposed = proposal(scenes, assessment, { sceneIndex: 1, defaults: inheritedDefaults });
     expect(proposed.changes).toEqual([{ field: 'motion', before: 'static', after: 'zoom_in' }, { field: 'transition', before: 'none', after: 'crossfade' }]);
@@ -93,6 +96,18 @@ describe('explicit scene-local cinematography application', () => {
     expect(apply(scenes, defaults, recommendation({ strategy: 'restrained-pan', motion: 'low' })).status).toBe('stale');
   });
 
+  it('rejects the same index with another canonical scene and the same scene at another index', () => {
+    const first = scene({ sceneId: SCENE_A });
+    const second = scene({ sceneId: SCENE_B });
+    const scenes = [first, second];
+    const proposed = proposal(scenes, recommendation({ sceneId: SCENE_A }), { sceneIndex: 0 });
+
+    expect(applyCinematographyApplicationProposal({ projectId, scenes: [second, first], sceneIndex: 0, defaults, recommendation: recommendation({ sceneId: SCENE_A }), recommendationMediaIdentity: mediaIdentity, proposal: proposed }).status)
+      .toBe('invalid-scene');
+    expect(applyCinematographyApplicationProposal({ projectId, scenes: [second, first], sceneIndex: 1, defaults, recommendation: recommendation({ sceneId: SCENE_A }), recommendationMediaIdentity: mediaIdentity, proposal: proposed }).status)
+      .toBe('invalid-scene');
+  });
+
   it('has deterministic no-op and double-apply behavior without revision churn', () => {
     const matching = [scene({ compositionOverride: { motion: 'zoom_in' } })];
     const noChange = proposal(matching);
@@ -106,7 +121,7 @@ describe('explicit scene-local cinematography application', () => {
 
   it('never applies image motion to video while retaining an independently applicable transition', () => {
     const videoPath = 'owner/videos/33333333-3333-4333-8333-333333333333.mp4';
-    const scenes = [scene({ visualPlanningId: 'scene-0' }), scene({ visualPlanningId: 'scene-a', imageStorage: undefined, videoStorage: { bucket: 'media', objectPath: videoPath } })];
+    const scenes = [scene({ sceneId: SCENE_ZERO }), scene({ sceneId: SCENE_A, imageStorage: undefined, videoStorage: { bucket: 'media', objectPath: videoPath } })];
     const videoMedia = `video:media:${videoPath}`;
     const assessed = recommendation({ transition: 'none' });
     const proposed = createCinematographyApplicationProposal({ projectId, scenes, sceneIndex: 1, defaults, recommendation: assessed, recommendationMediaIdentity: videoMedia });
