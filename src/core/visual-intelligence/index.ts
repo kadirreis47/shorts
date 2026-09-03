@@ -4,5 +4,6 @@ export * from './quality';
 export * from './semantic';
 export * from './semanticRequestRegistry';
 export * from './continuity';
+export * from './cinematography';
 export * from './opaqueMediaReference';
 export * from './visualSemanticAnalysis';

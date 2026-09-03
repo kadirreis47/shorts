@@ -24,7 +24,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
-import { createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { assessCinematography, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, ensureSceneVisualPlanningIds, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, semanticRankingAdjustment, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
@@ -2218,6 +2218,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                           const selectedId = sceneId ? selectedVisualCandidates[sceneId] : undefined;
                           const selectedCandidate = shortlist?.candidates.find((candidate) => candidate.candidateId === selectedId);
                           const selectedCandidateAssessment = selectedCandidate && plan ? candidateSemanticAssessments[selectedCandidate.candidateId]?.briefFingerprint === plan.briefFingerprint ? candidateSemanticAssessments[selectedCandidate.candidateId]?.assessment : undefined : undefined;
+                          const cinematography = selectedCandidate && sceneId ? assessCinematography({ sceneId, mediaType: selectedCandidate.mediaType, durationMs: Math.round(s.duration * 1_000), width: selectedCandidate.width, height: selectedCandidate.height, quality: selectedCandidate.quality, semantic: selectedCandidateAssessment ?? selectedCandidate.semantic, continuityBoundary: selectedCandidate.continuity.reasons.includes('continuity-group-support'), repeatedMedia: selectedCandidate.continuity.reasons.includes('repeated-provider-media') }) : undefined;
                           const candidateAnalyzing = Boolean(selectedCandidate && candidateSemanticBusy.has(selectedCandidate.candidateId));
                           const applying = sceneId ? visualApplyBusy.has(sceneId) : false;
                           return <>
@@ -2278,6 +2279,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                   </button>
                                 </div>
                                 {selectedCandidateAssessment && <p className="mt-2 text-xs text-sky-800">Semantic analysis: {selectedCandidateAssessment.status === 'available' ? `Evaluated — fit ${semanticRankingAdjustment(selectedCandidateAssessment) >= 3 ? 'High' : semanticRankingAdjustment(selectedCandidateAssessment) <= -3 ? 'Low' : 'Medium'}` : selectedCandidateAssessment.unavailableReason === 'unsupported-media' ? 'Unsupported' : 'Unavailable'}</p>}
+                                {cinematography && <p className="mt-2 text-xs text-slate-600">Cinematography advisory · {cinematography.strategy.replace(/-/gu, ' ')} · motion {cinematography.motion} · crop {cinematography.crop.replace(/-/gu, ' ')} · transition {cinematography.transition} · {cinematography.reasons.slice(0, 3).join(' · ')}</p>}
                               </div>
                             )}
                           </>;
