@@ -56,6 +56,129 @@ describe('main-owned canonical FFmpeg authority boundary', () => {
     expect(() => security.validateFFmpegRunRequest(withSource({ kind: 'external-video', url: privateSource, geometry: declaration() }))).toThrow();
   });
 
+  it('accepts only strict image framing semantics and main compiles the fixed crop template', () => {
+    const valid = privateImageRequest(path.resolve('framed.mp4'));
+    (valid.intent.scenes[0].source as any).framing = { version: 1, mode: 'focal-cover', anchor: { x: 0.125, y: 0.875 } };
+    (valid.intent.scenes[0].source as any).framingBinding = binding();
+    const normalized = security.validateFFmpegRunRequest(valid);
+    const compiled = compiler.compileCanonicalRenderRequest(normalized);
+    const filter = compiled.args.join('\n');
+    expect(filter).toContain("crop=160:90:x='min(max(0.125*iw-160/2,0),iw-160)':y='min(max(0.875*ih-90/2,0),ih-90)'");
+    expect(compiled.args.filter((value) => value === privateSource)).toHaveLength(1);
+    expect(compiled.args.filter((value) => value === outputMarker)).toHaveLength(1);
+
+    const center = privateImageRequest(path.resolve('centered.mp4'));
+    (center.intent.scenes[0].source as any).framing = { version: 1, mode: 'focal-cover', anchor: { x: 0.5, y: 0.5 } };
+    expect((security.validateFFmpegRunRequest(center).intent.scenes[0].source as any).framing).toBeUndefined();
+  });
+
+  it('requires framing and its exact immutable binding as a strict pair', () => {
+    const missing = framedPrivateImageRequest(path.resolve('missing-binding.mp4'));
+    delete (missing.intent.scenes[0].source as any).framingBinding;
+    expect(() => security.validateFFmpegRunRequest(missing)).toThrow(/binding|paired/i);
+
+    const orphaned = privateImageRequest(path.resolve('orphan-binding.mp4'));
+    (orphaned.intent.scenes[0].source as any).framingBinding = binding();
+    expect(() => security.validateFFmpegRunRequest(orphaned)).toThrow(/binding|paired/i);
+  });
+
+  it.each([
+    ['digest', (value: any) => { value.contentDigest = 'b'.repeat(64); }],
+    ['media identity', (value: any) => { value.mediaIdentity = 'media:00000000-0000-4000-8000-000000000009/generated-images/00000000-0000-4000-8000-000000000099.jpg'; }],
+    ['orientation', (value: any) => { value.encodedToDisplay = 'rotate-180'; }],
+    ['encoded dimensions', (value: any) => { value.encodedDimensions = { width: 4, height: 2 }; value.displayDimensions = { width: 4, height: 2 }; }],
+    ['display dimensions', (value: any) => { value.displayDimensions = { width: 4, height: 2 }; }],
+  ])('rejects a renderer binding with mismatched %s', (_label, mutate) => {
+    const request = framedPrivateImageRequest(path.resolve('mismatched-binding.mp4'));
+    mutate((request.intent.scenes[0].source as any).framingBinding);
+    expect(() => security.validateFFmpegRunRequest(request)).toThrow(/binding|dimensions|geometry/i);
+  });
+
+  it.each(['executionAuthority', 'expiresAt', 'url', 'requestId', 'crop', 'filter', 'path'])('rejects forbidden binding field %s', (field) => {
+    const request = framedPrivateImageRequest(path.resolve('forbidden-binding.mp4'));
+    (request.intent.scenes[0].source as any).framingBinding[field] = field === 'expiresAt' ? '2099-01-01T00:00:00.000Z' : 'forged';
+    expect(() => security.validateFFmpegRunRequest(request)).toThrow(/binding/i);
+  });
+
+  it('rejects prototype-shaped framing bindings', () => {
+    const request = framedPrivateImageRequest(path.resolve('prototype-binding.mp4'));
+    (request.intent.scenes[0].source as any).framingBinding = Object.assign(Object.create({ crop: 'movie=secret' }), binding());
+    expect(() => security.validateFFmpegRunRequest(request)).toThrow(/binding/i);
+  });
+
+  it('compares framed provenance to main-resolved live geometry before creating a render plan', async () => {
+    const acceptedOutput = path.resolve('matching-binding.mp4');
+    service.rememberApprovedExportDestination(webContentsId, acceptedOutput);
+    await expect(service.createCanonicalRenderPlan(webContentsId, framedPrivateImageRequest(acceptedOutput), {
+      supabaseUrl: 'https://project.supabase.co', geometryAuthority: geometryAuthority(),
+    })).resolves.toMatchObject({ version: 1, reference: expect.stringMatching(/^crp1_/u) });
+
+    const mismatches = [
+      { geometry: { version: 1, mediaIdentity, encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 }, encodedToDisplay: 'identity' }, contentDigest: 'b'.repeat(64) },
+      { geometry: { version: 1, mediaIdentity: mediaIdentity.replace(ownerId, '00000000-0000-4000-8000-000000000009'), encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 }, encodedToDisplay: 'identity' }, contentDigest: digest },
+      { geometry: { version: 1, mediaIdentity, encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 }, encodedToDisplay: 'rotate-180' }, contentDigest: digest },
+      { geometry: { version: 1, mediaIdentity, encodedDimensions: { width: 4, height: 2 }, displayDimensions: { width: 4, height: 2 }, encodedToDisplay: 'identity' }, contentDigest: digest },
+      { geometry: { version: 1, mediaIdentity, encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 4, height: 2 }, encodedToDisplay: 'identity' }, contentDigest: digest },
+    ];
+    for (const current of mismatches) {
+      const output = path.resolve(`authority-mismatch-${Math.random().toString(16).slice(2)}.mp4`);
+      service.rememberApprovedExportDestination(webContentsId, output);
+      await expect(service.createCanonicalRenderPlan(webContentsId, framedPrivateImageRequest(output), {
+        supabaseUrl: 'https://project.supabase.co', geometryAuthority: { authorize: vi.fn(() => current) },
+      })).rejects.toThrow(/geometry|binding|authority/i);
+    }
+  });
+
+  it('does not let a matching binding substitute for an expired live authority', async () => {
+    const output = path.resolve('expired-framing-authority.mp4');
+    service.rememberApprovedExportDestination(webContentsId, output);
+    await expect(service.createCanonicalRenderPlan(webContentsId, framedPrivateImageRequest(output), {
+      supabaseUrl: 'https://project.supabase.co',
+      geometryAuthority: { authorize: vi.fn(() => { throw new Error('geometry authority expired'); }) },
+    })).rejects.toThrow(/expired/i);
+  });
+
+  it.each([
+    ['raw crop', { crop: 'crop=1:1' }],
+    ['raw filter', { filter: 'movie=C\\:/secret.jpg' }],
+    ['filter graph', { filterGraph: '[0:v]movie=secret' }],
+    ['x expression field', { xExpression: 'min(max(0.2*iw-W/2,0),iw-W)' }],
+    ['y expression field', { yExpression: '0;movie=secret' }],
+    ['scale expression field', { scaleExpression: 'iw;amovie=secret' }],
+    ['raw FFmpeg text', { ffmpeg: '-filter_complex movie=secret' }],
+    ['x expression value', { framing: { version: 1, mode: 'focal-cover', anchor: { x: '0;movie=secret', y: 0.5 } } }],
+    ['extra framing key', { framing: { version: 1, mode: 'focal-cover', anchor: { x: 0.2, y: 0.5 }, crop: 'secret' } }],
+    ['extra anchor key', { framing: { version: 1, mode: 'focal-cover', anchor: { x: 0.2, y: 0.5, expression: 'iw' } } }],
+    ['invalid mode', { framing: { version: 1, mode: 'crop', anchor: { x: 0.2, y: 0.5 } } }],
+    ['invalid version', { framing: { version: 2, mode: 'focal-cover', anchor: { x: 0.2, y: 0.5 } } }],
+    ['NaN', { framing: { version: 1, mode: 'focal-cover', anchor: { x: Number.NaN, y: 0.5 } } }],
+    ['Infinity', { framing: { version: 1, mode: 'focal-cover', anchor: { x: Infinity, y: 0.5 } } }],
+    ['out of range', { framing: { version: 1, mode: 'focal-cover', anchor: { x: -0.1, y: 0.5 } } }],
+    ['excess precision', { framing: { version: 1, mode: 'focal-cover', anchor: { x: 0.12345, y: 0.5 } } }],
+  ])('rejects renderer framing authority injection: %s', (_label, fields) => {
+    const request = privateImageRequest(path.resolve('invalid-framing.mp4'));
+    Object.assign(request.intent.scenes[0].source, fields);
+    expect(() => security.validateFFmpegRunRequest(request)).toThrow();
+  });
+
+  it('rejects image framing on every non-image source and prototype-shaped framing', () => {
+    const framing = { version: 1, mode: 'focal-cover', anchor: { x: 0.2, y: 0.5 } };
+    for (const source of [
+      { kind: 'color', paletteIndex: 0, framing },
+      { kind: 'external-video', url: 'https://cdn.example/video.mp4', framing },
+      { kind: 'color', paletteIndex: 0, framingBinding: binding() },
+      { kind: 'external-video', url: 'https://cdn.example/video.mp4', framingBinding: binding() },
+    ]) {
+      const request = fullRequest(path.resolve('non-image.mp4'));
+      (request.intent.scenes[0] as any).source = source;
+      expect(() => security.validateFFmpegRunRequest(request)).toThrow();
+    }
+    const request = privateImageRequest(path.resolve('prototype.mp4'));
+    const prototypeFraming = Object.assign(Object.create({ crop: 'movie=secret' }), framing);
+    (request.intent.scenes[0].source as any).framing = prototypeFraming;
+    expect(() => security.validateFFmpegRunRequest(request)).toThrow();
+  });
+
   it('main constructs exactly one output and only fixed native operands', () => {
     const compiled = compiler.compileCanonicalRenderRequest(security.validateFFmpegRunRequest(fullRequest(path.resolve('out.mp4'))));
     expect(compiled.args.filter((value) => value === outputMarker)).toHaveLength(1);
@@ -401,13 +524,15 @@ describe('main-owned canonical FFmpeg authority boundary', () => {
 function fullRequest(outputPath: string) { return { operation: 'full-render', jobId: `job-${Math.random().toString(16).slice(2)}`, outputPath, intent: intent('full') }; }
 function concatRequest(outputPath: string, segmentReferences: string[]) { return { operation: 'segment-concat', jobId: `concat-${Math.random().toString(16).slice(2)}`, outputPath, intent: { ...intent('concat-segments'), durationMs: segmentReferences.length * 100, scenes: [], sceneDurationsMs: segmentReferences.map(() => 100), transitions: segmentReferences.map(() => ({ type: 'cut', overlapMs: 0 })), segmentReferences } }; }
 function privateImageRequest(outputPath: string) { const request = fullRequest(outputPath); return { ...request, intent: { ...request.intent, scenes: [{ durationMs: 100, cameraMotion: 'none', source: { kind: 'private-image', url: privateSource, geometry: declaration() } }] } }; }
+function framedPrivateImageRequest(outputPath: string) { const request = privateImageRequest(outputPath); Object.assign(request.intent.scenes[0].source, { framing: { version: 1, mode: 'focal-cover', anchor: { x: .125, y: .875 } }, framingBinding: binding() }); return request; }
 function intent(kind: 'full' | 'segment' | 'concat-segments') { return {
-  version: 1, kind, width: 160, height: 90, durationMs: 100, scenes: [{ durationMs: 100, cameraMotion: 'none', source: { kind: 'color', paletteIndex: 0 } }], sceneDurationsMs: [100], transitions: [{ type: 'cut', overlapMs: 0 }], segmentReferences: [], branding: null, subtitleContent: '', audioTracks: [],
+  version: 3, kind, width: 160, height: 90, durationMs: 100, scenes: [{ durationMs: 100, cameraMotion: 'none', source: { kind: 'color', paletteIndex: 0 } }], sceneDurationsMs: [100], transitions: [{ type: 'cut', overlapMs: 0 }], segmentReferences: [], branding: null, subtitleContent: '', audioTracks: [],
   audioSettings: { masterGain: 1, targetLufs: -14, duckingAttackMs: 25, duckingReleaseMs: 250 }, encoding: { videoCodec: 'h264', audioCodec: 'aac', quality: 'standard', hardwareAcceleration: 'disabled', encoder: null, encoderMode: null, bitrateKbps: null, maxBitrateKbps: null, bufferSizeKbps: null, crf: null, encoderPreset: null, frameRate: 30, pixelFormat: 'yuv420p', gopFrames: null, keyframeInterval: null, threads: null, audioBitrateKbps: 192, sampleRate: 48_000, audioChannels: 2, colorSpace: null, profile: null },
 }; }
 function internalRequest(outputPath: string) { return { jobId: `internal-${Math.random().toString(16).slice(2)}`, outputPath, args: ['-f', 'lavfi', '-i', 'color=c=0x000000:s=160x90:r=30', '-t', '0.1', '-progress', 'pipe:1', outputMarker], subtitleContent: '', imageGeometryAuthorities: [] }; }
-function declaration() { return { inputIndex: 0, authorityReference: `idga1_${'A'.repeat(43)}`, mediaIdentity, expectedOrientation: 'identity', contentDigest: digest }; }
-function geometryAuthority() { return { authorize: vi.fn(() => ({ geometry: { encodedToDisplay: 'identity' }, contentDigest: digest })) }; }
+function declaration() { return { inputIndex: 0, authorityReference: `idga1_${'A'.repeat(43)}`, mediaIdentity, expectedOrientation: 'identity', contentDigest: digest, encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 } }; }
+function binding() { return { version: 1, mediaIdentity, contentDigest: digest, encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 }, encodedToDisplay: 'identity' }; }
+function geometryAuthority() { return { authorize: vi.fn(() => ({ geometry: { version: 1, mediaIdentity, encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 }, encodedToDisplay: 'identity' }, contentDigest: digest })) }; }
 function fakeChild() { const child = new EventEmitter() as EventEmitter & { stdout: PassThrough; stderr: PassThrough; killed: boolean; kill: ReturnType<typeof vi.fn> }; child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.killed = false; child.kill = vi.fn(() => { child.killed = true; return true; }); return child; }
 function trackedFs(onCreate: (directory: string) => void) { return { rmSync: fs.rmSync.bind(fs), promises: { mkdtemp: async (prefix: string) => { const directory = await fs.promises.mkdtemp(prefix); onCreate(directory); return directory; }, writeFile: fs.promises.writeFile.bind(fs.promises), mkdir: fs.promises.mkdir.bind(fs.promises), stat: fs.promises.stat.bind(fs.promises), rm: fs.promises.rm.bind(fs.promises), open: fs.promises.open.bind(fs.promises), copyFile: fs.promises.copyFile.bind(fs.promises), rename: fs.promises.rename.bind(fs.promises) } }; }
 function ownerAuthority() { const controller = new AbortController(); let current = true; const captured = Object.freeze({ ownerId, generation: 1, signal: controller.signal }); const context = { capture: () => captured, assertCurrent: (candidate: typeof captured) => { if (!current || candidate !== captured || candidate.signal.aborted) throw new Error('stale owner'); }, isCurrent: (candidate: typeof captured) => current && candidate === captured && !candidate.signal.aborted }; return { captured, context, transition: () => { current = false; controller.abort(); } }; }

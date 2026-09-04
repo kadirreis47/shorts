@@ -7,6 +7,7 @@ import type { MediaValidationReport } from './validationTypes';
 import type { NormalizedStudioProductionRecipeV1 } from './studioProductionRecipe';
 import type { NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 import type { ImageEncodedToDisplayOrientation } from './imageDisplayGeometry';
+import type { ImageFramingBindingV1, ImageFramingDimensions, ImageFramingV1 } from './imageFraming';
 
 export type MediaAssetType =
   | 'image' | 'video' | 'ai_image' | 'broll' | 'overlay' | 'logo'
@@ -93,6 +94,10 @@ export interface MediaScene {
   sourceScene: Scene;
   /** Opaque image-only authority. Electron main verifies it before orientation becomes executable. */
   imageGeometryAuthority?: CanonicalImageGeometryExecutionAuthority;
+  /** User-approved display-oriented crop anchor. */
+  imageFraming?: ImageFramingV1;
+  /** Non-authorizing immutable identity required by executable image framing. */
+  imageFramingBinding?: ImageFramingBindingV1;
 }
 
 export interface CanonicalImageGeometryExecutionAuthority {
@@ -100,6 +105,8 @@ export interface CanonicalImageGeometryExecutionAuthority {
   readonly mediaIdentity: string;
   readonly expectedOrientation: ImageEncodedToDisplayOrientation;
   readonly contentDigest: string;
+  readonly encodedDimensions: ImageFramingDimensions;
+  readonly displayDimensions: ImageFramingDimensions;
 }
 
 export interface MediaClip {

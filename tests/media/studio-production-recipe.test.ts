@@ -3,6 +3,7 @@ import {
   compileStudioProductionRecipeV1,
   createAssetProviderEngine,
   createImageDisplayGeometry,
+  imageFramingBindingFromTrustedGeometry,
   createMediaEngine,
   canonicalSubtitleStyle,
   normalizeStudioProductionRecipeV1,
@@ -18,6 +19,7 @@ import type { ApplicationEventMap } from '@/core/events';
 import { captureValidatedMediaOwnerContext } from '@/lib/mediaStorage';
 import { setValidatedOwnerId } from '@/auth/identity';
 import { buildCanonicalSubtitleRenderPlan, buildFFmpegCommand, buildSegmentConcatCommand, type RenderPreset } from '@/core/render';
+import { buildFullNativeRenderIntent } from '@/core/render/nativeRenderIntent';
 
 const OWNER_A = 'owner-a';
 const RENDER_PRESET: RenderPreset = { id: 'recipe-subtitles', name: 'Recipe subtitles', container: 'mp4', videoCodec: 'h264', audioCodec: 'aac', frameRate: 30, quality: 'standard', hardwareAcceleration: 'disabled' };
@@ -68,6 +70,109 @@ describe('StudioProductionRecipeV1', () => {
     expect(first.identity).toBe(second.identity);
     expect(JSON.stringify(first.recipe)).not.toContain('signed');
     expect(JSON.stringify(first.recipe)).not.toContain('blob:');
+  });
+
+  it('carries meaningful framing through Recipe and Media Engine identity while center is a no-op', async () => {
+    const base = recipeInput();
+    const centered = recipeInput();
+    centered.scenes[0].imageFraming = { version: 1, mode: 'focal-cover', anchor: { x: 0.5, y: 0.5 } };
+    const framed = recipeInput();
+    framed.scenes[0].imageFraming = { version: 1, mode: 'focal-cover', anchor: { x: 0.1, y: 0.9 } };
+    framed.scenes[0].imageFramingBinding = imageFramingBindingFromTrustedGeometry(framed.scenes[0].imageDisplayGeometry!);
+    const baseRecipe = normalizeStudioProductionRecipeV1(base, ownerContext());
+    const centeredRecipe = normalizeStudioProductionRecipeV1(centered, ownerContext());
+    const framedRecipe = normalizeStudioProductionRecipeV1(framed, ownerContext());
+    expect(centeredRecipe.identity).toBe(baseRecipe.identity);
+    expect(centeredRecipe.recipe.scenes[0].imageFraming).toBeUndefined();
+    expect(framedRecipe.identity).not.toBe(baseRecipe.identity);
+    expect(framedRecipe.recipe.scenes[0].imageFraming).toEqual(framed.scenes[0].imageFraming);
+
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const built = await createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject(compileStudioProductionRecipeV1(framedRecipe));
+    expect(built.project.scenes[0].imageFraming).toEqual(framed.scenes[0].imageFraming);
+    expect(built.manifest.timeline.scenes[0].imageFraming).toEqual(framed.scenes[0].imageFraming);
+    expect(buildFullNativeRenderIntent(built.manifest, RENDER_PRESET).scenes[0].source).toMatchObject({
+      kind: 'private-image',
+      framing: framed.scenes[0].imageFraming,
+      framingBinding: framed.scenes[0].imageFramingBinding,
+    });
+    expect(await createRenderFingerprint({ manifest: built.manifest, preset: RENDER_PRESET, adapterId: 'ffmpeg' }))
+      .not.toBe(await createRenderFingerprint({ manifest: (await createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject(compileStudioProductionRecipeV1(baseRecipe))).manifest, preset: RENDER_PRESET, adapterId: 'ffmpeg' }));
+  });
+
+  it('requires both matching immutable framing identity and current live geometry authority', () => {
+    const input = recipeInput();
+    input.scenes[0].imageFraming = { version: 1, mode: 'focal-cover', anchor: { x: 0.1, y: 0.9 } };
+    input.scenes[0].imageFramingBinding = imageFramingBindingFromTrustedGeometry(input.scenes[0].imageDisplayGeometry!);
+    input.scenes[0].imageDisplayGeometry = undefined;
+    expect(() => normalizeStudioProductionRecipeV1(input, ownerContext())).toThrow(/geometry|private image/i);
+
+    const expired = recipeInput();
+    expired.scenes[0].imageFraming = { version: 1, mode: 'focal-cover', anchor: { x: 0.1, y: 0.9 } };
+    expired.scenes[0].imageFramingBinding = imageFramingBindingFromTrustedGeometry(expired.scenes[0].imageDisplayGeometry!);
+    expired.scenes[0].imageDisplayGeometry = {
+      ...expired.scenes[0].imageDisplayGeometry!,
+      executionAuthority: { version: 1, reference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2020-01-01T00:00:00.000Z' },
+    };
+    expect(() => normalizeStudioProductionRecipeV1(expired, ownerContext())).toThrow(/geometry|expired/i);
+  });
+
+  it('rejects missing, orphaned, malformed, or mismatched framing bindings at Recipe normalization', () => {
+    const framed = () => {
+      const value = recipeInput();
+      value.scenes[0].imageFraming = { version: 1, mode: 'focal-cover', anchor: { x: 0.1, y: 0.9 } };
+      value.scenes[0].imageFramingBinding = imageFramingBindingFromTrustedGeometry(value.scenes[0].imageDisplayGeometry!);
+      return value;
+    };
+
+    const missing = framed();
+    missing.scenes[0].imageFramingBinding = undefined;
+    expect(() => normalizeStudioProductionRecipeV1(missing, ownerContext())).toThrow(/binding|framing/i);
+
+    const orphaned = recipeInput();
+    orphaned.scenes[0].imageFramingBinding = imageFramingBindingFromTrustedGeometry(orphaned.scenes[0].imageDisplayGeometry!);
+    expect(() => normalizeStudioProductionRecipeV1(orphaned, ownerContext())).toThrow(/binding.*framing/i);
+
+    const mutations: Array<(binding: Record<string, unknown>) => void> = [
+      (binding) => { binding.contentDigest = 'b'.repeat(64); },
+      (binding) => { binding.mediaIdentity = 'media:owner-a/generated-images/00000000-0000-4000-8000-000000000099.png'; },
+      (binding) => { binding.encodedToDisplay = 'rotate-180'; },
+      (binding) => { binding.encodedDimensions = { width: 1201, height: 800 }; binding.displayDimensions = { width: 1201, height: 800 }; },
+      (binding) => { binding.displayDimensions = { width: 1201, height: 800 }; },
+      (binding) => { binding.expiresAt = '2099-01-01T00:00:00.000Z'; },
+    ];
+    for (const mutate of mutations) {
+      const value = framed();
+      const binding = structuredClone(value.scenes[0].imageFramingBinding!) as unknown as Record<string, unknown>;
+      mutate(binding);
+      value.scenes[0].imageFramingBinding = binding as never;
+      expect(() => normalizeStudioProductionRecipeV1(value, ownerContext())).toThrow(/binding|geometry|framing/i);
+    }
+  });
+
+  it('strictly rejects malformed or non-image framing at Recipe and Media Engine boundaries', async () => {
+    for (const imageFraming of [
+      { version: 1, mode: 'focal-cover', anchor: { x: -1, y: 0.5 } },
+      { version: 1, mode: 'focal-cover', anchor: { x: 0.12345, y: 0.5 } },
+      { version: 1, mode: 'crop', anchor: { x: 0.2, y: 0.5 } },
+    ]) {
+      const input = recipeInput();
+      input.scenes[0].imageFraming = imageFraming as any;
+      expect(() => normalizeStudioProductionRecipeV1(input, ownerContext())).toThrow(/framing/i);
+    }
+    const video = recipeInput();
+    video.scenes = [{
+      ...video.scenes[0], imageStorage: undefined, imageDisplayGeometry: undefined,
+      videoStorage: { bucket: 'media', objectPath: 'owner-a/videos/00000000-0000-4000-8000-000000000002.mp4' },
+      imageFraming: { version: 1, mode: 'focal-cover', anchor: { x: 0.2, y: 0.5 } },
+    }];
+    expect(() => normalizeStudioProductionRecipeV1(video, ownerContext())).toThrow(/framing/i);
+
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const direct = [...recipeInput().scenes];
+    direct[0].imageFraming = { version: 1, mode: 'focal-cover', anchor: { x: 0.2, y: 0.5 } };
+    await expect(createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject({ title: 'forged', scenes: direct }))
+      .rejects.toThrow(/compilation authority/i);
   });
 
   it('keeps bounded Pexels provenance separate from Recipe V1 output identity', async () => {
@@ -264,6 +369,8 @@ describe('StudioProductionRecipeV1', () => {
       storage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000001.jpg' },
       sourceUrl: null,
       contentDigest: 'a'.repeat(64),
+      encodedDimensions: { width: 1200, height: 800 },
+      displayDimensions: { width: 1200, height: 800 },
       displayGeometryAuthority: { version: 1, reference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2099-01-01T00:00:00.000Z' },
     });
 

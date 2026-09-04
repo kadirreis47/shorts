@@ -416,6 +416,53 @@ describe('Studio canonical silent export', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it('keeps manual framing pending until Apply and supports explicit reset to inherited center', async () => {
+    saveStudioDraft({ ...silentDraft(), step: 'script' });
+    container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const button = (label: string) => Array.from(container!.querySelectorAll('button')).find((candidate) => candidate.textContent === label);
+    expect(container.textContent).toContain('Inherited center cover');
+    const appliedLeftBefore = (container.querySelector('[data-testid="image-framing-preview"] img') as HTMLImageElement).style.left;
+    await act(async () => { button('Adjust framing')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent).toContain('Pending — click or drag');
+    const previews = container.querySelectorAll('[data-testid="image-framing-preview"]');
+    const pending = previews[previews.length - 1] as HTMLDivElement;
+    pending.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, width: 100, height: 200, right: 100, bottom: 200, toJSON: () => ({}) });
+    pending.setPointerCapture = vi.fn();
+    const pointer = new MouseEvent('pointerdown', { bubbles: true, clientX: 10, clientY: 180 });
+    Object.defineProperty(pointer, 'pointerId', { value: 11 });
+    await act(async () => { pending.dispatchEvent(pointer); });
+    expect((previews[0].querySelector('img') as HTMLImageElement).style.left).toBe(appliedLeftBefore);
+    await act(async () => { button('Apply')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent).toContain('Anchor 0.35, 0.90');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+    expect(loadStudioDraft()?.scenes[0]).toMatchObject({
+      imageFraming: { version: 1, mode: 'focal-cover', anchor: { x: 0.35, y: 0.9 } },
+      imageFramingBinding: {
+        version: 1,
+        mediaIdentity: `media:${silentDraft().scenes[0].imageStorage!.objectPath}`,
+        contentDigest: 'a'.repeat(64),
+      },
+    });
+    await act(async () => { button('Reset to center')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent).toContain('Inherited center cover');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+    expect(loadStudioDraft()?.scenes[0].imageFramingBinding).toBeUndefined();
+    await act(async () => { button('Adjust framing')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => { button('Use center')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => { button('Apply')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+    expect(loadStudioDraft()?.scenes[0].imageFramingBinding).toBeUndefined();
+    await act(async () => { root.unmount(); });
+  });
+
   it('keeps a verified export current across spatial evidence success and failure', async () => {
     const fixture = await editingFixture();
     const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };

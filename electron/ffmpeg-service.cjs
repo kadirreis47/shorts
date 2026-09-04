@@ -10,7 +10,7 @@ const { ArtifactIntegrityError, hashFileSha256, revalidateVerifiedArtifact } = r
 const { createArtifactSnapshotStore } = require('./artifact-snapshot.cjs');
 const { isPackagedRuntime, resolveFFmpegRuntime } = require('./ffmpeg-runtime.cjs');
 const { resolveSupabaseAuthConfig } = require('./supabase-runtime-config.cjs');
-const { createImageDisplayGeometryAuthorityService, prepareImageDisplayGeometryExecution, authorizeImageDisplayGeometryArgs, privateImageIdentityFromSource } = require('./image-display-geometry-authority.cjs');
+const { createImageDisplayGeometryAuthorityService, prepareImageDisplayGeometryExecution, authorizeCanonicalImageIntent, authorizeImageDisplayGeometryArgs, privateImageIdentityFromSource } = require('./image-display-geometry-authority.cjs');
 
 const active = new Map();
 const materializationLocks = new Map();
@@ -504,6 +504,9 @@ async function createCanonicalRenderPlan(webContentsId, rawRequest, {
     ? requireIssuedSegment(webContentsId, request.outputResourceReference, owner, now())
     : requireApprovedDestination(webContentsId, request.outputPath, 'render', owner, now());
   const segmentPaths = request.intent.segmentReferences.map((reference) => requireIssuedSegment(webContentsId, reference, owner, now()));
+  // Framing provenance is checked against metadata returned by the live,
+  // owner-bound authority before any crop argv is compiled.
+  authorizeCanonicalImageIntent(request.intent.scenes, geometryAuthority, webContentsId);
   const compiled = compileCanonicalRenderRequest(request, { segmentPaths });
   const concatContent = compiled.args.includes('{{CONCAT_FILE}}') ? canonicalConcatContent(segmentPaths) : '';
   await validateCanonicalInputAcquisition(webContentsId, compiled, { geometryAuthority, supabaseUrl, probeInput, concatContent, trustedCanonicalFilters: true });

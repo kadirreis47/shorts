@@ -45,7 +45,7 @@ describe('semantic renderer to native-main render contract', () => {
     const createCanonicalRenderPlan = vi.fn(async (request: Record<string, unknown>) => {
       expect(request).not.toHaveProperty('args');
       expect(request).not.toHaveProperty('concatContent');
-      expect(request.intent).toMatchObject({ version: 1, kind: 'full' });
+      expect(request.intent).toMatchObject({ version: 3, kind: 'full' });
       return { version: 1 as const, reference: `crp1_${'A'.repeat(43)}`, expiresAt: '2099-01-01T00:00:00.000Z' };
     });
     const bridge = {
@@ -74,7 +74,7 @@ function manifest(assets: any[] = [], sceneAssets: string[][] = [[]], imageAutho
   const scenes = sceneAssets.map((assetIds, index) => ({
     id: `scene-${index}`, index, durationMs: durations[index], startMs: index * 1_000, endMs: (index + 1) * 1_000,
     overlapBeforeMs: 0, overlapAfterMs: 0, assetIds, cameraMotion: 'none', transition: { type: 'cut', durationMs: 0 },
-    imageGeometryAuthority: imageAuthority && assetIds.includes('image') ? { authorityReference: `idga1_${'A'.repeat(43)}`, mediaIdentity: `media:${ownerPath()}`, expectedOrientation: 'identity', contentDigest: 'a'.repeat(64) } : undefined,
+    imageGeometryAuthority: imageAuthority && assetIds.includes('image') ? { authorityReference: `idga1_${'A'.repeat(43)}`, mediaIdentity: `media:${ownerPath()}`, expectedOrientation: 'identity', contentDigest: 'a'.repeat(64), encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 } } : undefined,
   }));
   return {
     schemaVersion: '1.4', projectId: 'native-project', createdAt: '2026-09-04T00:00:00.000Z', durationMs,

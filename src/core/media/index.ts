@@ -24,3 +24,4 @@ export * from './mediaValidator';
 export * from './studioProductionRecipe';
 export * from './sceneComposition';
 export * from './imageDisplayGeometry';
+export * from './imageFraming';

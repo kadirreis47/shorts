@@ -53,6 +53,7 @@ describe('FFmpeg EXIF orientation pixel oracle', () => {
 });
 
 function execute(orientation: ImageEncodedToDisplayOrientation, mode: 'full' | 'segment'): number[] {
+  const dimensions = geometryDimensions(orientation);
   const filterArgs = mode === 'segment'
     ? ['-vf', '{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}}']
     : ['-filter_complex', '[0:v]{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}}[videoout]', '-map', '[videoout]'];
@@ -64,12 +65,20 @@ function execute(orientation: ImageEncodedToDisplayOrientation, mode: 'full' | '
     authorize(webContentsId: number, reference: string, identity: string, expectedOrientation: string, expectedDigest: string) {
       if (webContentsId !== 1) throw new Error('bad webContents');
       if (reference !== authorityReference || identity !== mediaIdentity || expectedOrientation !== orientation || expectedDigest !== contentDigest) throw new Error('bad authority');
-      return { geometry: { encodedToDisplay: orientation }, contentDigest };
+      return { geometry: { version: 1, mediaIdentity, encodedToDisplay: orientation, ...dimensions }, contentDigest };
     },
   };
-  const args = materializeImageDisplayGeometryArgs(raw, [{ inputIndex: 0, authorityReference, mediaIdentity, expectedOrientation: orientation, contentDigest }], service, 'https://project.supabase.co', { webContentsId: 1 })
+  const args = materializeImageDisplayGeometryArgs(raw, [{ inputIndex: 0, authorityReference, mediaIdentity, expectedOrientation: orientation, contentDigest, ...dimensions }], service, 'https://project.supabase.co', { webContentsId: 1 })
     .map((arg) => arg === privateUrl ? inputPath : arg);
   const result = spawnSync('ffmpeg', args, { encoding: null, maxBuffer: 1024 * 1024 });
   if (result.status !== 0) throw new Error(`FFmpeg oracle failed: ${String(result.stderr)}`);
   return [...result.stdout];
+}
+
+function geometryDimensions(orientation: ImageEncodedToDisplayOrientation) {
+  const swaps = ['transpose', 'rotate-90-cw', 'transverse', 'rotate-90-ccw'].includes(orientation);
+  return {
+    encodedDimensions: { width: 3, height: 2 },
+    displayDimensions: swaps ? { width: 2, height: 3 } : { width: 3, height: 2 },
+  };
 }

@@ -42,7 +42,11 @@ export async function createRenderFingerprint(
 function fingerprintableFFmpegCommand(command: ReturnType<typeof buildFFmpegCommand>): unknown {
   return {
     ...command,
-    imageGeometryAuthorities: command.imageGeometryAuthorities.map(({ authorityReference: _opaqueReference, ...authority }) => authority),
+    imageGeometryAuthorities: command.imageGeometryAuthorities.map(({
+      authorityReference: _opaqueReference,
+      framingBinding: _redundantBinding,
+      ...authority
+    }) => authority),
   };
 }
 

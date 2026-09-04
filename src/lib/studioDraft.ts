@@ -13,6 +13,11 @@ import { materializeCanonicalSceneIds } from './sceneIdentity';
 import { readUserScopedLocalStorage, removeUserScopedLocalStorage, writeUserScopedLocalStorage } from '@/persistence/userScopedStorage';
 import { canonicalizeStudioRecipeTransition } from '@/core/media/studioProductionRecipe';
 import { normalizeSceneCompositionOverride } from '@/core/media/sceneComposition';
+import {
+  imageFramingBindingFromHistoricalGeometry,
+  normalizeImageFraming,
+  normalizeImageFramingBinding,
+} from '@/core/media/imageFraming';
 
 export type StudioStep = 'topic' | 'script' | 'style' | 'voice' | 'render' | 'publish';
 export type StudioVoiceoverMode = 'elevenlabs' | 'browser' | 'none';
@@ -102,13 +107,37 @@ export function normalizeStudioDraft(draft: StudioDraft): StudioDraft {
     transition: canonicalizeStudioRecipeTransition(draft.transitionStyle),
   };
   const scenes = plannedScenes.map((scene, sceneIndex) => {
-    const { compositionOverride: _ignored, imageDisplayGeometry: _rawGeometry, ...canonical } = scene;
+    const {
+      compositionOverride: _ignored,
+      imageDisplayGeometry: _rawGeometry,
+      imageFraming: _rawFraming,
+      imageFramingBinding: _rawFramingBinding,
+      ...canonical
+    } = scene;
     const compositionOverride = scene.compositionOverride === undefined
       ? undefined
       : normalizeSceneCompositionOverride(scene.compositionOverride, compositionDefaults, sceneIndex);
+    let imageFraming;
+    let imageFramingBinding;
+    if (scene.imageFraming !== undefined && scene.imageStorage && !scene.videoStorage && !scene.videoUrl) {
+      try {
+        imageFraming = normalizeImageFraming(scene.imageFraming);
+        if (imageFraming) {
+          const mediaIdentity = `media:${scene.imageStorage.objectPath}`;
+          imageFramingBinding = scene.imageFramingBinding === undefined
+            ? imageFramingBindingFromHistoricalGeometry(scene.imageDisplayGeometry, mediaIdentity)
+            : normalizeImageFramingBinding(scene.imageFramingBinding, mediaIdentity);
+        }
+      } catch {
+        imageFraming = undefined;
+        imageFramingBinding = undefined;
+      }
+    }
     return {
       ...canonical,
       ...(compositionOverride ? { compositionOverride } : {}),
+      ...(imageFraming ? { imageFraming } : {}),
+      ...(imageFraming && imageFramingBinding ? { imageFramingBinding } : {}),
     };
   });
   let visualIntelligence: VisualIntelligencePlanningState | undefined;

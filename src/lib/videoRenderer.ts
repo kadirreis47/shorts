@@ -1,4 +1,5 @@
 import type { Scene } from '@/lib/types';
+import { deriveImageCoverCropWindow, type ImageFramingV1 } from '@/core/media/imageFraming';
 
 export type CaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type TransitionStyle = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
@@ -83,9 +84,27 @@ function drawImageCover(
   scale: number,
   panX: number = 0,
   panY: number = 0,
+  framing?: ImageFramingV1,
 ) {
   const iw = 'videoWidth' in img ? img.videoWidth : img.naturalWidth || img.width;
   const ih = 'videoHeight' in img ? img.videoHeight : img.naturalHeight || img.height;
+  if (framing) {
+    const crop = deriveImageCoverCropWindow({ width: iw, height: ih }, { width: w, height: h }, framing);
+    const drawW = w * scale;
+    const drawH = h * scale;
+    ctx.drawImage(
+      img,
+      crop.x * iw,
+      crop.y * ih,
+      crop.width * iw,
+      crop.height * ih,
+      x + (w - drawW) / 2 + panX,
+      y + (h - drawH) / 2 + panY,
+      drawW,
+      drawH,
+    );
+    return;
+  }
   const imgRatio = iw / ih;
   const canvasRatio = w / h;
   let drawW: number;
@@ -683,7 +702,7 @@ export async function renderVideo(
       if (media?.video) {
         drawImageCover(renderCtx, media.video, 0, 0, width, height, scale, panX, panY);
       } else if (media?.image) {
-        drawImageCover(renderCtx, media.image, 0, 0, width, height, scale, panX, panY);
+        drawImageCover(renderCtx, media.image, 0, 0, width, height, scale, panX, panY, currentScene.imageFraming);
       } else {
         drawGradientBg(renderCtx, width, height, currentSceneIndex, opts.accentColor);
       }
@@ -722,7 +741,7 @@ export async function renderVideo(
           if (prevMedia?.video) {
             drawImageCover(renderCtx, prevMedia.video, -width + slideX, 0, width, height, scale, panX, panY);
           } else if (prevMedia?.image) {
-            drawImageCover(renderCtx, prevMedia.image, -width + slideX, 0, width, height, scale, panX, panY);
+            drawImageCover(renderCtx, prevMedia.image, -width + slideX, 0, width, height, scale, panX, panY, scenes[prevSceneIndex].imageFraming);
           } else {
             drawGradientBg(renderCtx, width, height, prevSceneIndex, opts.accentColor);
           }
@@ -730,7 +749,7 @@ export async function renderVideo(
           if (currMedia?.video) {
             drawImageCover(renderCtx, currMedia.video, slideX, 0, width, height, scale, panX, panY);
           } else if (currMedia?.image) {
-            drawImageCover(renderCtx, currMedia.image, slideX, 0, width, height, scale, panX, panY);
+            drawImageCover(renderCtx, currMedia.image, slideX, 0, width, height, scale, panX, panY, currentScene.imageFraming);
           } else {
             drawGradientBg(renderCtx, width, height, currentSceneIndex, opts.accentColor);
           }
@@ -746,7 +765,7 @@ export async function renderVideo(
           if (currMedia?.video) {
             drawImageCover(renderCtx, currMedia.video, 0, 0, width, height, zoomScale * scale, panX, panY);
           } else if (currMedia?.image) {
-            drawImageCover(renderCtx, currMedia.image, 0, 0, width, height, zoomScale * scale, panX, panY);
+            drawImageCover(renderCtx, currMedia.image, 0, 0, width, height, zoomScale * scale, panX, panY, currentScene.imageFraming);
           }
           if (opts.showSubtitles) {
             drawCaption(renderCtx, currentScene, sceneElapsed, width, height, opts.captionTextColor ?? opts.textColor, opts.captionHighlightColor ?? opts.accentColor, opts.fontFamily, opts.captionStyle, textAlpha * fadeAlpha);
@@ -780,7 +799,7 @@ export async function renderVideo(
           if (currMedia?.video) {
             drawImageCover(renderCtx, currMedia.video, 0, 0, width, height, scale, panX, panY);
           } else if (currMedia?.image) {
-            drawImageCover(renderCtx, currMedia.image, 0, 0, width, height, scale, panX, panY);
+            drawImageCover(renderCtx, currMedia.image, 0, 0, width, height, scale, panX, panY, currentScene.imageFraming);
           }
           renderCtx.restore();
         } else if (opts.transitionStyle === 'whippan') {
@@ -794,7 +813,7 @@ export async function renderVideo(
             const offset = panOffset * (1 + w * 0.3);
             const currMedia = sceneMedia[currentSceneIndex];
             if (currMedia?.image) {
-              drawImageCover(renderCtx, currMedia.image, offset, 0, width, height, scale, panX, panY);
+              drawImageCover(renderCtx, currMedia.image, offset, 0, width, height, scale, panX, panY, currentScene.imageFraming);
             }
           }
           renderCtx.restore();

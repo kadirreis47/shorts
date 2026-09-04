@@ -32,7 +32,11 @@ export function buildFFmpegCommand(
       if (plan.input.kind === 'image') {
         if (plan.imageGeometryAuthority) {
           args.push('-noautorotate');
-          imageGeometryAuthorities.push({ inputIndex: index, ...plan.imageGeometryAuthority });
+          imageGeometryAuthorities.push({
+            inputIndex: index,
+            ...plan.imageGeometryAuthority,
+            ...(plan.imageFraming ? { framingBinding: plan.imageFramingBinding } : {}),
+          });
         }
         args.push('-framerate', String(fps), '-loop', '1', '-t', plan.durationSeconds, '-i', plan.input.source);
       }

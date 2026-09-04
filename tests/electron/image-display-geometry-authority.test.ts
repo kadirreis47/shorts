@@ -130,6 +130,8 @@ describe('native image display geometry execution authority', () => {
       mediaIdentity,
       expectedOrientation: 'transverse',
       contentDigest,
+      encodedDimensions: { width: 3, height: 2 },
+      displayDimensions: { width: 2, height: 3 },
     };
     const args = ['-noautorotate', '-framerate', '30', '-loop', '1', '-i', source, '-vf', '{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}},scale=2:3', 'out.mp4'];
     expect(materializeImageDisplayGeometryArgs(args, [declaration], service, 'https://project.supabase.co', { webContentsId }))
@@ -164,6 +166,8 @@ describe('native image display geometry execution authority', () => {
       mediaIdentity,
       expectedOrientation: 'transverse',
       contentDigest,
+      encodedDimensions: { width: 3, height: 2 },
+      displayDimensions: { width: 2, height: 3 },
     };
     const args = ['-noautorotate', '-loop', '1', '-i', source, '-vf', '{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}},scale=2:3'];
     const directory = await mkdtemp(join(tmpdir(), 'shortsflow-authority-test-'));

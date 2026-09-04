@@ -1,4 +1,15 @@
-import { normalizeTrustedImageDisplayGeometry, type TrustedImageDisplayGeometryV1 } from '@/core/media/imageDisplayGeometry';
+import {
+  normalizeTrustedImageDisplayGeometry,
+  type TrustedImageDisplayGeometryV1,
+} from '@/core/media/imageDisplayGeometry';
+import {
+  imageFramingBindingFromHistoricalGeometry,
+  imageFramingBindingMatchesTrustedGeometry,
+  normalizeImageFraming,
+  normalizeImageFramingBinding,
+  type ImageFramingBindingV1,
+  type ImageFramingV1,
+} from '@/core/media/imageFraming';
 import type { MediaStorageObject, Scene } from './types';
 
 export interface ImageGeometryHydrationResult {
@@ -17,20 +28,20 @@ export async function hydrateTrustedImageGeometry(
   const hydrated: Scene[] = [];
   for (const scene of scenes) {
     if (!scene.imageStorage || scene.videoStorage) {
-      hydrated.push({ ...scene, imageDisplayGeometry: undefined });
+      hydrated.push({ ...scene, imageDisplayGeometry: undefined, imageFraming: undefined, imageFramingBinding: undefined });
       continue;
     }
     const mediaIdentity = `media:${scene.imageStorage.objectPath}`;
     if (!options.force && scene.imageDisplayGeometry) {
       try {
         const trusted = normalizeTrustedImageDisplayGeometry(scene.imageDisplayGeometry, mediaIdentity);
-        hydrated.push({ ...scene, imageDisplayGeometry: trusted });
+        hydrated.push(attachResolvedGeometry(scene, trusted));
         cache.set(scene.imageStorage.objectPath, trusted);
         continue;
       } catch { /* Expired or malformed authority is unresolved and retried below. */ }
     }
     if (failed.has(scene.imageStorage.objectPath)) {
-      hydrated.push({ ...scene, imageDisplayGeometry: undefined });
+      hydrated.push(withoutLiveGeometry(scene));
       continue;
     }
     try {
@@ -40,10 +51,10 @@ export async function hydrateTrustedImageGeometry(
         geometry = normalizeTrustedImageDisplayGeometry(geometry, mediaIdentity);
         cache.set(scene.imageStorage.objectPath, geometry);
       }
-      hydrated.push({ ...scene, imageDisplayGeometry: geometry });
+      hydrated.push(attachResolvedGeometry(scene, geometry));
     } catch {
       failed.add(scene.imageStorage.objectPath);
-      hydrated.push({ ...scene, imageDisplayGeometry: undefined });
+      hydrated.push(withoutLiveGeometry(scene));
     }
   }
   return Object.freeze({ scenes: hydrated, failedMedia: Object.freeze([...failed]) });
@@ -69,8 +80,53 @@ export function mergeImageGeometryHydration(
     if (!original || !result || !scene.imageStorage || scene.videoStorage
       || original.imageStorage?.objectPath !== scene.imageStorage.objectPath
       || result.imageStorage?.objectPath !== scene.imageStorage.objectPath) return scene;
-    return { ...scene, imageDisplayGeometry: result.imageDisplayGeometry };
+    if (result.imageDisplayGeometry === undefined) return withoutLiveGeometry(scene);
+    try {
+      const geometry = normalizeTrustedImageDisplayGeometry(result.imageDisplayGeometry, `media:${scene.imageStorage.objectPath}`);
+      return attachResolvedGeometry(scene, geometry);
+    } catch {
+      return withoutLiveGeometry(scene);
+    }
   });
+}
+
+function framingState(scene: Scene): { readonly framing: ImageFramingV1; readonly binding: ImageFramingBindingV1 } {
+  if (!scene.imageStorage || scene.videoStorage || scene.imageFraming === undefined) throw new Error('Image framing state is unavailable.');
+  const mediaIdentity = `media:${scene.imageStorage.objectPath}`;
+  const framing = normalizeImageFraming(scene.imageFraming);
+  if (!framing) throw new Error('Image framing state is redundant.');
+  const binding = scene.imageFramingBinding === undefined
+    ? imageFramingBindingFromHistoricalGeometry(scene.imageDisplayGeometry, mediaIdentity)
+    : normalizeImageFramingBinding(scene.imageFramingBinding, mediaIdentity);
+  return Object.freeze({ framing, binding });
+}
+
+function attachResolvedGeometry(scene: Scene, geometry: TrustedImageDisplayGeometryV1): Scene {
+  if (!scene.imageStorage || scene.videoStorage) {
+    return { ...scene, imageDisplayGeometry: undefined, imageFraming: undefined, imageFramingBinding: undefined };
+  }
+  if (scene.imageFraming === undefined) {
+    return { ...scene, imageDisplayGeometry: geometry, imageFraming: undefined, imageFramingBinding: undefined };
+  }
+  try {
+    const state = framingState(scene);
+    if (!imageFramingBindingMatchesTrustedGeometry(state.binding, geometry, `media:${scene.imageStorage.objectPath}`)) throw new Error('Image framing binding changed.');
+    return { ...scene, imageDisplayGeometry: geometry, imageFraming: state.framing, imageFramingBinding: state.binding };
+  } catch {
+    return { ...scene, imageDisplayGeometry: geometry, imageFraming: undefined, imageFramingBinding: undefined };
+  }
+}
+
+function withoutLiveGeometry(scene: Scene): Scene {
+  if (!scene.imageStorage || scene.videoStorage || scene.imageFraming === undefined) {
+    return { ...scene, imageDisplayGeometry: undefined, imageFraming: undefined, imageFramingBinding: undefined };
+  }
+  try {
+    const state = framingState(scene);
+    return { ...scene, imageDisplayGeometry: undefined, imageFraming: state.framing, imageFramingBinding: state.binding };
+  } catch {
+    return { ...scene, imageDisplayGeometry: undefined, imageFraming: undefined, imageFramingBinding: undefined };
+  }
 }
 
 export function commitImageGeometryHydration(input: {

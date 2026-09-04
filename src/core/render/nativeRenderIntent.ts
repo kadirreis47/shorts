@@ -4,6 +4,7 @@ import { buildCanonicalSceneExecutionPlan } from './canonicalSceneExecutionPlan'
 import { buildCanonicalSubtitleRenderPlan } from './subtitleRenderBuilder';
 import type { FFmpegImageGeometryAuthorityDeclaration } from './ffmpegTypes';
 import type { RenderPreset } from './types';
+import type { ImageFramingBindingV1, ImageFramingV1 } from '@/core/media/imageFraming';
 
 export interface CanonicalNativeEncodingIntent {
   readonly videoCodec: RenderPreset['videoCodec'];
@@ -34,7 +35,7 @@ export interface CanonicalNativeSceneIntent {
   readonly cameraMotion: MediaScene['cameraMotion'];
   readonly source: Readonly<
     | { kind: 'color'; paletteIndex: number }
-    | { kind: 'private-image'; url: string; geometry: FFmpegImageGeometryAuthorityDeclaration }
+    | { kind: 'private-image'; url: string; geometry: Omit<FFmpegImageGeometryAuthorityDeclaration, 'framingBinding'>; framing?: ImageFramingV1; framingBinding?: ImageFramingBindingV1 }
     | { kind: 'external-video'; url: string }
   >;
 }
@@ -50,7 +51,7 @@ export interface CanonicalNativeAudioTrackIntent {
 }
 
 export interface CanonicalNativeRenderIntent {
-  readonly version: 1;
+  readonly version: 3;
   readonly kind: 'full' | 'segment' | 'concat-segments';
   readonly width: number;
   readonly height: number;
@@ -99,7 +100,7 @@ function buildIntent(
   });
   const watermark = normalizeCanonicalBrandingConfiguration(manifest.branding).watermark;
   return {
-    version: 1,
+    version: 3,
     kind,
     width: manifest.render.width,
     height: manifest.render.height,
@@ -134,7 +135,15 @@ function sceneIntent(manifest: RenderManifest, preset: RenderPreset, scene: Medi
     return {
       durationMs: execution.durationMs,
       cameraMotion: scene.cameraMotion,
-      source: { kind: 'private-image', url: execution.input.source, geometry: { inputIndex: 0, ...execution.imageGeometryAuthority } },
+      source: {
+        kind: 'private-image',
+        url: execution.input.source,
+        geometry: { inputIndex: 0, ...execution.imageGeometryAuthority },
+        ...(execution.imageFraming ? {
+          framing: execution.imageFraming,
+          framingBinding: execution.imageFramingBinding!,
+        } : {}),
+      },
     };
   }
   return { durationMs: execution.durationMs, cameraMotion: 'none', source: { kind: 'external-video', url: execution.input.source } };

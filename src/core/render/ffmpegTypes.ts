@@ -34,6 +34,10 @@ export interface FFmpegImageGeometryAuthorityDeclaration {
   mediaIdentity: string;
   expectedOrientation: import('@/core/media/imageDisplayGeometry').ImageEncodedToDisplayOrientation;
   contentDigest: string;
+  encodedDimensions: import('@/core/media/imageFraming').ImageFramingDimensions;
+  displayDimensions: import('@/core/media/imageFraming').ImageFramingDimensions;
+  /** Present only for meaningful framing; compared to main-resolved geometry before execution. */
+  framingBinding?: import('@/core/media/imageFraming').ImageFramingBindingV1;
 }
 
 export interface FFmpegProgressPayload {

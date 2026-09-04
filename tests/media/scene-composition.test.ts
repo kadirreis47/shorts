@@ -5,6 +5,7 @@ import {
   createAssetProviderEngine,
   createMediaEngine,
   createImageDisplayGeometry,
+  imageFramingBindingFromTrustedGeometry,
   normalizeStudioProductionRecipeV1,
   resolveEffectiveSceneComposition,
   setSceneCompositionOverride,
@@ -136,19 +137,33 @@ describe('scene-local canonical composition', () => {
     expect(isStudioOutputRevisionCurrent(completedRevision, JSON.stringify(canonicalStudioCompositionOutput(rotated.scenes, DEFAULTS)))).toBe(false);
   });
 
-  it('keeps identity geometry metadata changes output-equivalent and artifact-current', async () => {
+  it('invalidates identity and freshness when immutable encoded dimensions change', async () => {
     const first = recipeInput();
     const second = structuredClone(first);
     const path = first.scenes[0].imageStorage!.objectPath;
     second.scenes[0].imageDisplayGeometry = trustedGeometry(`media:${path}`, 600, 400, 'identity');
     const firstRecipe = normalizeStudioProductionRecipeV1(first, ownerContext());
     const secondRecipe = normalizeStudioProductionRecipeV1(second, ownerContext());
-    expect(secondRecipe.identity).toBe(firstRecipe.identity);
+    expect(secondRecipe.identity).not.toBe(firstRecipe.identity);
     const firstRevision = JSON.stringify(canonicalStudioCompositionOutput(first.scenes, DEFAULTS));
     const secondRevision = JSON.stringify(canonicalStudioCompositionOutput(second.scenes, DEFAULTS));
-    expect(isStudioOutputRevisionCurrent(firstRevision, secondRevision)).toBe(true);
+    expect(isStudioOutputRevisionCurrent(firstRevision, secondRevision)).toBe(false);
     const [firstBuild, secondBuild] = await Promise.all([build(first), build(second)]);
-    expect(await fingerprint(secondBuild.manifest)).toBe(await fingerprint(firstBuild.manifest));
+    expect(await fingerprint(secondBuild.manifest)).not.toBe(await fingerprint(firstBuild.manifest));
+  });
+
+  it('normalizes exact-center framing out of Studio freshness while meaningful framing stales it', () => {
+    const baseline = recipeInput();
+    const centered = structuredClone(baseline);
+    centered.scenes[0].imageFraming = { version: 1, mode: 'focal-cover', anchor: { x: 0.5, y: 0.5 } };
+    const framed = structuredClone(baseline);
+    framed.scenes[0].imageFraming = { version: 1, mode: 'focal-cover', anchor: { x: 0.1, y: 0.9 } };
+    framed.scenes[0].imageFramingBinding = imageFramingBindingFromTrustedGeometry(framed.scenes[0].imageDisplayGeometry!);
+
+    expect(canonicalStudioCompositionOutput(centered.scenes, DEFAULTS))
+      .toEqual(canonicalStudioCompositionOutput(baseline.scenes, DEFAULTS));
+    expect(canonicalStudioCompositionOutput(framed.scenes, DEFAULTS))
+      .not.toEqual(canonicalStudioCompositionOutput(baseline.scenes, DEFAULTS));
   });
 
   it('stales Recipe, scene, render, and Studio freshness when exact private image bytes change', async () => {
@@ -422,7 +437,7 @@ describe('scene-local canonical composition', () => {
       projectId: input.projectId,
       title: input.title,
       scenes: [...recipeInput().scenes],
-      sceneImageGeometryAuthorities: [{ authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', mediaIdentity: `media:${input.scenes[0].imageStorage!.objectPath}`, expectedOrientation: 'rotate-90-cw', contentDigest: 'a'.repeat(64) }, null, null],
+      sceneImageGeometryAuthorities: [{ authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', mediaIdentity: `media:${input.scenes[0].imageStorage!.objectPath}`, expectedOrientation: 'rotate-90-cw', contentDigest: 'a'.repeat(64), encodedDimensions: { width: 1200, height: 800 }, displayDimensions: { width: 800, height: 1200 } }, null, null],
     })).rejects.toThrow(/compilation authority is invalid/i);
   });
 

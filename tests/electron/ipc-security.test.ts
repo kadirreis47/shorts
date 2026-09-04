@@ -177,7 +177,7 @@ function semanticRenderRequest(outputPath: string) {
   return {
     operation: 'full-render', jobId: 'job-1', outputPath,
     intent: {
-      version: 1, kind: 'full', width: 160, height: 90, durationMs: 100,
+      version: 3, kind: 'full', width: 160, height: 90, durationMs: 100,
       scenes: [{ durationMs: 100, cameraMotion: 'none', source: { kind: 'color', paletteIndex: 0 } }], sceneDurationsMs: [100],
       transitions: [{ type: 'cut', overlapMs: 0 }], segmentReferences: [], branding: null, subtitleContent: '', audioTracks: [],
       audioSettings: { masterGain: 1, targetLufs: -14, duckingAttackMs: 25, duckingReleaseMs: 250 },

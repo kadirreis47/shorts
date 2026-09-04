@@ -63,6 +63,16 @@ import {
 } from '@/lib/manualSceneVideoImport';
 import { useAuthSessionStore } from '@/auth/session';
 import { normalizeTrustedImageDisplayGeometry } from '@/core/media/imageDisplayGeometry';
+import {
+  imageFramingBindingEqual,
+  imageFramingBindingFromTrustedGeometry,
+  imageFramingBindingMatchesTrustedGeometry,
+  imageFramingEqual,
+  normalizeImageFramingBinding,
+  type ImageFramingBindingV1,
+  type ImageFramingV1,
+} from '@/core/media/imageFraming';
+import { ImageFramingPreview } from '@/components/studio/ImageFramingPreview';
 
 interface StudioProps {
   channels: CanonicalChannelIdentity[];
@@ -71,6 +81,46 @@ interface StudioProps {
 }
 
 type Step = StudioStep;
+
+interface ManualImageFramingSession {
+  readonly sceneId: string;
+  readonly mediaObjectPath: string;
+  readonly contentDigest: string;
+  readonly orientation: string;
+  readonly displayWidth: number;
+  readonly displayHeight: number;
+  readonly initial?: ImageFramingV1;
+  readonly initialBinding?: ImageFramingBindingV1;
+  readonly approvalBinding: ImageFramingBindingV1;
+  readonly pending?: ImageFramingV1;
+}
+
+function trustedSceneImageGeometry(scene: Scene) {
+  if (!scene.imageStorage || scene.videoStorage || scene.videoUrl || !scene.imageDisplayGeometry) return null;
+  try {
+    return normalizeTrustedImageDisplayGeometry(scene.imageDisplayGeometry, `media:${scene.imageStorage.objectPath}`);
+  } catch {
+    return null;
+  }
+}
+
+function isManualImageFramingSessionCurrent(session: ManualImageFramingSession, scenes: readonly Scene[]): boolean {
+  const scene = scenes.find((candidate) => candidate.sceneId === session.sceneId);
+  const geometry = scene ? trustedSceneImageGeometry(scene) : null;
+  try {
+    return Boolean(scene?.imageStorage && scene.imageUrl && geometry
+      && scene.imageStorage.objectPath === session.mediaObjectPath
+      && geometry.contentDigest === session.contentDigest
+      && geometry.encodedToDisplay === session.orientation
+      && geometry.displayDimensions.width === session.displayWidth
+      && geometry.displayDimensions.height === session.displayHeight
+      && imageFramingBindingMatchesTrustedGeometry(session.approvalBinding, geometry, `media:${scene.imageStorage.objectPath}`)
+      && imageFramingEqual(scene.imageFraming, session.initial)
+      && imageFramingBindingEqual(scene.imageFramingBinding, session.initialBinding));
+  } catch {
+    return false;
+  }
+}
 
 function defaultChannelId(channels: readonly CanonicalChannelIdentity[]) {
   return channels.length === 1 ? channels[0].id : '';
@@ -331,6 +381,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [script, setScript] = useState('');
   const [cta, setCta] = useState('');
   const [scenes, setScenes] = useState<Scene[]>([]);
+  const [manualImageFraming, setManualImageFraming] = useState<ManualImageFramingSession | null>(null);
   const scenesRef = useRef<Scene[]>([]);
   // No UI in Slice 1; preserve advisory plans across draft hydration for later Visual Intelligence slices.
   const [visualIntelligence, setVisualIntelligence] = useState<VisualIntelligencePlanningState | undefined>();
@@ -370,6 +421,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   useEffect(() => { visualPlanningRef.current = visualIntelligence; }, [visualIntelligence]);
   useEffect(() => { directorProjectIdRef.current = directorProjectId; }, [directorProjectId]);
 
+  useEffect(() => {
+    setManualImageFraming((session) => session && isManualImageFramingSessionCurrent(session, scenes) ? session : null);
+  }, [scenes]);
+  useEffect(() => { setManualImageFraming(null); }, [authenticatedUserId, directorProjectId]);
+
   // Spatial evidence is session-only and remains visible only while its exact
   // project, scene/order, and media binding is current.
   useEffect(() => {
@@ -398,6 +454,70 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       && visualSessionEpoch.current === epoch
       && current[sceneIndex]?.sceneId === expected.sceneId
       && current[sceneIndex] === expected;
+  }
+
+  function beginManualImageFraming(scene: Scene): void {
+    const geometry = trustedSceneImageGeometry(scene);
+    if (!scene.imageStorage || !scene.imageUrl || !geometry) return;
+    const mediaIdentity = `media:${scene.imageStorage.objectPath}`;
+    let initialBinding: ImageFramingBindingV1 | undefined;
+    try {
+      initialBinding = scene.imageFraming === undefined
+        ? undefined
+        : normalizeImageFramingBinding(scene.imageFramingBinding, mediaIdentity);
+      if (initialBinding && !imageFramingBindingMatchesTrustedGeometry(initialBinding, geometry, mediaIdentity)) return;
+    } catch { return; }
+    const approvalBinding = imageFramingBindingFromTrustedGeometry(geometry, mediaIdentity);
+    setManualImageFraming({
+      sceneId: scene.sceneId,
+      mediaObjectPath: scene.imageStorage.objectPath,
+      contentDigest: geometry.contentDigest,
+      orientation: geometry.encodedToDisplay,
+      displayWidth: geometry.displayDimensions.width,
+      displayHeight: geometry.displayDimensions.height,
+      initial: scene.imageFraming,
+      initialBinding,
+      approvalBinding,
+      pending: scene.imageFraming,
+    });
+  }
+
+  function applyManualImageFraming(): void {
+    const session = manualImageFraming;
+    if (!session) return;
+    setScenes((current) => {
+      if (!isManualImageFramingSessionCurrent(session, current)) return current;
+      const index = current.findIndex((scene) => scene.sceneId === session.sceneId);
+      const scene = current[index];
+      if (!scene || !imageFramingEqual(scene.imageFraming, session.initial)
+        || !imageFramingBindingEqual(scene.imageFramingBinding, session.initialBinding)) return current;
+      const next = [...current];
+      if (session.pending) {
+        if (imageFramingEqual(scene.imageFraming, session.pending)
+          && imageFramingBindingEqual(scene.imageFramingBinding, session.approvalBinding)) return current;
+        next[index] = { ...scene, imageFraming: session.pending, imageFramingBinding: session.approvalBinding };
+      }
+      else {
+        if (scene.imageFraming === undefined && scene.imageFramingBinding === undefined) return current;
+        const { imageFraming: _framing, imageFramingBinding: _binding, ...centered } = scene;
+        next[index] = centered;
+      }
+      return next;
+    });
+    setManualImageFraming(null);
+  }
+
+  function resetManualImageFraming(sceneId: string): void {
+    setScenes((current) => {
+      const index = current.findIndex((scene) => scene.sceneId === sceneId);
+      const scene = current[index];
+      if (!scene || scene.imageFraming === undefined && scene.imageFramingBinding === undefined) return current;
+      const { imageFraming: _framing, imageFramingBinding: _binding, ...centered } = scene;
+      const next = [...current];
+      next[index] = centered;
+      return next;
+    });
+    setManualImageFraming(null);
   }
 
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('karaoke');
@@ -906,7 +1026,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setScript(result.script);
       invalidateNarration();
       setCta(result.cta);
-      setScenes(assignNewCanonicalSceneIds(result.scenes ?? []));
+      setScenes(assignNewCanonicalSceneIds((result.scenes ?? []).map(({ imageFraming: _framing, imageFramingBinding: _binding, imageDisplayGeometry: _geometry, ...scene }) => scene)));
       setStep('script');
     } catch (e) {
       if (directorProjectIdRef.current === projectId && visualSessionEpoch.current === sessionEpoch) {
@@ -973,6 +1093,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             imageUrl: result.imageUrl,
             imageStorage: result.media,
             imageDisplayGeometry: result.imageDisplayGeometry,
+            imageFraming: undefined,
+            imageFramingBinding: undefined,
             videoUrl: undefined,
             videoStorage: undefined,
             imageProvenance: undefined,
@@ -1056,7 +1178,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
                 || !isCurrentSceneOperation(projectId, sessionEpoch, current, index, scene)) return current;
               const next = [...current];
-              next[index] = { ...scene, imageStorage: ingested.media, imageDisplayGeometry: ingested.imageDisplayGeometry, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance, videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined };
+              next[index] = { ...scene, imageStorage: ingested.media, imageDisplayGeometry: ingested.imageDisplayGeometry, imageFraming: undefined, imageFramingBinding: undefined, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance, videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined };
               return next;
             });
             succeeded += 1;
@@ -1068,7 +1190,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
                 || !isCurrentSceneOperation(projectId, sessionEpoch, current, index, scene)) return current;
               const next = [...current];
-              next[index] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageDisplayGeometry: undefined, imageUrl: undefined, imageProvenance: undefined };
+              next[index] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageDisplayGeometry: undefined, imageFraming: undefined, imageFramingBinding: undefined, imageUrl: undefined, imageProvenance: undefined };
               return next;
             });
             succeeded += 1;
@@ -1391,7 +1513,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           if (!currentScene || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, current) || currentScene.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return current;
           return current.map((item) => item.sceneId !== sceneId ? item : {
             ...item, imageStorage: ingested.media, imageDisplayGeometry: ingested.imageDisplayGeometry, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance,
-            videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined,
+            imageFraming: undefined, imageFramingBinding: undefined, videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined,
           });
         });
       } else {
@@ -1402,7 +1524,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           if (!currentScene || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, current) || currentScene.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return current;
           return current.map((item) => item.sceneId !== sceneId ? item : {
             ...item, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance,
-            imageStorage: undefined, imageDisplayGeometry: undefined, imageUrl: undefined, imageProvenance: undefined,
+            imageStorage: undefined, imageDisplayGeometry: undefined, imageFraming: undefined, imageFramingBinding: undefined, imageUrl: undefined, imageProvenance: undefined,
           });
         });
       }
@@ -1623,6 +1745,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           imageUrl: result.imageUrl,
           imageStorage: result.media,
           imageDisplayGeometry: result.imageDisplayGeometry,
+          imageFraming: undefined,
+          imageFramingBinding: undefined,
           videoUrl: undefined,
           videoStorage: undefined,
           imageProvenance: undefined,
@@ -1687,6 +1811,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           imageUrl: upload.imageUrl,
           imageStorage: upload.media,
           imageDisplayGeometry: upload.imageDisplayGeometry,
+          imageFraming: undefined,
+          imageFramingBinding: undefined,
           videoUrl: undefined,
           videoStorage: undefined,
           imageProvenance: undefined,
@@ -1756,6 +1882,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           imageUrl: undefined,
           imageStorage: undefined,
           imageDisplayGeometry: undefined,
+          imageFraming: undefined,
+          imageFramingBinding: undefined,
           imageProvenance: undefined,
           videoProvenance: undefined,
         };
@@ -1865,6 +1993,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 ...scene,
                 imageStorage: ingested.media,
                 imageDisplayGeometry: ingested.imageDisplayGeometry,
+                imageFraming: undefined,
+                imageFramingBinding: undefined,
                 imageUrl: ingested.previewUrl,
                 imageProvenance: ingested.provenance,
                 videoStorage: undefined,
@@ -1940,7 +2070,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
                 || !isCurrentSceneOperation(projectId, sessionEpoch, current, i, scene)) return current;
               const next = [...current];
-              next[i] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageDisplayGeometry: undefined, imageUrl: undefined, imageProvenance: undefined };
+              next[i] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageDisplayGeometry: undefined, imageFraming: undefined, imageFramingBinding: undefined, imageUrl: undefined, imageProvenance: undefined };
               attached = true;
               return next;
             });
@@ -2525,9 +2655,50 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                       </div>
                     )}
                     {s.imageUrl && !s.videoUrl && (
-                      <div className="mt-2 overflow-hidden rounded-lg">
-                        <img src={s.imageUrl} alt="Scene visual" className="h-24 w-full object-cover" />
-                      </div>
+                      (() => {
+                        const geometry = trustedSceneImageGeometry(s);
+                        const adjustment = manualImageFraming?.sceneId === s.sceneId ? manualImageFraming : null;
+                        if (!geometry) return <div className="mt-2 overflow-hidden rounded-lg"><img src={s.imageUrl} alt="Scene visual" className="h-24 w-full object-cover" /></div>;
+                        return <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2">
+                          <div className="flex items-start gap-3">
+                            <div>
+                              <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-400">{t('studio.framingApplied')}</p>
+                              <ImageFramingPreview
+                                src={s.imageUrl}
+                                alt="Applied scene framing"
+                                displayDimensions={geometry.displayDimensions}
+                                framing={s.imageFraming}
+                                className="h-40 w-[90px] rounded-md"
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              {!adjustment ? <>
+                                <p className="text-xs text-slate-600">{s.imageFraming ? `${t('studio.framingAnchor')} ${s.imageFraming.anchor.x.toFixed(2)}, ${s.imageFraming.anchor.y.toFixed(2)}` : t('studio.framingInheritedCenter')}</p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <button type="button" onClick={() => beginManualImageFraming(s)} className="rounded-md border border-violet-300 px-2 py-1 text-xs text-violet-700 hover:bg-violet-50">{t('studio.framingAdjust')}</button>
+                                  {s.imageFraming && <button type="button" onClick={() => resetManualImageFraming(s.sceneId)} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">{t('studio.framingReset')}</button>}
+                                </div>
+                              </> : <>
+                                <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-violet-600">{t('studio.framingPending')}</p>
+                                <ImageFramingPreview
+                                  src={s.imageUrl}
+                                  alt="Pending scene framing"
+                                  displayDimensions={geometry.displayDimensions}
+                                  framing={adjustment.pending}
+                                  editable
+                                  onChange={(pending) => setManualImageFraming((current) => current?.sceneId === s.sceneId ? { ...current, pending } : current)}
+                                  className="h-52 w-[117px] rounded-md ring-1 ring-violet-300"
+                                />
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <button type="button" onClick={applyManualImageFraming} className="rounded-md bg-violet-700 px-2 py-1 text-xs font-medium text-white hover:bg-violet-800">{t('studio.framingApply')}</button>
+                                  <button type="button" onClick={() => setManualImageFraming((current) => current?.sceneId === s.sceneId ? { ...current, pending: undefined } : current)} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">{t('studio.framingCenter')}</button>
+                                  <button type="button" onClick={() => setManualImageFraming(null)} className="rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">{t('studio.framingCancel')}</button>
+                                </div>
+                              </>}
+                            </div>
+                          </div>
+                        </div>;
+                      })()
                     )}
                     {s.imageStorage && !s.videoStorage && (() => {
                       const sceneId = s.sceneId;

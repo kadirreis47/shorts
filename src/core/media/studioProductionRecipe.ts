@@ -6,6 +6,14 @@ import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment 
 import { normalizeSceneCompositionOverride, resolveEffectiveSceneComposition } from './sceneComposition';
 import { isCanonicalSceneId } from '@/lib/sceneIdentity';
 import { normalizeTrustedImageDisplayGeometry, type ImageDisplayGeometryExecutionAuthorityV1, type ImageEncodedToDisplayOrientation } from './imageDisplayGeometry';
+import {
+  imageFramingBindingMatchesTrustedGeometry,
+  normalizeImageFraming,
+  normalizeImageFramingBinding,
+  type ImageFramingBindingV1,
+  type ImageFramingDimensions,
+  type ImageFramingV1,
+} from './imageFraming';
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
@@ -71,6 +79,9 @@ export interface StudioProductionRecipeSceneV1 {
   readonly keywords: readonly string[];
   /** Optional canonical override; absent fields inherit recipe composition independently. */
   readonly compositionOverride?: SceneCompositionOverride;
+  readonly imageFraming?: ImageFramingV1;
+  /** Immutable, non-authorizing provenance for meaningful image framing. */
+  readonly imageFramingBinding?: ImageFramingBindingV1;
   readonly media: StudioRecipeVisualMediaV1 | null;
 }
 
@@ -86,6 +97,9 @@ export interface StudioRecipeVisualMediaV1 {
   readonly displayGeometryAuthority?: ImageDisplayGeometryExecutionAuthorityV1;
   /** Exact validated encoded-byte identity; included in Recipe output identity. */
   readonly contentDigest?: string;
+  /** Immutable geometry identity; never an execution capability. */
+  readonly encodedDimensions?: ImageFramingDimensions;
+  readonly displayDimensions?: ImageFramingDimensions;
 }
 
 export interface StudioRecipeNarrationV1 {
@@ -279,6 +293,8 @@ export function compileStudioProductionRecipeV1(
           mediaIdentity: `media:${scene.media.storage.objectPath}`,
           expectedOrientation: (scene.media.displayOrientation ?? 'identity') as ImageEncodedToDisplayOrientation,
           contentDigest: scene.media.contentDigest!,
+          encodedDimensions: scene.media.encodedDimensions!,
+          displayDimensions: scene.media.displayDimensions!,
         }
       : null).map((authority) => authority ? Object.freeze(authority) : null)),
     branding: recipe.branding,
@@ -325,7 +341,7 @@ function recipeMotionToCanonical(motion: StudioRecipeMotion): CanonicalMotionMod
 export function recipeIdentity(recipe: StudioProductionRecipeV1): string {
   const serialized = stableStringify({
     ...recipe,
-    scenes: recipe.scenes.map(({ canonicalSceneId: _canonicalSceneId, ...scene }) => ({
+    scenes: recipe.scenes.map(({ canonicalSceneId: _canonicalSceneId, imageFramingBinding: _redundantBinding, ...scene }) => ({
       ...scene,
       media: scene.media ? { ...scene.media, provenance: undefined, displayGeometryAuthority: undefined } : null,
     })),
@@ -354,6 +370,24 @@ function normalizeScenes(
     const compositionOverride = scene.compositionOverride === undefined
       ? undefined
       : normalizeSceneCompositionOverride(scene.compositionOverride, defaults, order);
+    const media = normalizeSceneMedia(scene, ownerId);
+    let imageFraming: ImageFramingV1 | undefined;
+    let imageFramingBinding: ImageFramingBindingV1 | undefined;
+    if (scene.imageFraming !== undefined) {
+      if (media?.type !== 'image' || !media.storage || !media.displayGeometryAuthority || !media.contentDigest) {
+        throw new Error(`Scene ${order + 1} image framing requires a verified private image.`);
+      }
+      imageFraming = normalizeImageFraming(scene.imageFraming);
+    }
+    if (imageFraming) {
+      const mediaIdentity = `media:${media!.storage!.objectPath}`;
+      imageFramingBinding = normalizeImageFramingBinding(scene.imageFramingBinding, mediaIdentity);
+      if (!imageFramingBindingMatchesTrustedGeometry(imageFramingBinding, scene.imageDisplayGeometry, mediaIdentity)) {
+        throw new Error(`Scene ${order + 1} image framing binding does not match its verified image geometry.`);
+      }
+    } else if (scene.imageFramingBinding !== undefined) {
+      throw new Error(`Scene ${order + 1} image framing binding requires meaningful image framing.`);
+    }
     return {
       id: `scene-${order + 1}`,
       canonicalSceneId,
@@ -368,7 +402,9 @@ function normalizeScenes(
       characterRef: optionalText(scene.characterRef),
       keywords: [...new Set((scene.keywords ?? []).map((value) => String(value).trim()).filter(Boolean))],
       ...(compositionOverride ? { compositionOverride } : {}),
-      media: normalizeSceneMedia(scene, ownerId),
+      ...(imageFraming ? { imageFraming } : {}),
+      ...(imageFramingBinding ? { imageFramingBinding } : {}),
+      media,
     };
   });
   if (!normalized.length) throw new Error('A production recipe requires at least one scene.');
@@ -394,6 +430,7 @@ function normalizeSceneMedia(scene: Scene, ownerId: string): StudioRecipeVisualM
       ...(displayGeometry && displayGeometry.encodedToDisplay !== 'identity' ? { displayOrientation: displayGeometry.encodedToDisplay } : {}),
       ...(displayGeometry ? { displayGeometryAuthority: displayGeometry.executionAuthority } : {}),
       ...(displayGeometry ? { contentDigest: displayGeometry.contentDigest } : {}),
+      ...(displayGeometry ? { encodedDimensions: displayGeometry.encodedDimensions, displayDimensions: displayGeometry.displayDimensions } : {}),
       ...(provenance ? { provenance: normalizePexelsProvenance(provenance, mediaType) } : {}),
     };
   }
@@ -447,6 +484,8 @@ function recipeSceneToScene(scene: StudioProductionRecipeSceneV1): Scene {
     characterRef: scene.characterRef ?? undefined,
     keywords: [...scene.keywords],
     ...(scene.compositionOverride ? { compositionOverride: { ...scene.compositionOverride } } : {}),
+    ...(scene.imageFraming ? { imageFraming: scene.imageFraming } : {}),
+    ...(scene.imageFramingBinding ? { imageFramingBinding: scene.imageFramingBinding } : {}),
     ...(scene.media?.type === 'video' ? {
       videoStorage: scene.media.storage ?? undefined,
       videoUrl: scene.media.sourceUrl ?? undefined,

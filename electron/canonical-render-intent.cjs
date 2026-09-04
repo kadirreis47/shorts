@@ -36,7 +36,7 @@ function validateCanonicalRenderRequest(value) {
 
 function normalizeIntent(value, expectedKind) {
   const input = strictObject(value, ['version', 'kind', 'width', 'height', 'durationMs', 'scenes', 'sceneDurationsMs', 'transitions', 'segmentReferences', 'branding', 'subtitleContent', 'audioTracks', 'audioSettings', 'encoding'], 'render intent');
-  if (input.version !== 1 || input.kind !== expectedKind) fail('Canonical render intent kind is invalid.');
+  if (input.version !== 3 || input.kind !== expectedKind) fail('Canonical render intent kind is invalid.');
   const width = integer(input.width, 16, 8192, 'width');
   const height = integer(input.height, 16, 8192, 'height');
   const durationMs = integer(input.durationMs, 1, 3_600_000, 'duration');
@@ -75,14 +75,14 @@ function normalizeIntent(value, expectedKind) {
   const audioTracks = input.audioTracks.map(normalizeAudioTrack);
   const audioSettings = normalizeAudioSettings(input.audioSettings);
   const encoding = normalizeEncoding(input.encoding);
-  return deepFreeze({ version: 1, kind: expectedKind, width, height, durationMs, scenes, sceneDurationsMs, transitions, segmentReferences: [...input.segmentReferences], branding, subtitleContent, audioTracks, audioSettings, encoding });
+  return deepFreeze({ version: 3, kind: expectedKind, width, height, durationMs, scenes, sceneDurationsMs, transitions, segmentReferences: [...input.segmentReferences], branding, subtitleContent, audioTracks, audioSettings, encoding });
 }
 
 function normalizeScene(value) {
   const scene = strictObject(value, ['durationMs', 'cameraMotion', 'source'], 'scene');
   const durationMs = integer(scene.durationMs, 50, 600_000, 'scene duration');
   if (!MOTIONS.has(scene.cameraMotion)) fail('Canonical camera motion is invalid.');
-  const source = strictObject(scene.source, ['kind', 'paletteIndex', 'url', 'geometry'], 'scene source');
+  const source = strictObject(scene.source, ['kind', 'paletteIndex', 'url', 'geometry', 'framing', 'framingBinding'], 'scene source');
   if (source.kind === 'color') {
     if (Object.keys(source).some((key) => !['kind', 'paletteIndex'].includes(key))) fail('Canonical color source is invalid.');
     return deepFreeze({ durationMs, cameraMotion: 'none', source: { kind: 'color', paletteIndex: integer(source.paletteIndex, 0, 1_000_000, 'palette index') } });
@@ -91,16 +91,80 @@ function normalizeScene(value) {
     if (Object.keys(source).some((key) => !['kind', 'url'].includes(key))) fail('Canonical video source is invalid.');
     return deepFreeze({ durationMs, cameraMotion: 'none', source: { kind: 'external-video', url: httpsUrl(source.url) } });
   }
-  if (source.kind !== 'private-image' || Object.keys(source).some((key) => !['kind', 'url', 'geometry'].includes(key))) fail('Canonical scene source is invalid.');
-  return deepFreeze({ durationMs, cameraMotion: scene.cameraMotion, source: { kind: 'private-image', url: httpsUrl(source.url), geometry: normalizeGeometry(source.geometry) } });
+  if (source.kind !== 'private-image' || Object.keys(source).some((key) => !['kind', 'url', 'geometry', 'framing', 'framingBinding'].includes(key))) fail('Canonical scene source is invalid.');
+  const geometry = normalizeGeometry(source.geometry);
+  const framing = source.framing === undefined ? undefined : normalizeFraming(source.framing);
+  const framingBinding = source.framingBinding === undefined ? undefined : normalizeFramingBinding(source.framingBinding);
+  if (Boolean(framing) !== Boolean(framingBinding)) fail('Canonical image framing and binding must be paired.');
+  if (framingBinding && !bindingMatchesGeometry(framingBinding, geometry)) fail('Canonical image framing binding does not match image geometry.');
+  return deepFreeze({ durationMs, cameraMotion: scene.cameraMotion, source: {
+    kind: 'private-image', url: httpsUrl(source.url), geometry,
+    ...(framing ? { framing, framingBinding } : {}),
+  } });
+}
+
+function normalizeFraming(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) fail('Canonical image framing is invalid.');
+  const item = strictObject(value, ['version', 'mode', 'anchor'], 'image framing');
+  if (item.version !== 1 || item.mode !== 'focal-cover') fail('Canonical image framing is invalid.');
+  if (!item.anchor || typeof item.anchor !== 'object' || Array.isArray(item.anchor) || Object.getPrototypeOf(item.anchor) !== Object.prototype) fail('Canonical image framing is invalid.');
+  const anchor = strictObject(item.anchor, ['x', 'y'], 'image framing anchor');
+  const x = canonicalCoordinate(anchor.x);
+  const y = canonicalCoordinate(anchor.y);
+  if (x === 0.5 && y === 0.5) return undefined;
+  return Object.freeze({ version: 1, mode: 'focal-cover', anchor: Object.freeze({ x, y }) });
+}
+
+function canonicalCoordinate(value) {
+  const coordinate = finite(value, 0, 1, 'image framing coordinate');
+  if (Math.round(coordinate * 10_000) / 10_000 !== coordinate) fail('Canonical image framing precision is invalid.');
+  return coordinate;
 }
 
 function normalizeGeometry(value) {
-  const item = strictObject(value, ['inputIndex', 'authorityReference', 'mediaIdentity', 'expectedOrientation', 'contentDigest'], 'image authority');
+  const item = strictExactPlainObject(value, ['inputIndex', 'authorityReference', 'mediaIdentity', 'expectedOrientation', 'contentDigest', 'encodedDimensions', 'displayDimensions'], 'image authority');
   if (item.inputIndex !== 0 || typeof item.authorityReference !== 'string' || !/^idga1_[A-Za-z0-9_-]{43}$/.test(item.authorityReference)
     || typeof item.mediaIdentity !== 'string' || !/^media:[0-9a-f-]{36}\/generated-images\/[0-9a-f-]{36}\.(?:png|jpg)$/i.test(item.mediaIdentity)
     || !ORIENTATIONS.has(item.expectedOrientation) || typeof item.contentDigest !== 'string' || !/^[0-9a-f]{64}$/.test(item.contentDigest)) fail('Canonical image authority is invalid.');
-  return Object.freeze({ inputIndex: 0, authorityReference: item.authorityReference, mediaIdentity: item.mediaIdentity, expectedOrientation: item.expectedOrientation, contentDigest: item.contentDigest });
+  const encodedDimensions = normalizeImageDimensions(item.encodedDimensions);
+  const displayDimensions = normalizeImageDimensions(item.displayDimensions);
+  const swaps = ['transpose', 'rotate-90-cw', 'transverse', 'rotate-90-ccw'].includes(item.expectedOrientation);
+  if (displayDimensions.width !== (swaps ? encodedDimensions.height : encodedDimensions.width)
+    || displayDimensions.height !== (swaps ? encodedDimensions.width : encodedDimensions.height)) fail('Canonical image authority dimensions are inconsistent.');
+  return Object.freeze({ inputIndex: 0, authorityReference: item.authorityReference, mediaIdentity: item.mediaIdentity, expectedOrientation: item.expectedOrientation, contentDigest: item.contentDigest, encodedDimensions, displayDimensions });
+}
+
+function normalizeFramingBinding(value) {
+  const item = strictExactPlainObject(value, ['version', 'mediaIdentity', 'contentDigest', 'encodedDimensions', 'displayDimensions', 'encodedToDisplay'], 'image framing binding');
+  if (item.version !== 1 || typeof item.mediaIdentity !== 'string'
+    || !/^media:[0-9a-f-]{36}\/generated-images\/[0-9a-f-]{36}\.(?:png|jpg)$/i.test(item.mediaIdentity)
+    || typeof item.contentDigest !== 'string' || !/^[0-9a-f]{64}$/.test(item.contentDigest)
+    || !ORIENTATIONS.has(item.encodedToDisplay)) fail('Canonical image framing binding is invalid.');
+  const encodedDimensions = normalizeImageDimensions(item.encodedDimensions);
+  const displayDimensions = normalizeImageDimensions(item.displayDimensions);
+  const swaps = ['transpose', 'rotate-90-cw', 'transverse', 'rotate-90-ccw'].includes(item.encodedToDisplay);
+  if (displayDimensions.width !== (swaps ? encodedDimensions.height : encodedDimensions.width)
+    || displayDimensions.height !== (swaps ? encodedDimensions.width : encodedDimensions.height)) fail('Canonical image framing binding dimensions are inconsistent.');
+  return Object.freeze({ version: 1, mediaIdentity: item.mediaIdentity, contentDigest: item.contentDigest, encodedDimensions, displayDimensions, encodedToDisplay: item.encodedToDisplay });
+}
+
+function normalizeImageDimensions(value) {
+  const item = strictExactPlainObject(value, ['width', 'height'], 'image dimensions');
+  if (!Number.isSafeInteger(item.width) || !Number.isSafeInteger(item.height)
+    || item.width < 1 || item.height < 1 || item.width > 4096 || item.height > 4096
+    || item.width * item.height > 16_000_000) fail('Canonical image dimensions are invalid.');
+  return Object.freeze({ width: item.width, height: item.height });
+}
+
+function bindingMatchesGeometry(binding, geometry) {
+  return binding.version === 1
+    && binding.mediaIdentity === geometry.mediaIdentity
+    && binding.contentDigest === geometry.contentDigest
+    && binding.encodedToDisplay === geometry.expectedOrientation
+    && binding.encodedDimensions.width === geometry.encodedDimensions.width
+    && binding.encodedDimensions.height === geometry.encodedDimensions.height
+    && binding.displayDimensions.width === geometry.displayDimensions.width
+    && binding.displayDimensions.height === geometry.displayDimensions.height;
 }
 
 function normalizeAudioTrack(value) {
@@ -197,7 +261,11 @@ function appendSceneInput(args, scene, intent, index, authorities) {
   if (scene.source.kind === 'color') { args.push('-f', 'lavfi', '-t', duration, '-i', `color=c=${sceneColor(scene.source.paletteIndex)}:s=${intent.width}x${intent.height}:r=${intent.encoding.frameRate}`); return; }
   if (scene.source.kind === 'private-image') {
     args.push('-noautorotate', '-framerate', String(intent.encoding.frameRate), '-loop', '1', '-t', duration, '-i', scene.source.url);
-    authorities.push(Object.freeze({ ...scene.source.geometry, inputIndex: index })); return;
+    authorities.push(Object.freeze({
+      ...scene.source.geometry,
+      inputIndex: index,
+      ...(scene.source.framing ? { framingBinding: scene.source.framingBinding } : {}),
+    })); return;
   }
   args.push('-stream_loop', '-1', '-t', duration, '-i', scene.source.url);
 }
@@ -205,9 +273,20 @@ function appendSceneInput(args, scene, intent, index, authorities) {
 function sceneFilters(scene, intent, index) {
   const filters = scene.source.kind === 'private-image' ? [`{{IMAGE_DISPLAY_GEOMETRY_INPUT_${index}}}`] : [];
   const motion = scene.source.kind === 'private-image' ? motionFilter(scene.cameraMotion, intent.width, intent.height, intent.encoding.frameRate, scene.durationMs) : null;
-  if (motion) filters.push(`scale=${motion.sourceWidth}:${motion.sourceHeight}:force_original_aspect_ratio=increase`, `crop=${motion.sourceWidth}:${motion.sourceHeight}`, motion.filter);
-  else filters.push(`scale=${intent.width}:${intent.height}:force_original_aspect_ratio=increase`, `crop=${intent.width}:${intent.height}`, `fps=${intent.encoding.frameRate}`);
+  if (motion) filters.push(`scale=${motion.sourceWidth}:${motion.sourceHeight}:force_original_aspect_ratio=increase`, imageCropFilter(motion.sourceWidth, motion.sourceHeight, scene.source.framing), motion.filter);
+  else filters.push(`scale=${intent.width}:${intent.height}:force_original_aspect_ratio=increase`, scene.source.kind === 'private-image' ? imageCropFilter(intent.width, intent.height, scene.source.framing) : `crop=${intent.width}:${intent.height}`, `fps=${intent.encoding.frameRate}`);
   filters.push(`format=${intent.encoding.pixelFormat}`, `trim=duration=${seconds(scene.durationMs)}`, 'setpts=PTS-STARTPTS'); return filters;
+}
+
+function imageCropFilter(width, height, framing) {
+  if (!framing) return `crop=${width}:${height}`;
+  const x = canonicalCoordinateText(framing.anchor.x);
+  const y = canonicalCoordinateText(framing.anchor.y);
+  return `crop=${width}:${height}:x='min(max(${x}*iw-${width}/2,0),iw-${width})':y='min(max(${y}*ih-${height}/2,0),ih-${height})'`;
+}
+
+function canonicalCoordinateText(value) {
+  return value.toFixed(4).replace(/0+$/u, '').replace(/\.$/u, '');
 }
 
 function motionFilter(motion, width, height, fps, durationMs) {
@@ -279,6 +358,7 @@ function appendEncoding(args, value, copyVideo, includeAudio) {
 }
 
 function strictObject(value, allowed, name) { if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((key) => !allowed.includes(key))) fail(`Invalid canonical ${name}.`); return value; }
+function strictExactPlainObject(value, allowed, name) { if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).length !== allowed.length || allowed.some((key) => !Object.prototype.hasOwnProperty.call(value, key)) || Object.keys(value).some((key) => !allowed.includes(key))) fail(`Invalid canonical ${name}.`); return value; }
 function integer(value, min, max, name) { if (!Number.isSafeInteger(value) || value < min || value > max) fail(`Invalid canonical ${name}.`); return value; }
 function finite(value, min, max, name) { if (!Number.isFinite(value) || value < min || value > max) fail(`Invalid canonical ${name}.`); return value; }
 function httpsUrl(value) { if (typeof value !== 'string' || value.length > 8192) fail('Invalid canonical media reference.'); let parsed; try { parsed = new URL(value); } catch { fail('Invalid canonical media reference.'); } if (parsed.protocol !== 'https:' || parsed.username || parsed.password) fail('Invalid canonical media reference.'); return value; }

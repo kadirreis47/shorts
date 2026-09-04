@@ -199,6 +199,15 @@ const en: Dict = {
   'studio.brollAttached': 'B-roll video attached',
   'studio.scenePlaceholder': 'What appears on screen for this scene…',
   'studio.visualPlaceholder': 'Visual description / image search term',
+  'studio.framingApplied': 'Applied framing',
+  'studio.framingPending': 'Pending — click or drag',
+  'studio.framingInheritedCenter': 'Inherited center cover',
+  'studio.framingAnchor': 'Anchor',
+  'studio.framingAdjust': 'Adjust framing',
+  'studio.framingReset': 'Reset to center',
+  'studio.framingCenter': 'Center',
+  'studio.framingCancel': 'Cancel',
+  'studio.framingApply': 'Apply',
 
   // Studio Pro Features
   'studio.visualMode': 'Visual Mode',
@@ -989,6 +998,15 @@ const tr: Dict = {
   'studio.brollAttached': 'B-roll video eklendi',
   'studio.scenePlaceholder': 'Bu sahnede ekranda ne görünecek…',
   'studio.visualPlaceholder': 'Görsel açıklama / görsel arama terimi',
+  'studio.framingApplied': 'Uygulanan kadraj',
+  'studio.framingPending': 'Bekliyor — tıklayın veya sürükleyin',
+  'studio.framingInheritedCenter': 'Varsayılan merkez kadraj',
+  'studio.framingAnchor': 'Odak',
+  'studio.framingAdjust': 'Kadrajı ayarla',
+  'studio.framingReset': 'Merkeze sıfırla',
+  'studio.framingCenter': 'Merkez',
+  'studio.framingCancel': 'İptal',
+  'studio.framingApply': 'Uygula',
 
   // Studio Pro Features
   'studio.visualMode': 'Görsel Mod',

@@ -185,6 +185,23 @@ function materializeImageDisplayGeometryArgs(args, declarations, authorityServic
   return authorizeImageDisplayGeometryArgs(args, declarations, authorityService, supabaseUrl, options).args;
 }
 
+/** Main-internal preflight: authority metadata must approve framing provenance before crop argv is compiled. */
+function authorizeCanonicalImageIntent(scenes, authorityService, webContentsId) {
+  if (!Array.isArray(scenes)) throw new ImageDisplayGeometryAuthorityError('geometry-authority-invalid');
+  for (const scene of scenes) {
+    if (scene?.source?.kind !== 'private-image') continue;
+    if (Boolean(scene.source.framing) !== Boolean(scene.source.framingBinding)) {
+      throw new ImageDisplayGeometryAuthorityError('geometry-framing-binding-invalid');
+    }
+    const declaration = normalizeAuthorityDeclaration({
+      ...scene.source.geometry,
+      ...(scene.source.framingBinding ? { framingBinding: scene.source.framingBinding } : {}),
+    });
+    const authorized = authorizeDeclaration(declaration, authorityService, webContentsId);
+    assertAuthorizedImmutableIdentity(declaration, authorized);
+  }
+}
+
 function authorizeImageDisplayGeometryArgs(args, declarations, authorityService, supabaseUrl, {
   webContentsId = null,
   trustedCanonicalFilters = false,
@@ -223,10 +240,11 @@ function authorizeImageDisplayGeometryArgs(args, declarations, authorityService,
       continue;
     }
     if (!loopsImage || noAutorotateCount !== 1) throw new ImageDisplayGeometryAuthorityError('geometry-autorotate-policy');
-    const declaration = declared.find((value) => value?.inputIndex === input.inputIndex);
-    if (!declaration || used.has(declaration)) throw new ImageDisplayGeometryAuthorityError('geometry-authority-invalid');
-    if (!authorityService?.authorize) throw new ImageDisplayGeometryAuthorityError('geometry-authority-unavailable');
-    const authorized = authorityService.authorize(webContentsId, declaration.authorityReference, declaration.mediaIdentity, declaration.expectedOrientation, declaration.contentDigest);
+    const rawDeclaration = declared.find((value) => value?.inputIndex === input.inputIndex);
+    if (!rawDeclaration || used.has(rawDeclaration)) throw new ImageDisplayGeometryAuthorityError('geometry-authority-invalid');
+    const declaration = normalizeAuthorityDeclaration(rawDeclaration);
+    const authorized = authorizeDeclaration(declaration, authorityService, webContentsId);
+    assertAuthorizedImmutableIdentity(declaration, authorized);
     const geometry = authorized?.geometry ?? authorized;
     if (declaration.mediaIdentity !== identity) throw new ImageDisplayGeometryAuthorityError('geometry-media-mismatch');
     const placeholder = `{{IMAGE_DISPLAY_GEOMETRY_INPUT_${input.inputIndex}}}`;
@@ -235,7 +253,7 @@ function authorizeImageDisplayGeometryArgs(args, declarations, authorityService,
     assertCanonicalPlaceholderPlacement(output, placeholder, input.inputIndex);
     const filters = ORIENTATION_FILTERS[geometry.encodedToDisplay];
     output = output.map((arg) => arg.replaceAll(placeholder, filters.length ? filters.join(',') : 'null'));
-    used.add(declaration);
+    used.add(rawDeclaration);
     authorizedInputs.push(Object.freeze({
       inputIndex: input.inputIndex,
       sourceArgIndex: input.optionEnd + 1,
@@ -248,6 +266,87 @@ function authorizeImageDisplayGeometryArgs(args, declarations, authorityService,
     throw new ImageDisplayGeometryAuthorityError('geometry-authority-invalid');
   }
   return Object.freeze({ args: output, authorizedInputs: Object.freeze(authorizedInputs) });
+}
+
+function authorizeDeclaration(declaration, authorityService, webContentsId) {
+  if (!authorityService?.authorize) throw new ImageDisplayGeometryAuthorityError('geometry-authority-unavailable');
+  return authorityService.authorize(webContentsId, declaration.authorityReference, declaration.mediaIdentity, declaration.expectedOrientation, declaration.contentDigest);
+}
+
+function normalizeAuthorityDeclaration(value) {
+  const allowed = ['inputIndex', 'authorityReference', 'mediaIdentity', 'expectedOrientation', 'contentDigest', 'encodedDimensions', 'displayDimensions', 'framingBinding'];
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype
+    || Object.keys(value).some((key) => !allowed.includes(key))
+    || !Number.isSafeInteger(value.inputIndex) || value.inputIndex < 0 || value.inputIndex > 63
+    || typeof value.authorityReference !== 'string' || !/^idga1_[A-Za-z0-9_-]{43}$/.test(value.authorityReference)
+    || typeof value.mediaIdentity !== 'string' || !/^media:[0-9a-f-]{36}\/generated-images\/[0-9a-f-]{36}\.(?:png|jpg)$/i.test(value.mediaIdentity)
+    || !ORIENTATIONS.has(value.expectedOrientation)
+    || typeof value.contentDigest !== 'string' || !/^[0-9a-f]{64}$/.test(value.contentDigest)) {
+    throw new ImageDisplayGeometryAuthorityError('geometry-authority-invalid');
+  }
+  const encodedDimensions = normalizeDimensions(value.encodedDimensions);
+  const displayDimensions = normalizeDimensions(value.displayDimensions);
+  const swaps = ['transpose', 'rotate-90-cw', 'transverse', 'rotate-90-ccw'].includes(value.expectedOrientation);
+  if (displayDimensions.width !== (swaps ? encodedDimensions.height : encodedDimensions.width)
+    || displayDimensions.height !== (swaps ? encodedDimensions.width : encodedDimensions.height)) {
+    throw new ImageDisplayGeometryAuthorityError('geometry-authority-invalid');
+  }
+  const framingBinding = value.framingBinding === undefined ? undefined : normalizeFramingBinding(value.framingBinding);
+  return Object.freeze({
+    inputIndex: value.inputIndex,
+    authorityReference: value.authorityReference,
+    mediaIdentity: value.mediaIdentity,
+    expectedOrientation: value.expectedOrientation,
+    contentDigest: value.contentDigest,
+    encodedDimensions,
+    displayDimensions,
+    ...(framingBinding ? { framingBinding } : {}),
+  });
+}
+
+function normalizeFramingBinding(value) {
+  const allowed = ['version', 'mediaIdentity', 'contentDigest', 'encodedDimensions', 'displayDimensions', 'encodedToDisplay'];
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype
+    || Object.keys(value).length !== allowed.length || allowed.some((key) => !Object.prototype.hasOwnProperty.call(value, key))
+    || Object.keys(value).some((key) => !allowed.includes(key)) || value.version !== 1
+    || typeof value.mediaIdentity !== 'string' || !/^media:[0-9a-f-]{36}\/generated-images\/[0-9a-f-]{36}\.(?:png|jpg)$/i.test(value.mediaIdentity)
+    || typeof value.contentDigest !== 'string' || !/^[0-9a-f]{64}$/.test(value.contentDigest)
+    || !ORIENTATIONS.has(value.encodedToDisplay)) {
+    throw new ImageDisplayGeometryAuthorityError('geometry-framing-binding-invalid');
+  }
+  const encodedDimensions = normalizeDimensions(value.encodedDimensions);
+  const displayDimensions = normalizeDimensions(value.displayDimensions);
+  const swaps = ['transpose', 'rotate-90-cw', 'transverse', 'rotate-90-ccw'].includes(value.encodedToDisplay);
+  if (displayDimensions.width !== (swaps ? encodedDimensions.height : encodedDimensions.width)
+    || displayDimensions.height !== (swaps ? encodedDimensions.width : encodedDimensions.height)) {
+    throw new ImageDisplayGeometryAuthorityError('geometry-framing-binding-invalid');
+  }
+  return Object.freeze({ version: 1, mediaIdentity: value.mediaIdentity, contentDigest: value.contentDigest, encodedDimensions, displayDimensions, encodedToDisplay: value.encodedToDisplay });
+}
+
+function assertAuthorizedImmutableIdentity(declaration, authorized) {
+  const geometry = authorized?.geometry;
+  const digest = authorized?.contentDigest;
+  if (!geometry || typeof digest !== 'string'
+    || declaration.mediaIdentity !== geometry.mediaIdentity
+    || declaration.contentDigest !== digest
+    || declaration.expectedOrientation !== geometry.encodedToDisplay
+    || declaration.encodedDimensions.width !== geometry.encodedDimensions?.width
+    || declaration.encodedDimensions.height !== geometry.encodedDimensions?.height
+    || declaration.displayDimensions.width !== geometry.displayDimensions?.width
+    || declaration.displayDimensions.height !== geometry.displayDimensions?.height) {
+    throw new ImageDisplayGeometryAuthorityError('geometry-authority-invalid');
+  }
+  const binding = declaration.framingBinding;
+  if (binding && (binding.mediaIdentity !== geometry.mediaIdentity
+    || binding.contentDigest !== digest
+    || binding.encodedToDisplay !== geometry.encodedToDisplay
+    || binding.encodedDimensions.width !== geometry.encodedDimensions.width
+    || binding.encodedDimensions.height !== geometry.encodedDimensions.height
+    || binding.displayDimensions.width !== geometry.displayDimensions.width
+    || binding.displayDimensions.height !== geometry.displayDimensions.height)) {
+    throw new ImageDisplayGeometryAuthorityError('geometry-framing-binding-mismatch');
+  }
 }
 
 async function prepareImageDisplayGeometryExecution(
@@ -347,6 +446,7 @@ module.exports = {
   ImageDisplayGeometryAuthorityError,
   createImageDisplayGeometryAuthorityService,
   materializeImageDisplayGeometryArgs,
+  authorizeCanonicalImageIntent,
   authorizeImageDisplayGeometryArgs,
   prepareImageDisplayGeometryExecution,
   normalizeGeometry,

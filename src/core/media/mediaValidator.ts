@@ -14,6 +14,7 @@ import type {
   MediaValidationScoreBreakdown,
   MediaValidationSeverity,
 } from './validationTypes';
+import { imageFramingBindingEqual, normalizeImageFraming, normalizeImageFramingBinding } from './imageFraming';
 
 interface ValidateMediaProjectInput {
   project: MediaProject;
@@ -126,6 +127,26 @@ function validateTimeline(
     }
     if ((source.videoStorage || source.videoUrl) && scene.imageGeometryAuthority) {
       addIssue(issues, 'VIDEO_IMAGE_GEOMETRY_INVALID', 'render', 'error', 'Video scenes cannot carry image display geometry.', scene.id);
+    }
+    if (scene.imageFraming !== undefined) {
+      try {
+        const framing = normalizeImageFraming(scene.imageFraming);
+        if (!privateImage || !scene.imageGeometryAuthority || !framing) throw new Error('invalid');
+        const binding = normalizeImageFramingBinding(scene.imageFramingBinding, scene.imageGeometryAuthority.mediaIdentity);
+        const current = normalizeImageFramingBinding({
+          version: 1,
+          mediaIdentity: scene.imageGeometryAuthority.mediaIdentity,
+          contentDigest: scene.imageGeometryAuthority.contentDigest,
+          encodedDimensions: scene.imageGeometryAuthority.encodedDimensions,
+          displayDimensions: scene.imageGeometryAuthority.displayDimensions,
+          encodedToDisplay: scene.imageGeometryAuthority.expectedOrientation,
+        }, scene.imageGeometryAuthority.mediaIdentity);
+        if (!imageFramingBindingEqual(binding, current)) throw new Error('invalid');
+      } catch {
+        addIssue(issues, 'IMAGE_FRAMING_INVALID', 'render', 'error', 'Image framing requires a verified private image and strict non-center framing.', scene.id);
+      }
+    } else if (scene.imageFramingBinding !== undefined) {
+      addIssue(issues, 'IMAGE_FRAMING_INVALID', 'render', 'error', 'Image framing binding requires meaningful image framing.', scene.id);
     }
   }
 

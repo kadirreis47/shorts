@@ -14,6 +14,7 @@ import { normalizeCanonicalBrandingConfiguration } from './brandingTypes';
 import type { CameraMotion, CanonicalImageGeometryExecutionAuthority, CanonicalMotionMode, CanonicalSceneComposition, CanonicalTransitionType, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
 import type { ImageEncodedToDisplayOrientation } from './imageDisplayGeometry';
 import { assertCanonicalStudioProductionRecipeCompilation } from './studioProductionRecipe';
+import { imageFramingBindingEqual, normalizeImageFraming, normalizeImageFramingBinding } from './imageFraming';
 
 export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
 
@@ -23,7 +24,8 @@ export function createMediaEngine(
 ): MediaEngine {
   return {
     async buildProject(input) {
-      if (input.productionRecipe !== undefined || input.sceneImageGeometryAuthorities !== undefined) {
+      if (input.productionRecipe !== undefined || input.sceneImageGeometryAuthorities !== undefined
+        || input.scenes.some((scene) => scene.imageFraming !== undefined)) {
         assertCanonicalStudioProductionRecipeCompilation(input);
       }
       if (input.sceneComposition === undefined && input.scenes.some((scene) => scene.compositionOverride !== undefined)) {
@@ -56,6 +58,7 @@ export function createMediaEngine(
       if (input.sceneImageGeometryAuthorities !== undefined) {
         plannedScenes = applyImageGeometryAuthorities(plannedScenes, input.sceneImageGeometryAuthorities);
       }
+      plannedScenes = applyImageFramings(plannedScenes);
       const semanticWindows = deriveNarrationSemanticSceneWindows(plannedScenes, input.narration?.alignment, input.narration?.durationMs);
       plannedScenes = semanticWindows
         ? applyNarrationSemanticSceneWindows(plannedScenes, semanticWindows, settings) ?? reconcileNarrationDuration(plannedScenes, input.narration?.durationMs)
@@ -229,6 +232,14 @@ function applyImageGeometryAuthorities(
     if (requested.mediaIdentity !== expectedIdentity || typeof requested.authorityReference !== 'string'
       || !/^idga1_[A-Za-z0-9_-]{43}$/.test(requested.authorityReference)
       || typeof requested.contentDigest !== 'string' || !/^[0-9a-f]{64}$/.test(requested.contentDigest)) throw new Error('Canonical image geometry authority is invalid.');
+    const immutableGeometry = normalizeImageFramingBinding({
+      version: 1,
+      mediaIdentity: expectedIdentity,
+      contentDigest: requested.contentDigest,
+      encodedDimensions: requested.encodedDimensions,
+      displayDimensions: requested.displayDimensions,
+      encodedToDisplay: orientation,
+    }, expectedIdentity);
     return {
       ...scene,
       imageGeometryAuthority: Object.freeze({
@@ -236,8 +247,44 @@ function applyImageGeometryAuthorities(
         mediaIdentity: expectedIdentity,
         expectedOrientation: orientation,
         contentDigest: requested.contentDigest,
+        encodedDimensions: immutableGeometry.encodedDimensions,
+        displayDimensions: immutableGeometry.displayDimensions,
       }),
     };
+  });
+}
+
+function applyImageFramings(scenes: MediaScene[]): MediaScene[] {
+  return scenes.map((scene) => {
+    const rawFraming = scene.sourceScene.imageFraming;
+    const rawBinding = scene.sourceScene.imageFramingBinding;
+    if (rawFraming === undefined) {
+      if (rawBinding !== undefined) throw new Error('Canonical image framing binding requires meaningful image framing.');
+      return { ...scene, imageFraming: undefined, imageFramingBinding: undefined };
+    }
+    const isVideo = Boolean(scene.sourceScene.videoStorage || scene.sourceScene.videoUrl);
+    const isPrivateImage = Boolean(scene.sourceScene.imageStorage) && !isVideo;
+    if (!isPrivateImage || !scene.imageGeometryAuthority) {
+      throw new Error('Canonical image framing requires a verified private image.');
+    }
+    const imageFraming = normalizeImageFraming(rawFraming);
+    if (!imageFraming) {
+      if (rawBinding !== undefined) throw new Error('Canonical image framing binding requires meaningful image framing.');
+      return { ...scene, imageFraming: undefined, imageFramingBinding: undefined };
+    }
+    const imageFramingBinding = normalizeImageFramingBinding(rawBinding, scene.imageGeometryAuthority.mediaIdentity);
+    const currentGeometryBinding = normalizeImageFramingBinding({
+      version: 1,
+      mediaIdentity: scene.imageGeometryAuthority.mediaIdentity,
+      contentDigest: scene.imageGeometryAuthority.contentDigest,
+      encodedDimensions: scene.imageGeometryAuthority.encodedDimensions,
+      displayDimensions: scene.imageGeometryAuthority.displayDimensions,
+      encodedToDisplay: scene.imageGeometryAuthority.expectedOrientation,
+    }, scene.imageGeometryAuthority.mediaIdentity);
+    if (!imageFramingBindingEqual(imageFramingBinding, currentGeometryBinding)) {
+      throw new Error('Canonical image framing binding does not match current image geometry.');
+    }
+    return { ...scene, imageFraming, imageFramingBinding };
   });
 }
 

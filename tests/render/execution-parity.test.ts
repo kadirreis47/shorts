@@ -70,6 +70,35 @@ describe('full and incremental canonical execution parity', () => {
       .toBe(await createSceneFingerprint(value.timeline.scenes[0], value, preset));
   });
 
+  it.each([
+    ['static', 'none'],
+    ['moving', 'zoom_in'],
+  ] as const)('uses identical focal crop semantics for full and segment %s execution', async (_label, cameraMotion) => {
+    const imageFraming = { version: 1 as const, mode: 'focal-cover' as const, anchor: { x: 0.1, y: 0.9 } };
+    const value = manifest({
+      assets: [{ id: 'image', type: 'image', source: 'image.png', metadata: {} }],
+      timeline: { scenes: [{
+        ...manifest().timeline.scenes[0], assetIds: ['image'], cameraMotion, imageFraming,
+        imageFramingBinding: { version: 1, mediaIdentity: 'media:00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg', contentDigest: 'a'.repeat(64), encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 }, encodedToDisplay: 'identity' },
+        imageGeometryAuthority: { authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', mediaIdentity: 'media:00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg', expectedOrientation: 'identity', contentDigest: 'a'.repeat(64), encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 } },
+        sourceScene: { sceneId: 'framed-scene', text: 'framed', duration: 5, visual: '', imageStorage: { bucket: 'media', objectPath: '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg' }, imageFraming, imageFramingBinding: { version: 1, mediaIdentity: 'media:00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg', contentDigest: 'a'.repeat(64), encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 3, height: 2 }, encodedToDisplay: 'identity' } },
+      }, manifest().timeline.scenes[1]], tracks: [] },
+    });
+    const scene = value.timeline.scenes[0];
+    const full = buildFFmpegCommand({ manifest: value, preset });
+    const segment = buildSceneSegmentCommand({ manifest: value, scene, preset, outputPath: 'one.mp4' });
+    const segmentFilter = segment.args[segment.args.indexOf('-vf') + 1];
+    expect(filter(full)).toContain(segmentFilter);
+    expect(segmentFilter).toContain("x='min(max(0.1*iw-");
+    expect(segmentFilter).toContain("y='min(max(0.9*ih-");
+
+    const centered = structuredClone(value);
+    centered.timeline.scenes[0].imageFraming = undefined;
+    centered.timeline.scenes[0].imageFramingBinding = undefined;
+    expect(await createSceneFingerprint(scene, value, preset))
+      .not.toBe(await createSceneFingerprint(centered.timeline.scenes[0], centered, preset));
+  });
+
   it('keeps fractional-duration motion bounded and makes Ken Burns distinct from Zoom In', () => {
     const base = manifest({
       assets: [{ id: 'image', type: 'image', source: 'image.png', metadata: {} }],
@@ -96,6 +125,14 @@ describe('full and incremental canonical execution parity', () => {
     expect(buildSceneSegmentCommand({ manifest: video, scene: video.timeline.scenes[0], preset, outputPath: 'one.mp4' }).args).not.toContain(expect.stringContaining('zoompan'));
   });
 
+  it('rejects framing on video or image execution without geometry authority', () => {
+    const imageFraming = { version: 1 as const, mode: 'focal-cover' as const, anchor: { x: 0.1, y: 0.9 } };
+    const video = manifest({ assets: [{ id: 'video', type: 'video', source: 'video.mp4', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['video'], imageFraming }, manifest().timeline.scenes[1]], tracks: [] } });
+    expect(() => buildCanonicalSceneExecutionPlan(video, video.timeline.scenes[0], preset)).toThrow(/verified private image/i);
+    const image = manifest({ assets: [{ id: 'image', type: 'image', source: 'image.png', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['image'], imageFraming }, manifest().timeline.scenes[1]], tracks: [] } });
+    expect(() => buildCanonicalSceneExecutionPlan(image, image.timeline.scenes[0], preset)).toThrow(/verified private image/i);
+  });
+
   it.each([
     ['identity', 'scale=1080:1920'],
     ['mirror-horizontal', 'hflip,scale=1080:1920'],
@@ -108,7 +145,7 @@ describe('full and incremental canonical execution parity', () => {
   ] as const)('pins and applies image orientation %s before cover geometry', (orientation, expected) => {
     const value = manifest({ assets: [{ id: 'image', type: 'image', source: 'image.jpg', metadata: {} }], timeline: { scenes: [{
       ...manifest().timeline.scenes[0], assetIds: ['image'],
-      imageGeometryAuthority: { authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', mediaIdentity: 'media:00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg', expectedOrientation: orientation, contentDigest: 'a'.repeat(64) },
+      imageGeometryAuthority: { authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', mediaIdentity: 'media:00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg', expectedOrientation: orientation, contentDigest: 'a'.repeat(64), encodedDimensions: { width: 3, height: 2 }, displayDimensions: ['transpose', 'rotate-90-cw', 'transverse', 'rotate-90-ccw'].includes(orientation) ? { width: 2, height: 3 } : { width: 3, height: 2 } },
     }, manifest().timeline.scenes[1]], tracks: [] } });
     const full = buildFFmpegCommand({ manifest: value, preset });
     const segment = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[0], preset, outputPath: 'one.mp4' });
@@ -327,6 +364,7 @@ describe('full and incremental canonical execution parity', () => {
           authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
           mediaIdentity: 'media:00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg',
           expectedOrientation: 'transverse', contentDigest: 'a'.repeat(64),
+          encodedDimensions: { width: 3, height: 2 }, displayDimensions: { width: 2, height: 3 },
         },
       }, manifest().timeline.scenes[1]], tracks: [] },
     });

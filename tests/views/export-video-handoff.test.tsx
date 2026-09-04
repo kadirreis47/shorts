@@ -7,7 +7,7 @@ import { useExportIntelligenceStore } from '@/store/exportIntelligenceStore';
 import { useMediaStore } from '@/store/mediaStore';
 import { resolveVideoPublishingHandoff, usePublishingStore } from '@/store/publishingStore';
 import { useUIStore } from '@/store/uiStore';
-import { createAssetProviderEngine, createImageDisplayGeometry, createMediaEngine, type ImageEncodedToDisplayOrientation } from '@/core/media';
+import { createAssetProviderEngine, createImageDisplayGeometry, createMediaEngine, imageFramingBindingFromTrustedGeometry, type ImageEncodedToDisplayOrientation } from '@/core/media';
 import { TypedEventBus } from '@/core/events/eventBus';
 import type { ApplicationEventMap } from '@/core/events';
 import { buildFFmpegCommand, createRenderFingerprint } from '@/core/render';
@@ -127,24 +127,31 @@ describe('rendered video export handoff', () => {
     setValidatedOwnerId(owner);
     const bus = new TypedEventBus<ApplicationEventMap>();
     const mediaEngine = createMediaEngine(bus, createAssetProviderEngine(bus));
-    const build = async (orientation: ImageEncodedToDisplayOrientation, marker: string) => buildAIExportStudioMediaProject({
-      id: `video-${marker}`, title: 'Private image', narration_mode: 'silent', scenes: [{
-        sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'Scene', duration: 3, visual: 'Visual',
-        imageStorage: { bucket: 'media', objectPath: path },
-      }],
-    }, mediaEngine, async () => ({
-      ...createImageDisplayGeometry(`media:${path}`, 3, 2, orientation),
-      contentDigest: marker.toLowerCase().repeat(64),
-      executionAuthority: { version: 1, reference: `idga1_${marker.repeat(43)}`, expiresAt: '2099-01-01T00:00:00.000Z' },
-    }));
+    const build = async (orientation: ImageEncodedToDisplayOrientation, marker: string) => {
+      const geometry = {
+        ...createImageDisplayGeometry(`media:${path}`, 3, 2, orientation),
+        contentDigest: marker.toLowerCase().repeat(64),
+        executionAuthority: { version: 1 as const, reference: `idga1_${marker.repeat(43)}`, expiresAt: '2099-01-01T00:00:00.000Z' },
+      };
+      return buildAIExportStudioMediaProject({
+        id: `video-${marker}`, title: 'Private image', narration_mode: 'silent', scenes: [{
+          sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'Scene', duration: 3, visual: 'Visual',
+          imageStorage: { bucket: 'media', objectPath: path },
+          imageFraming: { version: 1, mode: 'focal-cover', anchor: { x: 0.1, y: 0.9 } },
+          imageFramingBinding: imageFramingBindingFromTrustedGeometry(geometry),
+        }],
+      }, mediaEngine, async () => geometry);
+    };
     const exif6 = await build('rotate-90-cw', 'A');
     const exif7 = await build('transverse', 'B');
     for (const [result, orientation] of [[exif6, 'rotate-90-cw'], [exif7, 'transverse']] as const) {
       expect(result.project.metadata.productionRecipe).toBeDefined();
       expect(result.manifest.timeline.scenes[0].imageGeometryAuthority?.expectedOrientation).toBe(orientation);
+      expect(result.manifest.timeline.scenes[0].imageFraming).toEqual({ version: 1, mode: 'focal-cover', anchor: { x: 0.1, y: 0.9 } });
       const command = buildFFmpegCommand({ manifest: result.manifest, preset: { id: 'test', name: 'test', container: 'mp4', videoCodec: 'h264', audioCodec: 'aac', quality: 'standard', hardwareAcceleration: 'disabled' } });
       expect(command.args.slice(0, command.args.indexOf(`shortsflow-storage://media/${path}`))).toContain('-noautorotate');
       expect(command.args.join(',')).toContain('{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}}');
+      expect(command.args.join(',')).toContain("x='min(max(0.1*iw-");
       expect(command.imageGeometryAuthorities[0].expectedOrientation).toBe(orientation);
     }
     const preset = { id: 'test', name: 'test', container: 'mp4' as const, videoCodec: 'h264' as const, audioCodec: 'aac' as const, quality: 'standard' as const, hardwareAcceleration: 'disabled' as const };

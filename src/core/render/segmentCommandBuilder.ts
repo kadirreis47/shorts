@@ -97,7 +97,11 @@ export function buildSceneSegmentCommand(input: {
     args,
     totalFrames: Math.ceil((execution.durationMs / 1000) * fps),
     imageGeometryAuthorities: execution.imageGeometryAuthority
-      ? [{ inputIndex: 0, ...execution.imageGeometryAuthority }]
+      ? [{
+          inputIndex: 0,
+          ...execution.imageGeometryAuthority,
+          ...(execution.imageFraming ? { framingBinding: execution.imageFramingBinding } : {}),
+        }]
       : [],
   };
 }

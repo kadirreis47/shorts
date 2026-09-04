@@ -1,4 +1,5 @@
 import type { ImageDisplayGeometryV1, TrustedImageDisplayGeometryV1 } from '@/core/media/imageDisplayGeometry';
+import type { ImageFramingBindingV1, ImageFramingV1 } from '@/core/media/imageFraming';
 
 export type VideoStatus = 'idea' | 'script_ready' | 'rendering' | 'rendered' | 'scheduled' | 'published' | 'failed';
 
@@ -41,6 +42,10 @@ export interface Scene {
   imageStorage?: MediaStorageObject;
   /** Server-derived technical geometry, valid only for the bound imageStorage object. */
   imageDisplayGeometry?: ImageDisplayGeometryV1 | TrustedImageDisplayGeometryV1;
+  /** Canonical artistic crop authority in display-oriented normalized space. */
+  imageFraming?: ImageFramingV1;
+  /** Non-authorizing immutable identity that binds imageFraming to exact image geometry. */
+  imageFramingBinding?: ImageFramingBindingV1;
   videoStorage?: MediaStorageObject;
   /** Applies only to imageStorage and is excluded from render identity. */
   imageProvenance?: ProviderMediaProvenance;
