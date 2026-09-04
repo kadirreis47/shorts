@@ -1,25 +1,10 @@
 const path = require('path');
+const { validateCanonicalRenderRequest } = require('./canonical-render-intent.cjs');
 
-function validateFFmpegRunRequest(request) {
-  if (!request || typeof request !== 'object') throw new TypeError('FFmpeg request is required.');
-  if (typeof request.jobId !== 'string' || !/^[a-z0-9_-]{1,128}$/i.test(request.jobId)) {
-    throw new TypeError('Invalid FFmpeg jobId.');
-  }
-  if (!Array.isArray(request.args) || request.args.length === 0 || request.args.length > 512) {
-    throw new TypeError('FFmpeg args must be a non-empty bounded array.');
-  }
-  if (request.args.some((arg) => typeof arg !== 'string' || arg.length > 16_384 || arg.includes('\0'))) {
-    throw new TypeError('Invalid FFmpeg argument.');
-  }
-  if (request.outputPath !== undefined) validateTargetPath(request.outputPath, 'outputPath');
-  if (request.subtitleContent !== undefined && typeof request.subtitleContent !== 'string') {
-    throw new TypeError('subtitleContent must be a string.');
-  }
-  if (request.concatContent !== undefined && typeof request.concatContent !== 'string') {
-    throw new TypeError('concatContent must be a string.');
-  }
-  return request;
-}
+// Kept as an internal compatibility export for existing main-process callers
+// and tests. It now validates a semantic declaration and categorically rejects
+// renderer-authored argv, paths embedded in filters, and all legacy raw fields.
+const validateFFmpegRunRequest = validateCanonicalRenderRequest;
 
 function validateTargetPath(targetPath, fieldName = 'targetPath') {
   if (typeof targetPath !== 'string' || !targetPath || targetPath.includes('\0')) {

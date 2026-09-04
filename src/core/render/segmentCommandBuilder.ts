@@ -5,7 +5,8 @@ import type {
 } from '@/core/media';
 import type { RenderPreset } from './types';
 import { assertRequiredNarrationBound, buildAudioMixCommand } from './audioMixCommandBuilder';
-import { buildCanonicalSceneExecutionPlan, canonicalSceneColor } from './canonicalSceneExecutionPlan';
+import { buildCanonicalSceneExecutionPlan, canonicalSceneColor, commandFiltersForCanonicalScene } from './canonicalSceneExecutionPlan';
+import type { FFmpegImageGeometryAuthorityDeclaration } from './ffmpegTypes';
 import { assertCanonicalTransitionTimeline, buildCanonicalTransitionCompositionPlan } from './canonicalTransitionPlan';
 import { buildCanonicalBrandingRenderPlan } from './brandingRenderBuilder';
 import { canonicalQualityArgs, canonicalVideoCodec, canonicalVideoSettings } from './encodingContract';
@@ -15,11 +16,12 @@ export interface SceneSegmentCommandPlan {
   args: string[];
   subtitleContent?: string;
   totalFrames: number;
+  imageGeometryAuthorities: FFmpegImageGeometryAuthorityDeclaration[];
 }
 
 export interface SegmentConcatCommandPlan {
   args: string[];
-  concatContent: string;
+  usesConcatManifest: boolean;
   subtitleContent?: string;
   totalFrames: number;
 }
@@ -42,6 +44,7 @@ export function buildSceneSegmentCommand(input: {
   if (execution.input.source) {
     if (execution.input.kind === 'image') {
       args.push(
+        ...(execution.imageGeometryAuthority ? ['-noautorotate'] : []),
         '-framerate',
         String(fps),
         '-loop',
@@ -74,7 +77,7 @@ export function buildSceneSegmentCommand(input: {
 
   args.push(
     '-vf',
-    execution.filters.join(','),
+    commandFiltersForCanonicalScene(execution, 0).join(','),
     '-an',
     '-c:v',
     canonicalVideoCodec(preset),
@@ -93,6 +96,9 @@ export function buildSceneSegmentCommand(input: {
   return {
     args,
     totalFrames: Math.ceil((execution.durationMs / 1000) * fps),
+    imageGeometryAuthorities: execution.imageGeometryAuthority
+      ? [{ inputIndex: 0, ...execution.imageGeometryAuthority }]
+      : [],
   };
 }
 
@@ -194,14 +200,8 @@ export function buildSegmentConcatCommand(input: {
 
   return {
     args,
-    concatContent: canComposeTransitions ? '' : segmentPaths
-      .map((segmentPath) => `file '${escapeConcatPath(segmentPath)}'`)
-      .join('\n'),
+    usesConcatManifest: !canComposeTransitions,
     subtitleContent: subtitlePlan.assContent,
     totalFrames: Math.ceil(durationSeconds * (preset.frameRate ?? manifest.render.fps)),
   };
-}
-
-function escapeConcatPath(value: string): string {
-  return value.replace(/\\/g, '/').replace(/'/g, "'\\''");
 }

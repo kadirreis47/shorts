@@ -92,7 +92,15 @@ export function createRenderEngine(
         });
       }
 
-      const fingerprint = renderCache
+      const requiresNativeImageAuthority = (request.manifest.assets ?? []).some((asset) => asset.type === 'image')
+        || (request.manifest.timeline?.scenes ?? []).some((scene) => Boolean(
+          scene.imageGeometryAuthority
+          || (scene.sourceScene?.imageStorage || scene.sourceScene?.imageUrl)
+            && !scene.sourceScene.videoStorage && !scene.sourceScene.videoUrl,
+        ));
+      // A renderer-created manifest must never turn an unverified geometry
+      // claim into executable output merely by selecting an existing cache key.
+      const fingerprint = renderCache && !requiresNativeImageAuthority
         ? await import('./renderFingerprint').then(({ createRenderFingerprint }) =>
             createRenderFingerprint({
               manifest: request.manifest,

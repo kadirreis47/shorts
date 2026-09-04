@@ -1,7 +1,8 @@
 import type { MediaAsset, MediaScene, RenderManifest } from '@/core/media';
 import type { RenderPreset } from './types';
+import { imageOrientationFilters } from '@/core/media/imageDisplayGeometry';
 
-export const CANONICAL_SCENE_EXECUTION_VERSION = 3;
+export const CANONICAL_SCENE_EXECUTION_VERSION = 4;
 const IMAGE_MOTION_OVERSCAN = 1.15;
 const IMAGE_MOTION_DELTA = 0.15;
 const KEN_BURNS_ZOOM_DELTA = 0.12;
@@ -20,6 +21,7 @@ export interface CanonicalSceneExecutionPlan {
   readonly durationMs: number;
   readonly durationSeconds: string;
   readonly filters: readonly string[];
+  readonly imageGeometryAuthority: MediaScene['imageGeometryAuthority'];
 }
 
 export function buildCanonicalSceneExecutionPlan(
@@ -38,13 +40,28 @@ export function buildCanonicalSceneExecutionPlan(
     ? (asset.type === 'image' || asset.type === 'ai_image' ? 'image' : 'video')
     : 'color';
 
+  const imageGeometryAuthority = kind === 'image' ? scene.imageGeometryAuthority : undefined;
   return {
     sceneId: scene.id,
     input: { source: asset?.source || null, kind },
     durationMs,
     durationSeconds: (durationMs / 1000).toFixed(3),
     filters: canonicalSceneFilters({ scene, kind, width, height, fps, durationMs, pixelFormat: preset.pixelFormat ?? 'yuv420p' }),
+    imageGeometryAuthority,
   };
+}
+
+/** FFmpeg receives a non-semantic placeholder; Electron main alone expands it. */
+export function commandFiltersForCanonicalScene(
+  plan: CanonicalSceneExecutionPlan,
+  inputIndex: number,
+): readonly string[] {
+  if (!plan.imageGeometryAuthority) return plan.filters;
+  const orientationFilterCount = imageOrientationFilters(plan.imageGeometryAuthority.expectedOrientation).length;
+  return [
+    `{{IMAGE_DISPLAY_GEOMETRY_INPUT_${inputIndex}}}`,
+    ...plan.filters.slice(orientationFilterCount),
+  ];
 }
 
 function canonicalSceneFilters(input: {
@@ -58,9 +75,13 @@ function canonicalSceneFilters(input: {
 }): string[] {
   const { scene, kind, width, height, fps, durationMs, pixelFormat } = input;
   const durationSeconds = (durationMs / 1000).toFixed(3);
+  const orientation = kind === 'image' && scene.imageGeometryAuthority
+    ? imageOrientationFilters(scene.imageGeometryAuthority.expectedOrientation)
+    : [];
   const motion = kind === 'image' ? imageMotionFilter(scene.cameraMotion, width, height, fps, durationMs) : null;
   if (motion) {
     return [
+      ...orientation,
       `scale=${motion.sourceWidth}:${motion.sourceHeight}:force_original_aspect_ratio=increase`,
       `crop=${motion.sourceWidth}:${motion.sourceHeight}`,
       motion.filter,
@@ -70,6 +91,7 @@ function canonicalSceneFilters(input: {
     ];
   }
   return [
+    ...orientation,
     `scale=${width}:${height}:force_original_aspect_ratio=increase`,
     `crop=${width}:${height}`,
     `fps=${fps}`,

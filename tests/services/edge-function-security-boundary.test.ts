@@ -6,9 +6,14 @@ const manifest = JSON.parse(readFileSync('supabase/functions/v1-function-allowli
   retiredFailClosed: string[];
 };
 const protectedSource = readFileSync('supabase/functions/_shared/protected-function.ts', 'utf8');
+const authorizerSource = readFileSync('supabase/functions/_shared/protected-function-authorizer.ts', 'utf8');
+const boundedJsonSource = readFileSync('supabase/functions/_shared/bounded-json-reader.ts', 'utf8');
 const verifiedSource = readFileSync('supabase/functions/_shared/verified-user.ts', 'utf8');
+const verifierSource = readFileSync('supabase/functions/_shared/verified-user-verifier.ts', 'utf8');
 const migration = readFileSync('supabase/migrations/20260815000002_add_edge_function_request_limits.sql', 'utf8');
 const generateScriptSource = readFileSync('supabase/functions/generate-script/index.ts', 'utf8');
+const geometryHandlerSource = readFileSync('supabase/functions/_shared/resolve-image-display-geometry-handler.ts', 'utf8');
+const geometryEntrySource = readFileSync('supabase/functions/resolve-image-display-geometry/entry.ts', 'utf8');
 
 function sourceFor(name: string): string {
   return readFileSync(`supabase/functions/${name}/index.ts`, 'utf8');
@@ -19,12 +24,23 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(manifest.active).toEqual([
       'provider-status', 'generate-script', 'generate-hooks', 'generate-seo',
       'analyze-script', 'generate-image', 'ingest-pexels-image', 'ingest-pexels-video', 'generate-voiceover', 'list-voices',
-      'research-footage', 'search-images', 'search-videos', 'translate-subtitles', 'visual-query-planner', 'media-analysis-reference', 'analyze-visual-semantics', 'analyze-discovery-candidate-semantics', 'analyze-visual-spatial', 'analyze-discovery-candidate-spatial',
+      'research-footage', 'search-images', 'search-videos', 'translate-subtitles', 'visual-query-planner', 'media-analysis-reference', 'resolve-image-display-geometry', 'analyze-visual-semantics', 'analyze-discovery-candidate-semantics', 'analyze-visual-spatial', 'analyze-discovery-candidate-spatial',
     ]);
 
     for (const name of manifest.active) {
       const source = sourceFor(name);
       const authCall = `await authorizeProtectedFunction(req, "${name}")`;
+      if (name === 'resolve-image-display-geometry') {
+        expect(source).toContain('installResolveImageDisplayGeometryProductionRuntime({');
+        expect(source).toContain('Deno.serve(productionHandleRequest)');
+        expect(geometryEntrySource).toContain('createProtectedFunctionAuthorizer({');
+        expect(geometryEntrySource).toContain('createResolveImageDisplayGeometryEndpoint({');
+        const delegatedAuth = "await dependencies.authorize(req, 'resolve-image-display-geometry')";
+        expect(geometryHandlerSource).toContain(delegatedAuth);
+        expect(geometryHandlerSource.indexOf(delegatedAuth))
+          .toBeLessThan(geometryHandlerSource.indexOf('dependencies.readJson'));
+        continue;
+      }
       expect(source, name).toContain(authCall);
       const authIndex = source.indexOf(authCall);
       for (const protectedOperation of ['.from("api_keys")', 'fetch(']) {
@@ -41,11 +57,12 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
   });
 
   it('independently validates bearer tokens and never accepts a body owner', () => {
-    expect(verifiedSource).toContain('extractBearerToken(req.headers.get("Authorization"))');
-    expect(verifiedSource).toContain('auth.getUser(token)');
-    expect(verifiedSource).toContain('return { ok: true, userId: data.user.id };');
-    expect(protectedSource).toContain('p_user_id: verifiedUser.userId');
-    expect(protectedSource).not.toMatch(/p_user_id:\s*(?:body|payload|request)\./);
+    expect(verifiedSource).toContain('createVerifiedUserVerifier({');
+    expect(verifierSource).toContain("extractBearerToken(req.headers.get('Authorization'))");
+    expect(verifierSource).toContain('auth.getUser(token)');
+    expect(verifierSource).toContain('return { ok: true, userId: data.user.id };');
+    expect(authorizerSource).toContain('p_user_id: verifiedUser.userId');
+    expect(authorizerSource).not.toMatch(/p_user_id:\s*(?:body|payload|request)\./);
     for (const name of manifest.active) {
       expect(sourceFor(name), name).not.toMatch(/\{[^}]*\b(?:userId|ownerId)\b[^}]*\}\s*=\s*(?:parsedBody\.value|await req\.json)/);
     }
@@ -62,13 +79,14 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     expect(protectedSource).toContain('"research-footage": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
     expect(protectedSource).toContain('"visual-query-planner": { operationClass: "medium", burstMax: 6, dailyMax: 80 }');
     expect(protectedSource).toContain('"media-analysis-reference": { operationClass: "low", burstMax: 12, dailyMax: 120 }');
+    expect(protectedSource).toContain('"resolve-image-display-geometry": { operationClass: "low", burstMax: 12, dailyMax: 120 }');
     expect(protectedSource).toContain('"analyze-visual-semantics": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
     expect(protectedSource).toContain('"analyze-discovery-candidate-semantics": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
     expect(protectedSource).toContain('"analyze-visual-spatial": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
     expect(protectedSource).toContain('"analyze-discovery-candidate-spatial": { operationClass: "high", burstMax: 2, dailyMax: 20 }');
-    expect(protectedSource).toContain('Request limit reached. Please try again shortly.');
-    expect(protectedSource).toContain('}, 429)');
-    expect(protectedSource).toContain('Service is temporarily unavailable.');
+    expect(authorizerSource).toContain('Request limit reached. Please try again shortly.');
+    expect(authorizerSource).toContain('}, 429)');
+    expect(authorizerSource).toContain('Service is temporarily unavailable.');
   });
 
   it('allows one maximum generated-script image batch without weakening voice or daily limits', () => {
@@ -82,9 +100,9 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
     const imageBurst = Number(imagePolicy?.[1]);
     expect(Array.from({ length: imageBurst }, (_, index) => index + 1 <= imageBurst)).toEqual(Array(8).fill(true));
     expect(imageBurst + 1 <= imageBurst).toBe(false);
-    expect(protectedSource).toContain('p_burst_max_requests: limit.burstMax');
-    expect(protectedSource).toContain('p_daily_max_requests: limit.dailyMax');
-    expect(protectedSource).not.toMatch(/p_(?:burst|daily)_max_requests:\s*(?:body|payload|request)\./);
+    expect(authorizerSource).toContain('p_burst_max_requests: limit.burstMax');
+    expect(authorizerSource).toContain('p_daily_max_requests: limit.dailyMax');
+    expect(authorizerSource).not.toMatch(/p_(?:burst|daily)_max_requests:\s*(?:body|payload|request)\./);
   });
 
   it('allows one bounded multi-scene Research video promotion batch without charging cleanup as acquisition', () => {
@@ -130,9 +148,9 @@ describe('V1 Edge Function authorization and abuse boundary', () => {
   });
 
   it('bounds JSON before parsing and validates provider-specific request sizes', () => {
-    expect(protectedSource).toContain('if (totalBytes > maxBytes)');
-    expect(protectedSource).toContain('Request body is too large.');
-    expect(protectedSource).toContain('}, 413)');
+    expect(boundedJsonSource).toContain('if (totalBytes > maxBytes)');
+    expect(boundedJsonSource).toContain('Request body is too large.');
+    expect(boundedJsonSource).toContain('}, 413)');
     expect(sourceFor('generate-image')).toContain('prompt.length > 4_000');
     expect(sourceFor('generate-image')).toContain('Object.prototype.hasOwnProperty.call(STYLE_PROMPTS, value)');
     expect(sourceFor('generate-voiceover')).toContain('isBoundedString(text, 5_000, true)');

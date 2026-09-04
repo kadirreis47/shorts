@@ -64,6 +64,7 @@ describe('ShortsFlow V1 feature allowlist', () => {
       'generate-voiceover',
       'research-footage',
       'translate-subtitles',
+      'resolve-image-display-geometry',
     ]) {
       expect(isV1EdgeFunction(functionName)).toBe(true);
     }

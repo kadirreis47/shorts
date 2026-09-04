@@ -28,7 +28,7 @@ describe('Premium Visual Discovery Studio boundary', () => {
     expect(studio).toContain('setVisualShortlists({});');
     expect(studio).toContain('setSelectedVisualCandidates({});');
     expect(studio).toContain('resolvePreview(candidate.candidateId)');
-    expect(studio).toContain('canonicalStudioOutputScenes(scenes)');
+    expect(studio).toContain('canonicalStudioOutputScenes(revisionScenes)');
     expect(studio).toContain('visualSessionEpoch.current += 1');
     expect(studio).not.toContain('quality: candidate.quality');
   });

@@ -1,12 +1,17 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { editingFixture } from '../editing/fixtures';
 import type { ExportJob, ExportPlan } from '@/core/export-intelligence';
 import { useExportIntelligenceStore } from '@/store/exportIntelligenceStore';
 import { useMediaStore } from '@/store/mediaStore';
 import { resolveVideoPublishingHandoff, usePublishingStore } from '@/store/publishingStore';
 import { useUIStore } from '@/store/uiStore';
+import { createAssetProviderEngine, createImageDisplayGeometry, createMediaEngine, type ImageEncodedToDisplayOrientation } from '@/core/media';
+import { TypedEventBus } from '@/core/events/eventBus';
+import type { ApplicationEventMap } from '@/core/events';
+import { buildFFmpegCommand, createRenderFingerprint } from '@/core/render';
+import { setValidatedOwnerId } from '@/auth/identity';
 
 const mocks = vi.hoisted(() => ({
   loadExportCapabilities: vi.fn(),
@@ -27,9 +32,12 @@ vi.mock('@/core/di', () => ({ applicationContainer: { resolve: () => ({ buildPro
 vi.mock('@/lib/supabase', () => ({ supabase: { from: mocks.from } }));
 
 import { AIExportStudio } from '@/views/AIExportStudio';
+import { buildAIExportStudioMediaProject } from '@/services/aiExportMediaProject';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let container: HTMLDivElement | undefined;
+
+beforeEach(() => setValidatedOwnerId('00000000-0000-4000-8000-000000000001'));
 
 afterEach(() => {
   container?.remove(); container = undefined;
@@ -38,6 +46,7 @@ afterEach(() => {
   usePublishingStore.setState({ handoff: null, videoExportLinks: {} });
   useMediaStore.getState().clearMediaProject();
   useUIStore.setState({ currentView: 'dashboard' });
+  setValidatedOwnerId(null);
 });
 
 describe('rendered video export handoff', () => {
@@ -58,7 +67,7 @@ describe('rendered video export handoff', () => {
     const unrelated = { ...queued, id: 'export-unrelated', state: 'completed', artifact: { path: 'C:/exports/unrelated.mp4', verified: true, contentDigest: 'b'.repeat(64), sizeBytes: 100, durationMs: 1000, diagnostics: {}, createdAt: 'now' } } as ExportJob;
     const query = { select: vi.fn(), eq: vi.fn(), single: vi.fn() };
     query.select.mockReturnValue(query); query.eq.mockReturnValue(query);
-    query.single.mockResolvedValue({ data: { id: 'video-selected', title: 'Selected video', scenes: fixture.project.scenes.map((scene) => scene.sourceScene) }, error: null });
+    query.single.mockResolvedValue({ data: { id: 'video-selected', title: 'Selected video', scenes: fixture.project.scenes.map((scene) => scene.sourceScene), narration_mode: 'silent' }, error: null });
     mocks.from.mockReturnValue(query);
     mocks.buildProject.mockResolvedValue(fixture);
     mocks.planActiveExport.mockImplementation(async () => { useExportIntelligenceStore.setState({ currentPlan: plan }); return plan; });
@@ -76,7 +85,8 @@ describe('rendered video export handoff', () => {
     expect(mocks.buildProject).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'rendered-video-video-selected',
       title: 'Selected video',
-      audio: { narrationMode: 'required' },
+      audio: { narrationMode: 'silent' },
+      productionRecipe: expect.any(Object),
     }));
     const destinationButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Select destination')!;
     await act(async () => { destinationButton.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
@@ -109,6 +119,49 @@ describe('rendered video export handoff', () => {
     await act(async () => { planButton.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
     expect(mocks.buildProject).toHaveBeenCalledWith(expect.objectContaining({ audio: { narrationMode: 'silent' } }));
     await act(async () => { root.unmount(); });
+  });
+
+  it('routes EXIF 6 and 7 private images through the same Recipe, authority, FFmpeg and fingerprint path', async () => {
+    const owner = '00000000-0000-4000-8000-000000000001';
+    const path = `${owner}/generated-images/00000000-0000-4000-8000-000000000002.jpg`;
+    setValidatedOwnerId(owner);
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const mediaEngine = createMediaEngine(bus, createAssetProviderEngine(bus));
+    const build = async (orientation: ImageEncodedToDisplayOrientation, marker: string) => buildAIExportStudioMediaProject({
+      id: `video-${marker}`, title: 'Private image', narration_mode: 'silent', scenes: [{
+        sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'Scene', duration: 3, visual: 'Visual',
+        imageStorage: { bucket: 'media', objectPath: path },
+      }],
+    }, mediaEngine, async () => ({
+      ...createImageDisplayGeometry(`media:${path}`, 3, 2, orientation),
+      contentDigest: marker.toLowerCase().repeat(64),
+      executionAuthority: { version: 1, reference: `idga1_${marker.repeat(43)}`, expiresAt: '2099-01-01T00:00:00.000Z' },
+    }));
+    const exif6 = await build('rotate-90-cw', 'A');
+    const exif7 = await build('transverse', 'B');
+    for (const [result, orientation] of [[exif6, 'rotate-90-cw'], [exif7, 'transverse']] as const) {
+      expect(result.project.metadata.productionRecipe).toBeDefined();
+      expect(result.manifest.timeline.scenes[0].imageGeometryAuthority?.expectedOrientation).toBe(orientation);
+      const command = buildFFmpegCommand({ manifest: result.manifest, preset: { id: 'test', name: 'test', container: 'mp4', videoCodec: 'h264', audioCodec: 'aac', quality: 'standard', hardwareAcceleration: 'disabled' } });
+      expect(command.args.slice(0, command.args.indexOf(`shortsflow-storage://media/${path}`))).toContain('-noautorotate');
+      expect(command.args.join(',')).toContain('{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}}');
+      expect(command.imageGeometryAuthorities[0].expectedOrientation).toBe(orientation);
+    }
+    const preset = { id: 'test', name: 'test', container: 'mp4' as const, videoCodec: 'h264' as const, audioCodec: 'aac' as const, quality: 'standard' as const, hardwareAcceleration: 'disabled' as const };
+    await expect(createRenderFingerprint({ manifest: exif6.manifest, preset, adapterId: 'ffmpeg' }))
+      .resolves.not.toBe(await createRenderFingerprint({ manifest: exif7.manifest, preset, adapterId: 'ffmpeg' }));
+  });
+
+  it('fails AI Export closed for mutable external image scenes', async () => {
+    const owner = '00000000-0000-4000-8000-000000000001';
+    setValidatedOwnerId(owner);
+    const bus = new TypedEventBus<ApplicationEventMap>();
+    const mediaEngine = createMediaEngine(bus, createAssetProviderEngine(bus));
+    await expect(buildAIExportStudioMediaProject({
+      id: 'external', title: 'External', narration_mode: 'silent', scenes: [{
+        sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'Scene', duration: 3, visual: 'Visual', imageUrl: 'https://cdn.example/image.jpg',
+      }],
+    }, mediaEngine)).rejects.toThrow(/promoted to private media/i);
   });
 
   it.each(['failed', 'cancelled', 'interrupted'] as const)('does not promote a %s export to a verified link', async (state) => {

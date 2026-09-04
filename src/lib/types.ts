@@ -1,3 +1,5 @@
+import type { ImageDisplayGeometryV1, TrustedImageDisplayGeometryV1 } from '@/core/media/imageDisplayGeometry';
+
 export type VideoStatus = 'idea' | 'script_ready' | 'rendering' | 'rendered' | 'scheduled' | 'published' | 'failed';
 
 export type VisualMode = 'auto' | 'ai_cartoon' | 'ai_realistic' | 'ai_anime' | 'ai_horror' | 'real_footage' | 'mixed';
@@ -37,6 +39,8 @@ export interface Scene {
   imageUrl?: string;
   videoUrl?: string;
   imageStorage?: MediaStorageObject;
+  /** Server-derived technical geometry, valid only for the bound imageStorage object. */
+  imageDisplayGeometry?: ImageDisplayGeometryV1 | TrustedImageDisplayGeometryV1;
   videoStorage?: MediaStorageObject;
   /** Applies only to imageStorage and is excluded from render identity. */
   imageProvenance?: ProviderMediaProvenance;

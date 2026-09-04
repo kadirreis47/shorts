@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 const source = readFileSync('supabase/functions/generate-image/index.ts', 'utf8');
 const verifiedUserSource = readFileSync('supabase/functions/_shared/verified-user.ts', 'utf8');
+const verifiedUserVerifierSource = readFileSync('supabase/functions/_shared/verified-user-verifier.ts', 'utf8');
 const protectedFunctionSource = readFileSync('supabase/functions/_shared/protected-function.ts', 'utf8');
+const protectedAuthorizerSource = readFileSync('supabase/functions/_shared/protected-function-authorizer.ts', 'utf8');
 
 describe('generate-image OpenAI contract', () => {
   it('uses the current portrait GPT Image generation contract', () => {
@@ -63,7 +65,9 @@ describe('generate-image OpenAI contract', () => {
   it('requires a server-verified Supabase user before provider consumption', () => {
     expect(source).toContain('await authorizeProtectedFunction(req, "generate-image")');
     expect(source.indexOf('await authorizeProtectedFunction(req, "generate-image")')).toBeLessThan(source.indexOf('await readBoundedJson<GenerateImageRequest>'));
-    expect(protectedFunctionSource).toContain('const verifiedUser = await getVerifiedUser(req);');
-    expect(verifiedUserSource).toContain('Authentication is required.');
+    expect(protectedFunctionSource).toContain('verifyUser: getVerifiedUser');
+    expect(protectedAuthorizerSource).toContain('const verifiedUser = await dependencies.verifyUser(req);');
+    expect(verifiedUserSource).toContain('createVerifiedUserVerifier({');
+    expect(verifiedUserVerifierSource).toContain('Authentication is required.');
   });
 });

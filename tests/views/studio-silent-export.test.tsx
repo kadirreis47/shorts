@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   waitForActiveExport: vi.fn(),
   renderVideo: vi.fn(),
   uploadMedia: vi.fn(),
+  resolveOwnedImageDisplayGeometry: vi.fn(),
+  createSignedUrl: vi.fn(),
   translateSubtitles: vi.fn(),
   issueOpaqueSpatialMediaAnalysisReference: vi.fn(),
   analyzeVisualSpatial: vi.fn(),
@@ -42,7 +44,7 @@ vi.mock('@/services/exportIntelligenceController', () => ({
 }));
 vi.mock('@/lib/supabase', () => ({
   isSupabaseConfigured: false,
-  supabase: { from: mocks.from },
+  supabase: { from: mocks.from, storage: { from: vi.fn(() => ({ createSignedUrl: mocks.createSignedUrl })) } },
 }));
 vi.mock('@/lib/api', () => ({
   generateVoiceover: vi.fn(), getProviderStatus: mocks.getProviderStatus, listVoices: vi.fn(async () => []), uploadMedia: mocks.uploadMedia,
@@ -51,6 +53,7 @@ vi.mock('@/lib/api', () => ({
   translateSubtitles: mocks.translateSubtitles,
   issueOpaqueSpatialMediaAnalysisReference: mocks.issueOpaqueSpatialMediaAnalysisReference,
   analyzeVisualSpatial: mocks.analyzeVisualSpatial,
+  resolveOwnedImageDisplayGeometry: mocks.resolveOwnedImageDisplayGeometry,
 }));
 vi.mock('@/lib/videoRenderer', () => ({ renderVideo: mocks.renderVideo }));
 
@@ -59,7 +62,12 @@ vi.mock('@/lib/videoRenderer', () => ({ renderVideo: mocks.renderVideo }));
 describe('Studio canonical silent export', () => {
   let container: HTMLDivElement | null = null;
 
-  beforeEach(() => { setValidatedOwnerId('studio-test-user'); useAuthSessionStore.setState({ status: 'authenticated', user: { id: 'studio-test-user' } as never, session: { access_token: 'token' } as never, error: null }); });
+  beforeEach(() => {
+    setValidatedOwnerId('studio-test-user');
+    mocks.resolveOwnedImageDisplayGeometry.mockImplementation(async (media: { objectPath: string }) => identityDisplayGeometry(media.objectPath));
+    mocks.createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://signed.example/restored.png' }, error: null });
+    useAuthSessionStore.setState({ status: 'authenticated', user: { id: 'studio-test-user' } as never, session: { access_token: 'token' } as never, error: null });
+  });
 
   afterEach(() => {
     container?.remove();
@@ -440,6 +448,7 @@ describe('Studio canonical silent export', () => {
         ...scene,
         imageUrl: undefined,
         imageStorage: { bucket: 'media', objectPath: ownedImagePath },
+        imageDisplayGeometry: identityDisplayGeometry(ownedImagePath),
       })),
     });
     container = document.createElement('div'); document.body.append(container);
@@ -556,6 +565,22 @@ function verifiedExportJob(): ExportJob {
   } as unknown as ExportJob;
 }
 
+function identityDisplayGeometry(objectPath: string) {
+  return {
+    version: 1 as const,
+    mediaIdentity: `media:${objectPath}`,
+    encodedDimensions: { width: 1200, height: 800 },
+    displayDimensions: { width: 1200, height: 800 },
+    encodedToDisplay: 'identity' as const,
+    contentDigest: 'a'.repeat(64),
+    executionAuthority: {
+      version: 1 as const,
+      reference: `idga1_${'A'.repeat(43)}`,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    },
+  };
+}
+
 function channel(): CanonicalChannelIdentity {
   return {
     id: 'youtube:UC-SILENT', source: 'native-youtube', legacyChannelId: null,
@@ -570,7 +595,14 @@ function silentDraft(): StudioDraft {
     version: 1, projectId: 'silent-project', savedAt: '2026-08-12T00:00:00.000Z', step: 'publish',
     channelId: 'youtube:UC-SILENT', topic: 'Silent topic', niche: '', tone: 'engaging', duration: 30,
     title: 'Silent video', hook: '', script: 'Silent script', cta: '',
-    scenes: [{ sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'Silent scene', duration: 3, visual: 'Silent visual', imageUrl: 'https://example.test/silent.jpg' }],
+    scenes: [{
+      sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001',
+      text: 'Silent scene', duration: 3, visual: 'Silent visual',
+      imageStorage: {
+        bucket: 'media',
+        objectPath: 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000001.png',
+      },
+    }],
     captionStyle: 'karaoke', transitionStyle: 'crossfade', motionStyle: 'kenburns', useBroll: false,
     musicId: '', musicVolume: 0.25, visualMode: 'auto', selectedStyleId: '', characterName: '',
     characterAppearance: '', characterArtStyle: 'realistic', characterProfileId: '', watermarkText: '',

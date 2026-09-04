@@ -16,6 +16,7 @@ function validSelectionRef(value) { return typeof value === 'string' && /^youtub
 function validChannelRef(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value); }
 function validPublishRequest(value) {
   return Boolean(value) && typeof value === 'object' && value.platform === 'youtube'
+    && Object.keys(value).every((key) => ['jobId', 'idempotencyKey', 'platform', 'approvalFingerprint', 'approvedAt', 'target', 'account', 'artifact', 'metadata', 'outboundDescription', 'remotePublishId', 'recovery'].includes(key))
     && typeof value.jobId === 'string' && value.jobId.length > 0 && value.jobId.length <= 256
     && typeof value.idempotencyKey === 'string' && value.idempotencyKey.length > 0 && value.idempotencyKey.length <= 256
     && typeof value.approvalFingerprint === 'string' && value.approvalFingerprint.length > 0
@@ -23,10 +24,10 @@ function validPublishRequest(value) {
     && value.account?.platform === 'youtube' && validCredentialRef(value.account.credentialRef)
     && typeof value.account.accountId === 'string' && value.account.accountId.length > 0 && typeof value.account.accountRef === 'string' && validChannelRef(value.account.channelRef)
     && typeof value.target?.accountId === 'string' && validChannelRef(value.target.channelRef)
-    && value.artifact && typeof value.artifact.artifactPath === 'string' && value.artifact.artifactPath.length > 0 && !value.artifact.artifactPath.includes('\0')
-    && Number.isSafeInteger(value.artifact.sizeBytes) && value.artifact.sizeBytes > 0
+    && value.artifact && typeof value.artifact === 'object' && !Array.isArray(value.artifact)
+    && Object.keys(value.artifact).every((key) => ['verifiedExportReference', 'artifactFingerprint'].includes(key))
+    && typeof value.artifact.verifiedExportReference === 'string' && /^vea1_[A-Za-z0-9_-]{43}$/.test(value.artifact.verifiedExportReference)
     && typeof value.artifact.artifactFingerprint === 'string' && /^[a-z0-9_-]+$/i.test(value.artifact.artifactFingerprint)
-    && typeof value.artifact.contentDigest === 'string' && /^[a-f0-9]{64}$/.test(value.artifact.contentDigest)
     && value.metadata && typeof value.metadata.title === 'string' && typeof value.metadata.description === 'string' && typeof value.metadata.caption === 'string'
     && typeof value.outboundDescription === 'string' && value.outboundDescription.length <= 5000
     && (!value.recovery || (typeof value.recovery === 'object'
@@ -63,7 +64,7 @@ function safePublishError(error) {
   if (error instanceof YouTubePublishError || error instanceof YouTubeCheckpointError || error instanceof ArtifactIntegrityError || error instanceof ArtifactSnapshotError) return { code: String(error.code), message: String(error.message), retryable: Boolean(error.retryable), status: Number(error.status || 500), retryAfterUtc: error.retryAfterUtc ?? null };
   return { code: 'youtube-publish-failed', message: 'YouTube publishing failed safely.', retryable: false, status: 500, retryAfterUtc: null };
 }
-function registerYouTubeHandlers({ electron = require('electron'), service, publishService, analyticsService, ownerContext: ownerContextOverride, validateAccessToken } = {}) {
+function registerYouTubeHandlers({ electron = require('electron'), service, publishService, analyticsService, ownerContext: ownerContextOverride, validateAccessToken, verifiedExportAuthority } = {}) {
   const runtime = electron;
   const userDataPath = runtime.app.getPath('userData');
   const ownerContext = ownerContextOverride || createYouTubeOwnerContext({ validateAccessToken: validateAccessToken || createSupabaseOwnerValidator({ resolveConfig: () => resolveSupabaseAuthConfig({ isPackaged: runtime.app.isPackaged }) }) });
@@ -98,6 +99,15 @@ function registerYouTubeHandlers({ electron = require('electron'), service, publ
       return { ok: false, error: publicError(error) };
     }
   };
+  const resolvePublishRequest = async (event, input, owner, message) => {
+    if (!validPublishRequest(input)) throw new YouTubePublishError('invalid-request', message, { status: 400 });
+    if (!Number.isSafeInteger(event?.sender?.id) || typeof verifiedExportAuthority?.resolve !== 'function') {
+      throw new YouTubePublishError('artifact-unavailable', 'Verified export publish capability is unavailable.', { status: 409 });
+    }
+    const artifact = await verifiedExportAuthority.resolve(event.sender.id, input.artifact.verifiedExportReference, owner);
+    ownerContext.assertCurrent(owner);
+    return Object.freeze({ ...input, artifact: Object.freeze({ ...artifact, artifactFingerprint: input.artifact.artifactFingerprint }) });
+  };
   runtime.ipcMain.handle('youtube:owner-context', async (_event, input = {}) => {
     try { return { ok: true, result: await ownerContext.establish(input.accessToken) }; }
     catch (error) { return { ok: false, error: publicError(error) }; }
@@ -108,10 +118,10 @@ function registerYouTubeHandlers({ electron = require('electron'), service, publ
   runtime.ipcMain.handle('youtube:status', status);
   runtime.ipcMain.handle('youtube:finalize-selection', handle('finalize'));
   runtime.ipcMain.handle('youtube:cancel-selection', handle('cancel-selection'));
-  runtime.ipcMain.handle('youtube:publish', async (_event, input) => { try { const owner = ownerContext.capture(); if (!validPublishRequest(input)) throw new YouTubePublishError('invalid-request', 'Invalid YouTube publish request.', { status: 400 }); const result = await publisher.publish(input, owner); ownerContext.assertCurrent(owner); return { ok: true, result: { remotePublishId: result.remotePublishId, remoteUrl: result.remoteUrl, state: result.state, retryAfterUtc: result.retryAfterUtc ?? null } }; } catch (error) { return { ok: false, error: safePublishError(error) }; } });
-  runtime.ipcMain.handle('youtube:reconcile-publish', async (_event, input) => { try { const owner = ownerContext.capture(); if (!validPublishRequest(input)) throw new YouTubePublishError('invalid-request', 'Invalid YouTube reconciliation request.', { status: 400 }); const result = await publisher.reconcile(input, owner); ownerContext.assertCurrent(owner); return { ok: true, result: { found: result.found !== false, remotePublishId: result.remotePublishId, remoteUrl: result.remoteUrl, state: result.state, retryAfterUtc: result.retryAfterUtc ?? null, restartRequired: result.restartRequired === true, approvalMismatch: result.approvalMismatch === true } }; } catch (error) { return { ok: false, error: safePublishError(error) }; } });
+  runtime.ipcMain.handle('youtube:publish', async (event, input) => { try { const owner = ownerContext.capture(); const trustedRequest = await resolvePublishRequest(event, input, owner, 'Invalid YouTube publish request.'); const result = await publisher.publish(trustedRequest, owner); ownerContext.assertCurrent(owner); return { ok: true, result: { remotePublishId: result.remotePublishId, remoteUrl: result.remoteUrl, state: result.state, retryAfterUtc: result.retryAfterUtc ?? null } }; } catch (error) { return { ok: false, error: safePublishError(error) }; } });
+  runtime.ipcMain.handle('youtube:reconcile-publish', async (event, input) => { try { const owner = ownerContext.capture(); const trustedRequest = await resolvePublishRequest(event, input, owner, 'Invalid YouTube reconciliation request.'); const result = await publisher.reconcile(trustedRequest, owner); ownerContext.assertCurrent(owner); return { ok: true, result: { found: result.found !== false, remotePublishId: result.remotePublishId, remoteUrl: result.remoteUrl, state: result.state, retryAfterUtc: result.retryAfterUtc ?? null, restartRequired: result.restartRequired === true, approvalMismatch: result.approvalMismatch === true } }; } catch (error) { return { ok: false, error: safePublishError(error) }; } });
   runtime.ipcMain.handle('youtube:cancel-publish', async (_event, input) => { try { const owner = ownerContext.capture(); const cancelled = typeof input?.jobId === 'string' ? publisher.cancel(input.jobId, owner) : false; ownerContext.assertCurrent(owner); return { cancelled }; } catch { return { cancelled: false }; } });
-  runtime.ipcMain.handle('youtube:acknowledge-receipt', async (_event, input) => { try { const owner = ownerContext.capture(); if (!validPublishRequest(input) || typeof input.remotePublishId !== 'string') return { acknowledged: false }; const acknowledged = await publisher.acknowledgeReceipt(input, owner); ownerContext.assertCurrent(owner); return { acknowledged }; } catch { return { acknowledged: false }; } });
+  runtime.ipcMain.handle('youtube:acknowledge-receipt', async (event, input) => { try { const owner = ownerContext.capture(); if (typeof input?.remotePublishId !== 'string') return { acknowledged: false }; const trustedRequest = await resolvePublishRequest(event, input, owner, 'Invalid YouTube receipt acknowledgement.'); const acknowledged = await publisher.acknowledgeReceipt(trustedRequest, owner); ownerContext.assertCurrent(owner); return { acknowledged }; } catch { return { acknowledged: false }; } });
   runtime.ipcMain.handle('youtube:collect-analytics', async (_event, input) => { try { const owner = ownerContext.capture(); if (!validAnalyticsRequest(input)) throw new YouTubeAnalyticsError('invalid-request', 'Invalid YouTube analytics request.', { status: 400 }); analytics ??= createYouTubeAnalyticsService({ auth }); const result = await analytics.collect(input, owner); ownerContext.assertCurrent(owner); return { ok: true, result: safeAnalyticsResult(result) }; } catch (error) { return { ok: false, error: safeAnalyticsError(error) }; } });
   return () => ['youtube:owner-context', 'youtube:clear-owner-context', 'youtube:connect', 'youtube:disconnect', 'youtube:status', 'youtube:finalize-selection', 'youtube:cancel-selection', 'youtube:publish', 'youtube:reconcile-publish', 'youtube:cancel-publish', 'youtube:acknowledge-receipt', 'youtube:collect-analytics'].forEach((channel) => runtime.ipcMain.removeHandler(channel));
 }

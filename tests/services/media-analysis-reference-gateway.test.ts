@@ -22,20 +22,30 @@ describe('media analysis reference gateway runtime boundary', () => {
     const fetchImpl = vi.fn(async () => new Response(bytes, { headers: { 'content-type': 'image/png', 'content-length': String(bytes.byteLength) } }));
     vi.stubGlobal('fetch', fetchImpl);
     const reference = await issueMediaAnalysisReference(service(EVIDENCE), OWNER_A, { media: { bucket: 'media', objectPath: PATH }, scope: 'spatial-image-analysis' }, encodedSecret(), NOW);
-    await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, reference.reference, 'spatial-image-analysis', encodedSecret(), NOW + 1_000)).resolves.toEqual({
-      mediaType: 'image', contentType: 'image/png', bytes, width: 10, height: 20,
+    await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, reference.reference, 'spatial-image-analysis', encodedSecret(), NOW + 1_000)).resolves.toMatchObject({
+      mediaType: 'image', mediaIdentity: `media:${PATH}`, contentType: 'image/png', bytes, width: 10, height: 20, exifOrientation: 1,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    const geometryReference = await issueMediaAnalysisReference(service(EVIDENCE), OWNER_A, { media: { bucket: 'media', objectPath: PATH }, scope: 'image-display-geometry' }, encodedSecret(), NOW);
+    await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, geometryReference.reference, 'image-display-geometry', encodedSecret(), NOW + 1_000)).resolves.toMatchObject({
+      mediaType: 'image', mediaIdentity: `media:${PATH}`, width: 10, height: 20, exifOrientation: 1,
+    });
   });
 
   it('rejects malformed, cross-user, and cross-scope capabilities before reading bytes', async () => {
     const fetchImpl = vi.fn(); vi.stubGlobal('fetch', fetchImpl);
     const spatial = await issueMediaAnalysisReference(service(EVIDENCE), OWNER_A, { media: { bucket: 'media', objectPath: PATH }, scope: 'spatial-image-analysis' }, encodedSecret(), NOW);
     const semantic = await issueMediaAnalysisReference(service(EVIDENCE), OWNER_A, { media: { bucket: 'media', objectPath: PATH }, scope: 'semantic-image-analysis' }, encodedSecret(), NOW);
+    const geometry = await issueMediaAnalysisReference(service(EVIDENCE), OWNER_A, { media: { bucket: 'media', objectPath: PATH }, scope: 'image-display-geometry' }, encodedSecret(), NOW);
     await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, 'malformed', 'spatial-image-analysis', encodedSecret(), NOW + 1_000)).rejects.toMatchObject({ reason: 'invalid-reference' });
     await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_B, spatial.reference, 'spatial-image-analysis', encodedSecret(), NOW + 1_000)).rejects.toMatchObject({ reason: 'invalid-reference' });
     await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, spatial.reference, 'semantic-image-analysis', encodedSecret(), NOW + 1_000)).rejects.toMatchObject({ reason: 'scope-mismatch' });
     await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, semantic.reference, 'spatial-image-analysis', encodedSecret(), NOW + 1_000)).rejects.toMatchObject({ reason: 'scope-mismatch' });
+    await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, geometry.reference, 'semantic-image-analysis', encodedSecret(), NOW + 1_000)).rejects.toMatchObject({ reason: 'scope-mismatch' });
+    await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, geometry.reference, 'spatial-image-analysis', encodedSecret(), NOW + 1_000)).rejects.toMatchObject({ reason: 'scope-mismatch' });
+    await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, semantic.reference, 'image-display-geometry', encodedSecret(), NOW + 1_000)).rejects.toMatchObject({ reason: 'scope-mismatch' });
+    await expect(resolveMediaAnalysisReference(service(EVIDENCE), STORAGE_AUTHORITY, OWNER_A, spatial.reference, 'image-display-geometry', encodedSecret(), NOW + 1_000)).rejects.toMatchObject({ reason: 'scope-mismatch' });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

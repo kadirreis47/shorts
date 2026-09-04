@@ -3,12 +3,12 @@ import type { RenderManifest } from '@/core/media';
 import { buildFFmpegCommand } from './ffmpegCommandBuilder';
 import { buildCanonicalSceneExecutionPlan } from './canonicalSceneExecutionPlan';
 import {
-  buildSceneSegmentCommand,
   buildSegmentConcatCommand,
 } from './segmentCommandBuilder';
 import { createSegmentCache } from './segmentCache';
 import { getFFmpegBridge } from './ffmpegBridge';
-import type { FFmpegCapabilities } from './ffmpegTypes';
+import type { FFmpegBridge, FFmpegCapabilities, FFmpegRunRequest } from './ffmpegTypes';
+import { buildConcatNativeRenderIntent, buildFullNativeRenderIntent, buildSegmentNativeRenderIntent } from './nativeRenderIntent';
 import type { HardwareScheduler } from './hardwareScheduler';
 import { withHardwareSelection } from './hardwareScheduler';
 import type { RenderAdapter, RenderExecutionContext, RenderOutput, RenderPreset } from './types';
@@ -74,7 +74,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
 
     const segmentCache = createSegmentCache();
     const resolutions = await segmentCache.resolve(incrementalPlan);
-    const segmentPaths: string[] = [];
+    const segmentReferences: string[] = [];
     const childJobIds = new Set<string>();
     let renderedSegments = 0;
     let reusedSegments = 0;
@@ -102,20 +102,13 @@ export class FFmpegRenderAdapter implements RenderAdapter {
         }
 
         if (resolution.reusable) {
-          segmentPaths.push(resolution.path);
+          segmentReferences.push(resolution.resourceReference);
           reusedSegments += 1;
           continue;
         }
 
         const childJobId = `${context.jobId}-segment-${item.sceneIndex}`;
         childJobIds.add(childJobId);
-        const command = buildSceneSegmentCommand({
-          manifest: context.manifest,
-          scene,
-          preset,
-          outputPath: resolution.path,
-        });
-
         await context.reportProgress({
           stage: 'video',
           progress: Math.max(
@@ -130,15 +123,15 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           totalFrames: incrementalPlan.estimatedFrames,
         });
 
-        await bridge.run({
+        await executeCanonicalRender(bridge, {
+          operation: 'segment-render',
           jobId: childJobId,
-          args: command.args,
-          outputPath: resolution.path,
-          subtitleContent: command.subtitleContent,
+          outputResourceReference: resolution.resourceReference,
+          intent: buildSegmentNativeRenderIntent(context.manifest, preset, scene),
         });
 
         childJobIds.delete(childJobId);
-        segmentPaths.push(resolution.path);
+        segmentReferences.push(resolution.resourceReference);
         renderedSegments += 1;
       }
 
@@ -147,7 +140,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
       const concatPlan = buildSegmentConcatCommand({
         manifest: context.manifest,
         preset,
-        segmentPaths,
+        segmentPaths: segmentReferences,
       });
       const videoCodecIndex = concatPlan.args.lastIndexOf('-c:v');
       const finalVideoReencoded = videoCodecIndex >= 0 && concatPlan.args[videoCodecIndex + 1] !== 'copy';
@@ -160,16 +153,15 @@ export class FFmpegRenderAdapter implements RenderAdapter {
         totalFrames: concatPlan.totalFrames,
       });
 
-      const result = await bridge.run({
+      const result = await executeCanonicalRender(bridge, {
+        operation: 'segment-concat',
         jobId: concatJobId,
-        args: concatPlan.args,
         outputPath: context.outputPath,
-        concatContent: concatPlan.concatContent,
-        subtitleContent: concatPlan.subtitleContent,
+        intent: buildConcatNativeRenderIntent(context.manifest, preset, segmentReferences),
       });
       childJobIds.delete(concatJobId);
 
-      const rawDiagnostics = await bridge.analyzeOutput(result.outputPath);
+      const rawDiagnostics = await bridge.analyzeRenderArtifact(result.outputPath);
       const diagnostics = evaluateRenderDiagnostics(
         rawDiagnostics,
         context.manifest,
@@ -214,7 +206,7 @@ export class FFmpegRenderAdapter implements RenderAdapter {
           ).length,
           renderedSegments,
           reusedSegments,
-          segmentCount: segmentPaths.length,
+          segmentCount: segmentReferences.length,
           incrementalPlanId: incrementalPlan.planId,
           incrementalEstimatedSavedPercent:
             incrementalPlan.estimatedSavedPercent,
@@ -258,7 +250,12 @@ export class FFmpegRenderAdapter implements RenderAdapter {
         message: preset.hardwareAcceleration === 'nvenc' ? 'NVENC GPU render komutu hazırlanıyor' : 'CPU render komutu hazırlanıyor',
         frame: 0, totalFrames: plan.totalFrames,
       });
-      const result = await bridge.run({ jobId: context.jobId, args: plan.args, outputPath: context.outputPath, subtitleContent: plan.subtitleContent });
+      const result = await executeCanonicalRender(bridge, {
+        operation: 'full-render',
+        jobId: context.jobId,
+        outputPath: context.outputPath,
+        intent: buildFullNativeRenderIntent(context.manifest, preset),
+      });
       await context.reportProgress({ stage: 'finalizing', progress: 99, message: 'MP4 dosyası sonlandırılıyor', frame: plan.totalFrames, totalFrames: plan.totalFrames });
       return {
         kind: 'video', uri: result.outputPath, mimeType: 'video/mp4', sizeBytes: result.sizeBytes,
@@ -275,6 +272,14 @@ export class FFmpegRenderAdapter implements RenderAdapter {
       context.signal.removeEventListener('abort', abort);
     }
   }
+}
+
+async function executeCanonicalRender(
+  bridge: FFmpegBridge,
+  request: FFmpegRunRequest,
+) {
+  const plan = await bridge.createCanonicalRenderPlan(request);
+  return bridge.executeCanonicalRenderPlan(plan.reference);
 }
 
 function appliedCameraMotionSceneCount(manifest: RenderManifest, preset: RenderPreset): number {

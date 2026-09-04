@@ -9,9 +9,11 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 export type AnalysisImageContentType = "image/jpeg" | "image/png";
 export interface ValidatedAnalysisImage {
   readonly contentType: AnalysisImageContentType;
-  /** Encoded-raster dimensions. JPEG EXIF/display orientation is intentionally not applied in V1. */
+  /** Encoded-raster dimensions. JPEG EXIF orientation is reported separately and never applied here. */
   readonly width: number;
   readonly height: number;
+  /** JPEG EXIF orientation 1-8; PNG and malformed/unsupported EXIF resolve to 1. */
+  readonly exifOrientation: number;
 }
 
 /** Validates MIME, extension, signature and dimensions without decoding pixels. */
@@ -23,7 +25,7 @@ export function validateAnalysisImage(path: string, contentType: string, bytes: 
 export function validateAnalysisImageWithGeometry(path: string, contentType: string, bytes: Uint8Array): ValidatedAnalysisImage {
   if (bytes.length < 1 || bytes.length > MAX_ANALYSIS_IMAGE_BYTES) throw new Error("invalid-image");
   const png = path.endsWith(".png") && contentType === "image/png" ? validPng(bytes) : null;
-  if (png) return Object.freeze({ contentType: "image/png", ...png });
+  if (png) return Object.freeze({ contentType: "image/png", ...png, exifOrientation: 1 });
   const jpeg = path.endsWith(".jpg") && contentType === "image/jpeg" ? validJpeg(bytes) : null;
   if (jpeg) return Object.freeze({ contentType: "image/jpeg", ...jpeg });
   throw new Error("invalid-image");
@@ -55,15 +57,15 @@ function validPngColor(bitDepth: number, colorType: number): boolean {
   return colorType === 3 && [1, 2, 4, 8].includes(bitDepth);
 }
 
-function validJpeg(bytes: Uint8Array): { readonly width: number; readonly height: number } | null {
+function validJpeg(bytes: Uint8Array): { readonly width: number; readonly height: number; readonly exifOrientation: number } | null {
   if (bytes.length < 6 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9) return null;
-  let offset = 2; let segments = 0; let headerBytes = 0; let geometry: { readonly width: number; readonly height: number } | null = null; let sawScan = false;
+  let offset = 2; let segments = 0; let headerBytes = 0; let geometry: { readonly width: number; readonly height: number } | null = null; let sawScan = false; let exifOrientation: number | null = null;
   while (offset < bytes.length && segments < MAX_JPEG_SEGMENTS) {
     if (bytes[offset] !== 0xff) return null;
     while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
     if (offset >= bytes.length) return null;
     const marker = bytes[offset++]; segments += 1;
-    if (marker === 0xd9) return geometry && sawScan && offset === bytes.length ? geometry : null;
+    if (marker === 0xd9) return geometry && sawScan && offset === bytes.length ? { ...geometry, exifOrientation: exifOrientation ?? 1 } : null;
     if (marker === 0xd8 || marker === 0x00) return null;
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
     if (offset + 2 > bytes.length) return null;
@@ -80,6 +82,7 @@ function validJpeg(bytes: Uint8Array): { readonly width: number; readonly height
       // valid SOF segments while treating the first frame as the encoded raster.
       geometry ??= Object.freeze({ width, height });
     }
+    if (marker === 0xe1 && exifOrientation === null) exifOrientation = readExifOrientation(bytes, offset + 2, length - 2);
     if (marker === 0xda) {
       const components = bytes[offset + 2];
       if (!geometry || length < 8 || components < 1 || length !== 6 + components * 2) return null;
@@ -93,6 +96,31 @@ function validJpeg(bytes: Uint8Array): { readonly width: number; readonly height
       continue;
     }
     offset += length;
+  }
+  return null;
+}
+
+/** Returns null for absent or malformed EXIF. Malformed metadata never invalidates otherwise valid pixels. */
+function readExifOrientation(bytes: Uint8Array, start: number, length: number): number | null {
+  if (length < 14 || start < 0 || start + length > bytes.length || ascii(bytes, start, start + 6) !== "Exif\0\0") return null;
+  const tiff = start + 6; const little = bytes[tiff] === 0x49 && bytes[tiff + 1] === 0x49;
+  if (!little && !(bytes[tiff] === 0x4d && bytes[tiff + 1] === 0x4d)) return null;
+  const read16 = (offset: number) => little ? bytes[offset] + bytes[offset + 1] * 256 : uint16(bytes, offset);
+  const read32 = (offset: number) => little
+    ? bytes[offset] + bytes[offset + 1] * 256 + bytes[offset + 2] * 65_536 + bytes[offset + 3] * 16_777_216
+    : uint32(bytes, offset);
+  const end = start + length;
+  if (tiff + 8 > end || read16(tiff + 2) !== 42) return null;
+  const ifdOffset = read32(tiff + 4); const ifd = tiff + ifdOffset;
+  if (!Number.isSafeInteger(ifd) || ifdOffset < 8 || ifd + 2 > end) return null;
+  const entries = read16(ifd);
+  if (entries > 512 || ifd + 2 + entries * 12 > end) return null;
+  for (let index = 0; index < entries; index += 1) {
+    const entry = ifd + 2 + index * 12;
+    if (read16(entry) !== 0x0112) continue;
+    if (read16(entry + 2) !== 3 || read32(entry + 4) !== 1) return null;
+    const orientation = read16(entry + 8);
+    return orientation >= 1 && orientation <= 8 ? orientation : null;
   }
   return null;
 }

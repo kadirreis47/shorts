@@ -102,10 +102,14 @@ export function normalizeStudioDraft(draft: StudioDraft): StudioDraft {
     transition: canonicalizeStudioRecipeTransition(draft.transitionStyle),
   };
   const scenes = plannedScenes.map((scene, sceneIndex) => {
-    if (scene.compositionOverride === undefined) return scene;
-    const compositionOverride = normalizeSceneCompositionOverride(scene.compositionOverride, compositionDefaults, sceneIndex);
-    const { compositionOverride: _ignored, ...canonical } = scene;
-    return compositionOverride ? { ...canonical, compositionOverride } : canonical;
+    const { compositionOverride: _ignored, imageDisplayGeometry: _rawGeometry, ...canonical } = scene;
+    const compositionOverride = scene.compositionOverride === undefined
+      ? undefined
+      : normalizeSceneCompositionOverride(scene.compositionOverride, compositionDefaults, sceneIndex);
+    return {
+      ...canonical,
+      ...(compositionOverride ? { compositionOverride } : {}),
+    };
   });
   let visualIntelligence: VisualIntelligencePlanningState | undefined;
   try {

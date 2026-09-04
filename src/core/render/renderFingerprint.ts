@@ -19,7 +19,7 @@ export async function createRenderFingerprint(
     ? {
         version: FFMPEG_OUTPUT_FINGERPRINT_VERSION,
         schemaVersion: manifest.schemaVersion,
-        execution: buildFFmpegCommand({ manifest, preset: input.preset }),
+        execution: fingerprintableFFmpegCommand(buildFFmpegCommand({ manifest, preset: input.preset })),
       }
     : manifest;
   const canonical = stableStringify({
@@ -37,6 +37,13 @@ export async function createRenderFingerprint(
   }
 
   return fallbackHash(canonical);
+}
+
+function fingerprintableFFmpegCommand(command: ReturnType<typeof buildFFmpegCommand>): unknown {
+  return {
+    ...command,
+    imageGeometryAuthorities: command.imageGeometryAuthorities.map(({ authorityReference: _opaqueReference, ...authority }) => authority),
+  };
 }
 
 function executableFFmpegManifest(manifest: RenderManifest): boolean {

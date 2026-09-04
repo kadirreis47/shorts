@@ -6,6 +6,7 @@ import {
   createRenderFingerprint,
   createSceneFingerprint,
   createIncrementalRenderPlanner,
+  buildCanonicalSceneExecutionPlan,
   type RenderPreset,
 } from '@/core/render';
 import type { RenderManifest } from '@/core/media';
@@ -93,6 +94,46 @@ describe('full and incremental canonical execution parity', () => {
     const video = manifest({ assets: [{ id: 'video', type: 'video', source: 'video.mp4', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['video'], cameraMotion: 'zoom_in' }, manifest().timeline.scenes[1]], tracks: [] } });
     expect(buildSceneSegmentCommand({ manifest: image, scene: image.timeline.scenes[0], preset, outputPath: 'one.mp4' }).args).not.toContain(expect.stringContaining('zoompan'));
     expect(buildSceneSegmentCommand({ manifest: video, scene: video.timeline.scenes[0], preset, outputPath: 'one.mp4' }).args).not.toContain(expect.stringContaining('zoompan'));
+  });
+
+  it.each([
+    ['identity', 'scale=1080:1920'],
+    ['mirror-horizontal', 'hflip,scale=1080:1920'],
+    ['rotate-180', 'hflip,vflip,scale=1080:1920'],
+    ['mirror-vertical', 'vflip,scale=1080:1920'],
+    ['transpose', 'transpose=clock,hflip,scale=1080:1920'],
+    ['rotate-90-cw', 'transpose=clock,scale=1080:1920'],
+    ['transverse', 'transpose=clock,vflip,scale=1080:1920'],
+    ['rotate-90-ccw', 'transpose=cclock,scale=1080:1920'],
+  ] as const)('pins and applies image orientation %s before cover geometry', (orientation, expected) => {
+    const value = manifest({ assets: [{ id: 'image', type: 'image', source: 'image.jpg', metadata: {} }], timeline: { scenes: [{
+      ...manifest().timeline.scenes[0], assetIds: ['image'],
+      imageGeometryAuthority: { authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', mediaIdentity: 'media:00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg', expectedOrientation: orientation, contentDigest: 'a'.repeat(64) },
+    }, manifest().timeline.scenes[1]], tracks: [] } });
+    const full = buildFFmpegCommand({ manifest: value, preset });
+    const segment = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[0], preset, outputPath: 'one.mp4' });
+    expect(full.args.slice(0, full.args.indexOf('image.jpg'))).toContain('-noautorotate');
+    expect(segment.args.slice(0, segment.args.indexOf('image.jpg'))).toContain('-noautorotate');
+    expect(filter(full)).toContain('{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}},scale=');
+    expect(segment.args[segment.args.indexOf('-vf') + 1]).toContain('{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}},scale=');
+    expect(buildCanonicalSceneExecutionPlan(value, value.timeline.scenes[0], preset).filters.join(',')).toContain(expected);
+    expect(full.imageGeometryAuthorities[0].expectedOrientation).toBe(orientation);
+  });
+
+  it('does not alter video input orientation behavior', () => {
+    const value = manifest({ assets: [{ id: 'video', type: 'video', source: 'video.mp4', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['video'], imageOrientation: 'identity' }, manifest().timeline.scenes[1]], tracks: [] } });
+    const full = buildFFmpegCommand({ manifest: value, preset });
+    const segment = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[0], preset, outputPath: 'one.mp4' });
+    expect(full.args.slice(0, full.args.indexOf('video.mp4'))).not.toContain('-noautorotate');
+    expect(segment.args.slice(0, segment.args.indexOf('video.mp4'))).not.toContain('-noautorotate');
+  });
+
+  it('preserves the pre-slice implicit behavior for legacy non-authoritative external images', () => {
+    const value = manifest({ assets: [{ id: 'image', type: 'image', source: 'legacy.jpg', metadata: {} }], timeline: { scenes: [{ ...manifest().timeline.scenes[0], assetIds: ['image'] }, manifest().timeline.scenes[1]], tracks: [] } });
+    const full = buildFFmpegCommand({ manifest: value, preset });
+    const segment = buildSceneSegmentCommand({ manifest: value, scene: value.timeline.scenes[0], preset, outputPath: 'one.mp4' });
+    expect(full.args.slice(0, full.args.indexOf('legacy.jpg'))).not.toContain('-noautorotate');
+    expect(segment.args.slice(0, segment.args.indexOf('legacy.jpg'))).not.toContain('-noautorotate');
   });
 
   it('composes the same canonical crossfade in full and cache-assisted final rendering', () => {
@@ -276,13 +317,36 @@ describe('full and incremental canonical execution parity', () => {
     }
   });
 
+  it('never bypasses native image authority through an incremental cache hit', async () => {
+    const value = manifest({
+      projectId: 'execution-parity-private-image-cache',
+      assets: [{ id: 'image', type: 'image', source: 'image.jpg', metadata: {} }],
+      timeline: { scenes: [{
+        ...manifest().timeline.scenes[0], assetIds: ['image'],
+        imageGeometryAuthority: {
+          authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+          mediaIdentity: 'media:00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000002.jpg',
+          expectedOrientation: 'transverse', contentDigest: 'a'.repeat(64),
+        },
+      }, manifest().timeline.scenes[1]], tracks: [] },
+    });
+    const planner = createIncrementalRenderPlanner();
+    try {
+      const first = await planner.createPlan({ manifest: value, preset, adapterId: 'ffmpeg' });
+      planner.commit({ plan: first, adapterId: 'ffmpeg', presetId: preset.id, outputUri: 'first.mp4' });
+      const second = await planner.createPlan({ manifest: value, preset, adapterId: 'ffmpeg' });
+      expect(second.fullRenderRequired).toBe(true);
+      expect(second.reusableScenes).toBe(0);
+    } finally { planner.clear('execution-parity-private-image-cache'); }
+  });
+
   it('associates incremental snapshots by stable scene ID without hashing the opaque ID', async () => {
     const firstId = 'visual-scene-11111111-1111-4111-8111-111111111111';
     const replacementId = 'visual-scene-22222222-2222-4222-8222-222222222222';
     const firstAssetId = `${firstId}-source`;
     const firstManifest = manifest({
       projectId: 'canonical-scene-association-project',
-      assets: [{ id: firstAssetId, type: 'image', source: 'https://media.example/same.png', metadata: { sceneId: firstId } }],
+      assets: [{ id: firstAssetId, type: 'video', source: 'https://media.example/same.mp4', metadata: { sceneId: firstId } }],
       timeline: {
         scenes: [{ ...manifest().timeline.scenes[0], id: firstId, assetIds: [firstAssetId] }, manifest().timeline.scenes[1]],
         tracks: [{ id: 'video-track-a', type: 'video', order: 0, muted: false, volume: 1, clips: [{ id: 'random-clip-a', sceneId: firstId, assetId: firstAssetId, startMs: 0, endMs: 5_000, durationMs: 5_000, offsetMs: 0, metadata: { visualProduction: [{ operationId: `${firstId}-operation`, type: 'brightness', scope: 'scene', parameters: { delta: .1 } }] } }] }],

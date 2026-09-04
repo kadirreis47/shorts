@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles, Mic, Film, Youtube, ArrowRight, ArrowLeft, Check, Loader2,
   Wand2, RefreshCw, AlertCircle, Volume2, X, Palette, Music, Video,
@@ -12,7 +12,7 @@ import type { CanonicalChannelIdentity } from '@/services/canonicalChannelCatalo
 import {
   generateVoiceover, getProviderStatus, listVoices, uploadMedia,
   searchImages, searchVideos, ingestPexelsImage, ingestPexelsVideo, discardPexelsVideoQuarantine,
-  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, issueOpaqueMediaAnalysisReference, issueOpaqueSpatialMediaAnalysisReference, analyzeVisualSemantics, analyzeDiscoveryCandidateSemantics, analyzeVisualSpatial, analyzeDiscoveryCandidateSpatial, type SubtitleTranslationUnavailableReason,
+  generateAIImage, researchFootage, translateSubtitles, planVisualQueries, issueOpaqueMediaAnalysisReference, issueOpaqueSpatialMediaAnalysisReference, analyzeVisualSemantics, analyzeDiscoveryCandidateSemantics, analyzeVisualSpatial, analyzeDiscoveryCandidateSpatial, resolveOwnedImageDisplayGeometry, type SubtitleTranslationUnavailableReason,
 } from '@/lib/api';
 import type { HookVariation, ScriptAnalysis } from '@/lib/types';
 import {
@@ -23,7 +23,7 @@ import { AIPipelineMonitor } from '@/components/AIPipelineMonitor';
 import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
-import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes } from '@/lib/studioOutputIdentity';
+import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes, isStudioOutputRevisionCurrent } from '@/lib/studioOutputIdentity';
 import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { assignNewCanonicalSceneIds, createCanonicalSceneId } from '@/lib/sceneIdentity';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
@@ -48,6 +48,7 @@ import {
   type ValidatedMediaOwnerContext,
 } from '@/lib/mediaStorage';
 import { isCurrentValidatedOwnerContext } from '@/auth/identity';
+import { commitImageGeometryHydration, hydrateTrustedImageGeometry } from '@/lib/imageGeometryHydration';
 import { isApprovedCatalogMusicUrl, isValidCatalogMusicBlob, isValidCatalogMusicResponse, MUSIC_TRACKS } from '@/lib/catalogMusic';
 import {
   isManualSceneImageImportError,
@@ -61,6 +62,7 @@ import {
   validateManualSceneVideo,
 } from '@/lib/manualSceneVideoImport';
 import { useAuthSessionStore } from '@/auth/session';
+import { normalizeTrustedImageDisplayGeometry } from '@/core/media/imageDisplayGeometry';
 
 interface StudioProps {
   channels: CanonicalChannelIdentity[];
@@ -481,30 +483,33 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     && narration.scriptRevision === narrationRevision(script),
   );
 
-  const canonicalStudioRevision = useMemo(() => {
-    const outputScenes = canonicalStudioOutputScenes(scenes);
+  const computeCanonicalStudioRevision = useCallback((revisionScenes: readonly Scene[]) => {
+    const outputScenes = canonicalStudioOutputScenes(revisionScenes);
     const compositionDefaults = { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) };
-    let canonicalOutput: { scenes: unknown[]; sceneComposition: unknown[] };
+    let canonicalOutput: { scenes: unknown[]; sceneComposition: unknown[]; sceneImageOrientations: unknown[] };
     try {
-      canonicalOutput = canonicalStudioCompositionOutput(scenes, compositionDefaults);
+      canonicalOutput = canonicalStudioCompositionOutput(revisionScenes, compositionDefaults);
     } catch {
       // Malformed hydrated state remains visible for correction and will fail
       // closed at Recipe normalization; it must not crash Studio rendering.
       canonicalOutput = {
         scenes: outputScenes.map(({ compositionOverride: _ignored, ...scene }) => scene),
         sceneComposition: outputScenes.map((scene) => ({ invalidOverride: scene.compositionOverride ?? null })),
+        sceneImageOrientations: revisionScenes.map((scene) => ({ invalidGeometry: scene.imageDisplayGeometry ?? null })),
       };
     }
     return JSON.stringify({
-      title, hook, script, cta, scenes: canonicalOutput.scenes, sceneComposition: canonicalOutput.sceneComposition, captionStyle,
+      title, hook, script, cta, scenes: canonicalOutput.scenes, sceneComposition: canonicalOutput.sceneComposition, sceneImageOrientations: canonicalOutput.sceneImageOrientations, captionStyle,
       useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName,
       characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition,
       showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice,
       narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId, ...(narration.alignment ? { alignment: narration.alignment } : {}) } : null,
     });
-  }, [title, hook, script, cta, scenes, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
+  }, [title, hook, script, cta, captionStyle, transitionStyle, motionStyle, useBroll, musicId, musicStorage, musicVolume, visualMode, selectedStyleId, characterName, characterAppearance, characterArtStyle, characterProfileId, watermarkText, watermarkPosition, showSubtitles, captionTextColor, captionHighlightColor, voiceoverMode, selectedVoice, hasCanonicalNarration, narration]);
 
-  const currentCompletedExport = completedExport?.revision === canonicalStudioRevision && isVerifiedExportJob(completedExport.job)
+  const canonicalStudioRevision = useMemo(() => computeCanonicalStudioRevision(scenes), [computeCanonicalStudioRevision, scenes]);
+
+  const currentCompletedExport = completedExport && isStudioOutputRevisionCurrent(completedExport.revision, canonicalStudioRevision) && isVerifiedExportJob(completedExport.job)
     ? completedExport.job
     : null;
   const canonicalStudioRevisionRef = useRef(canonicalStudioRevision);
@@ -543,7 +548,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }, [authenticatedUserId]);
 
   useEffect(() => {
-    if (completedExport && completedExport.revision !== canonicalStudioRevision) setPostRenderNotice(t('studio.exportOutdated'));
+    if (completedExport && !isStudioOutputRevisionCurrent(completedExport.revision, canonicalStudioRevision)) setPostRenderNotice(t('studio.exportOutdated'));
   }, [canonicalStudioRevision, completedExport, t]);
 
   useEffect(() => {
@@ -595,17 +600,34 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setHook(draft.hook);
       setScript(draft.script);
       setCta(draft.cta);
-      const restoredScenes = toDurableScenes(draft.scenes ?? []);
+      // Persisted technical geometry is never accepted as source authority on
+      // restart. Re-derive it from the exact owner-bound bytes below.
+      const restoredScenes = toDurableScenes(draft.scenes ?? []).map(({ imageDisplayGeometry: _untrustedPersistedGeometry, ...scene }) => scene);
+      const geometryHydrationEpoch = visualSessionEpoch.current;
       setScenes(restoredScenes);
       setVisualIntelligence(draft.visualIntelligence);
       if (restoredScenes.some((scene) => scene.imageStorage || scene.videoStorage)) {
         void resolvePrivateSceneMedia(restoredScenes)
-          .then((resolvedScenes) => {
-            if (cancelled) return;
-            setScenes((current) => current.length === restoredScenes.length
-              && current.every((scene, index) => scene === restoredScenes[index] && scene.sceneId === resolvedScenes[index]?.sceneId)
-              ? resolvedScenes
-              : current);
+          .then(async (resolvedScenes) => ({
+            resolvedScenes,
+            geometry: await hydrateTrustedImageGeometry(resolvedScenes, resolveOwnedImageDisplayGeometry),
+          }))
+          .then(({ resolvedScenes, geometry }) => {
+            if (cancelled || directorProjectIdRef.current !== projectId) return;
+            setScenes((current) => {
+              const merged = commitImageGeometryHydration({
+                expectedProjectId: projectId, currentProjectId: directorProjectIdRef.current,
+                expectedEpoch: geometryHydrationEpoch, currentEpoch: visualSessionEpoch.current,
+                current, requested: restoredScenes, hydrated: geometry.scenes,
+              });
+              return merged.map((scene) => {
+                const resolved = resolvedScenes.find((candidate) => candidate.sceneId === scene.sceneId);
+                if (!resolved) return scene;
+                if (scene.imageStorage?.objectPath === resolved.imageStorage?.objectPath) return { ...scene, imageUrl: resolved.imageUrl };
+                if (scene.videoStorage?.objectPath === resolved.videoStorage?.objectPath) return { ...scene, videoUrl: resolved.videoUrl };
+                return scene;
+              });
+            });
           })
           .catch(() => { /* Stable identity remains available for a later signed-URL retry. */ });
       }
@@ -950,6 +972,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
             ...scene,
             imageUrl: result.imageUrl,
             imageStorage: result.media,
+            imageDisplayGeometry: result.imageDisplayGeometry,
             videoUrl: undefined,
             videoStorage: undefined,
             imageProvenance: undefined,
@@ -1033,7 +1056,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
                 || !isCurrentSceneOperation(projectId, sessionEpoch, current, index, scene)) return current;
               const next = [...current];
-              next[index] = { ...scene, imageStorage: ingested.media, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance, videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined };
+              next[index] = { ...scene, imageStorage: ingested.media, imageDisplayGeometry: ingested.imageDisplayGeometry, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance, videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined };
               return next;
             });
             succeeded += 1;
@@ -1045,7 +1068,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
                 || !isCurrentSceneOperation(projectId, sessionEpoch, current, index, scene)) return current;
               const next = [...current];
-              next[index] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined };
+              next[index] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageDisplayGeometry: undefined, imageUrl: undefined, imageProvenance: undefined };
               return next;
             });
             succeeded += 1;
@@ -1115,12 +1138,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
   }
 
-  function currentProductionRecipe(ownerContext: ValidatedMediaOwnerContext, showSubtitlesForBuild = showSubtitles) {
+  function currentProductionRecipe(ownerContext: ValidatedMediaOwnerContext, showSubtitlesForBuild = showSubtitles, recipeScenes = scenes) {
     assertCurrentMediaOwnerContext(ownerContext);
     return normalizeStudioProductionRecipeV1({
       projectId: directorProjectId,
       title: title || topic || 'Studio video',
-      scenes: toDurableScenes(scenes),
+      scenes: toDurableScenes(recipeScenes),
       captionStyle,
       transitionStyle,
       motionStyle,
@@ -1367,7 +1390,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           const currentScene = current.find((item) => item.sceneId === sceneId);
           if (!currentScene || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, current) || currentScene.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return current;
           return current.map((item) => item.sceneId !== sceneId ? item : {
-            ...item, imageStorage: ingested.media, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance,
+            ...item, imageStorage: ingested.media, imageDisplayGeometry: ingested.imageDisplayGeometry, imageUrl: ingested.previewUrl, imageProvenance: ingested.provenance,
             videoStorage: undefined, videoUrl: undefined, videoProvenance: undefined,
           });
         });
@@ -1379,7 +1402,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           if (!currentScene || visualSessionEpoch.current !== sessionEpoch || directorProjectIdRef.current !== projectId || !isSceneVisualBindingCurrent(binding, current) || currentScene.text !== scene.text || visualApplyGenerations.current.get(sceneId) !== generation || selectedVisualCandidatesRef.current[sceneId] !== selectedId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return current;
           return current.map((item) => item.sceneId !== sceneId ? item : {
             ...item, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance,
-            imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined,
+            imageStorage: undefined, imageDisplayGeometry: undefined, imageUrl: undefined, imageProvenance: undefined,
           });
         });
       }
@@ -1599,6 +1622,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           ...scene,
           imageUrl: result.imageUrl,
           imageStorage: result.media,
+          imageDisplayGeometry: result.imageDisplayGeometry,
           videoUrl: undefined,
           videoStorage: undefined,
           imageProvenance: undefined,
@@ -1662,6 +1686,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           ...targetScene,
           imageUrl: upload.imageUrl,
           imageStorage: upload.media,
+          imageDisplayGeometry: upload.imageDisplayGeometry,
           videoUrl: undefined,
           videoStorage: undefined,
           imageProvenance: undefined,
@@ -1730,6 +1755,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           videoStorage: upload.media,
           imageUrl: undefined,
           imageStorage: undefined,
+          imageDisplayGeometry: undefined,
           imageProvenance: undefined,
           videoProvenance: undefined,
         };
@@ -1838,6 +1864,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
               next[i] = {
                 ...scene,
                 imageStorage: ingested.media,
+                imageDisplayGeometry: ingested.imageDisplayGeometry,
                 imageUrl: ingested.previewUrl,
                 imageProvenance: ingested.provenance,
                 videoStorage: undefined,
@@ -1913,7 +1940,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 || sceneImportGenerations.current.get(sceneId) !== selectionGeneration
                 || !isCurrentSceneOperation(projectId, sessionEpoch, current, i, scene)) return current;
               const next = [...current];
-              next[i] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageUrl: undefined, imageProvenance: undefined };
+              next[i] = { ...scene, videoStorage: prepared.storage, videoUrl: prepared.previewUrl, videoProvenance: prepared.provenance, imageStorage: undefined, imageDisplayGeometry: undefined, imageUrl: undefined, imageProvenance: undefined };
               attached = true;
               return next;
             });
@@ -2126,7 +2153,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     try {
       const destination = await withCurrentVerifiedExport('save-as', async (job, assertCurrent) => {
         const bridge = window.electronAPI?.ffmpeg;
-        const selectedDestination = await bridge?.pickOutputPath?.({ defaultPath: exportFilename(job.artifact.path) });
+        const selectedDestination = await bridge?.pickOutputPath?.({ defaultPath: exportFilename(job.artifact.path), purpose: 'save-copy' });
         assertCurrent();
         if (!selectedDestination) return null;
         if (!bridge?.saveVerifiedExportAs) throw new Error(t('studio.saveAsFailed'));
@@ -2148,6 +2175,34 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     } catch (actionError) { if (!(actionError instanceof StalePostRenderActionError)) setPostRenderNotice(actionError instanceof Error ? actionError.message : t('studio.exportUnavailable')); }
   }
 
+  async function refreshTrustedImageGeometryForVerifiedExport(
+    ownerContext: ValidatedMediaOwnerContext,
+  ): Promise<Scene[]> {
+    const requested = scenesRef.current;
+    const projectId = directorProjectIdRef.current;
+    const epoch = visualSessionEpoch.current;
+    const result = await hydrateTrustedImageGeometry(requested, resolveOwnedImageDisplayGeometry, { force: true });
+    assertCurrentMediaOwnerContext(ownerContext);
+    if (directorProjectIdRef.current !== projectId || visualSessionEpoch.current !== epoch) {
+      throw new Error('The project changed while image geometry was being verified. Try again.');
+    }
+    const merged = commitImageGeometryHydration({
+      expectedProjectId: projectId, currentProjectId: directorProjectIdRef.current,
+      expectedEpoch: epoch, currentEpoch: visualSessionEpoch.current,
+      current: scenesRef.current, requested, hydrated: result.scenes,
+    });
+    const unresolved = merged.filter((scene) => scene.imageStorage && !scene.videoStorage).some((scene) => {
+      try {
+        normalizeTrustedImageDisplayGeometry(scene.imageDisplayGeometry, `media:${scene.imageStorage!.objectPath}`);
+        return false;
+      } catch { return true; }
+    });
+    scenesRef.current = merged;
+    setScenes(merged);
+    if (unresolved || result.failedMedia.length > 0) throw new Error('Trusted image geometry is unresolved. Retry after private media becomes available.');
+    return merged;
+  }
+
   async function prepareModernPublish() {
     if (!channel) {
       setError('Select an available channel before preparing this video for publishing.');
@@ -2160,7 +2215,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const ownerContext = captureValidatedMediaOwnerContext();
     try {
       assertCurrentMediaOwnerContext(ownerContext);
-      const recipe = currentProductionRecipe(ownerContext);
+      const executionScenes = await refreshTrustedImageGeometryForVerifiedExport(ownerContext);
+      const recipe = currentProductionRecipe(ownerContext, showSubtitles, executionScenes);
       const buildInput = compileStudioProductionRecipeV1(recipe);
       const mediaEngine = applicationContainer.resolve(dependencyTokens.mediaEngine);
       const build = await mediaEngine.buildProject(buildInput);
@@ -2200,7 +2256,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       assertCurrentMediaOwnerContext(ownerContext);
       const completed = await waitForActiveExport(exportJob.id);
       assertCurrentMediaOwnerContext(ownerContext);
-      setCompletedExport({ job: completed, revision: canonicalStudioRevision });
+      setCompletedExport({ job: completed, revision: computeCanonicalStudioRevision(executionScenes) });
       setPostRenderNotice(null);
     } catch (publishError) {
       if (isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) {

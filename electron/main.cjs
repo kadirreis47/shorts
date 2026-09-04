@@ -3,6 +3,8 @@ const path = require('path');
 const { registerFFmpegHandlers } = require('./ffmpeg-service.cjs');
 const { registerManualVideoProbeHandler } = require('./manual-video-probe.cjs');
 const { registerYouTubeHandlers } = require('./youtube-ipc.cjs');
+const { createSupabaseOwnerValidator, createYouTubeOwnerContext } = require('./youtube-owner-context.cjs');
+const { resolveSupabaseAuthConfig } = require('./supabase-runtime-config.cjs');
 
 let mainWindow;
 
@@ -79,10 +81,15 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  const ownerContext = createYouTubeOwnerContext({
+    validateAccessToken: createSupabaseOwnerValidator({
+      resolveConfig: () => resolveSupabaseAuthConfig({ isPackaged: app.isPackaged }),
+    }),
+  });
   ipcMain.handle('app:get-version', () => app.getVersion());
-  registerFFmpegHandlers();
+  const nativeAuthorities = registerFFmpegHandlers({ ownerContext });
   registerManualVideoProbeHandler(ipcMain);
-  registerYouTubeHandlers();
+  registerYouTubeHandlers({ ownerContext, verifiedExportAuthority: nativeAuthorities.verifiedExportAuthority });
   createWindow();
 
   app.on('activate', () => {

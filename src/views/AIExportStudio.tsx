@@ -9,8 +9,7 @@ import { useUIStore } from '@/store/uiStore';
 import { supabase } from '@/lib/supabase';
 import type { MediaEngine } from '@/core/media';
 import type { Video } from '@/lib/types';
-import { resolvePrivateSceneMedia } from '@/lib/mediaStorage';
-import { materializeCanonicalSceneIds } from '@/lib/sceneIdentity';
+import { buildAIExportStudioMediaProject } from '@/services/aiExportMediaProject';
 
 export function AIExportStudio() {
   const manifest = useMediaStore((state) => state.manifest);
@@ -39,15 +38,8 @@ export function AIExportStudio() {
     if (result.error) throw new Error(`Selected rendered video could not be loaded: ${result.error.message}`);
     const video = result.data as Pick<Video, 'id' | 'title' | 'scenes' | 'narration_mode'> | null;
     if (!video || video.id !== handoff.sourceVideoId || !Array.isArray(video.scenes) || video.scenes.length === 0) throw new Error('Selected rendered video has no canonical scene source to export.');
-    const resolvedScenes = await resolvePrivateSceneMedia(materializeCanonicalSceneIds(video.scenes));
     const mediaEngine = applicationContainer.resolve<MediaEngine>(dependencyTokens.mediaEngine);
-    const build = await mediaEngine.buildProject({
-      projectId: `rendered-video-${video.id}`,
-      title: video.title,
-      scenes: resolvedScenes,
-      // Null is reserved for legacy rows that predate durable narration intent.
-      audio: { narrationMode: video.narration_mode === 'silent' ? 'silent' : 'required' },
-    });
+    const build = await buildAIExportStudioMediaProject(video, mediaEngine);
     if (!build.renderReady || build.validation.renderReady !== true) throw new Error('Selected rendered video did not pass canonical media validation.');
     useMediaStore.getState().setBuildResult(build.project, build.manifest, build.renderReady, build.assetResolution, build.validation);
   }

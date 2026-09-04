@@ -14,7 +14,7 @@ interface MediaAnalysisMetadataService {
 }
 
 export class MediaAnalysisReferenceError extends Error { constructor(readonly reason: Failure) { super(reason); } }
-export interface ResolvedMediaAnalysisReference { readonly mediaType: "image"; readonly contentType: "image/jpeg" | "image/png"; readonly bytes: Uint8Array; readonly width: number; readonly height: number; }
+export interface ResolvedMediaAnalysisReference { readonly mediaType: "image"; readonly mediaIdentity: string; readonly contentType: "image/jpeg" | "image/png"; readonly bytes: Uint8Array; readonly contentDigest: string; readonly width: number; readonly height: number; readonly exifOrientation: number; }
 
 export async function issueMediaAnalysisReference(service: MediaAnalysisMetadataService, userId: string, request: OpaqueMediaReferenceRequest, secret: string, now = Date.now()): Promise<OpaqueMediaReferenceResponse> {
   decodeMediaAnalysisSecret(secret);
@@ -26,7 +26,7 @@ export async function issueMediaAnalysisReference(service: MediaAnalysisMetadata
   return Object.freeze({ reference, issuedAt: new Date(issuedAt * 1_000).toISOString(), expiresAt: new Date(expiresAt * 1_000).toISOString(), scope: normalized.scope, mediaType: "image" });
 }
 
-/** Server-only resolver for a future provider adapter. It never returns an object path or URL. */
+/** Server-only resolver. It returns no URL; mediaIdentity is the bounded durable binding already held by the owner. */
 export async function resolveMediaAnalysisReference(service: MediaAnalysisMetadataService, storageAuthority: AnalysisStorageReadAuthority, userId: string, reference: string, requiredScope: OpaqueMediaAnalysisScope, secret: string, now = Date.now()): Promise<ResolvedMediaAnalysisReference> {
   let capability;
   try { capability = await openMediaAnalysisCapability(reference, secret); } catch { throw new MediaAnalysisReferenceError("invalid-reference"); }
@@ -41,11 +41,20 @@ export async function resolveMediaAnalysisReference(service: MediaAnalysisMetada
   let bytes: Uint8Array;
   try { bytes = await readBoundedAnalysisObject(storageAuthority, userId, capability.p, expected); }
   catch (error) { throw new MediaAnalysisReferenceError(error instanceof BoundedStorageReadError ? error.reason : "resolution-failed"); }
-  let validated: { readonly contentType: AnalysisImageContentType; readonly width: number; readonly height: number };
+  let validated: { readonly contentType: AnalysisImageContentType; readonly width: number; readonly height: number; readonly exifOrientation: number };
   try { validated = validateAnalysisImageWithGeometry(capability.p, expected.contentType, bytes); } catch { throw new MediaAnalysisReferenceError("unsupported-media-type"); }
   // Detect overwrite/delete-recreate races between the first metadata read and download.
   assertSameObject(expected, await storedEvidence(service, capability.p));
-  return Object.freeze({ mediaType: "image", contentType: validated.contentType, bytes, width: validated.width, height: validated.height });
+  return Object.freeze({
+    mediaType: "image",
+    mediaIdentity: `media:${capability.p}`,
+    contentType: validated.contentType,
+    bytes,
+    contentDigest: await sha256(bytes),
+    width: validated.width,
+    height: validated.height,
+    exifOrientation: validated.exifOrientation,
+  });
 }
 
 function assertOwnerImagePath(path: string, userId: string): void { const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"; if (!new RegExp(`^${uuid}/generated-images/${uuid}\\.(?:png|jpg)$`).test(path) || !path.startsWith(`${userId}/`)) throw new MediaAnalysisReferenceError("media-not-eligible"); }
@@ -57,3 +66,4 @@ async function storedEvidence(service: MediaAnalysisMetadataService, path: strin
     return Object.freeze({ id: data.id, version: data.version, etag: data.etag, updatedAt: data.updatedAt, size: data.size, contentType });
   } catch (error) { if (error instanceof MediaAnalysisReferenceError) throw error; throw new MediaAnalysisReferenceError("temporarily-unavailable"); } }
 function assertSameObject(expected: StoredEvidence, actual: StoredEvidence): void { if (expected.id !== actual.id || expected.version !== actual.version || expected.etag !== actual.etag || expected.updatedAt !== actual.updatedAt || expected.size !== actual.size || expected.contentType !== actual.contentType) throw new MediaAnalysisReferenceError("invalid-reference"); }
+async function sha256(bytes: Uint8Array): Promise<string> { const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)); return Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join(""); }

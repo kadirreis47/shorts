@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const migration = readFileSync('supabase/migrations/20260814000002_secure_private_owner_media_storage.sql', 'utf8');
 const generatedImage = readFileSync('supabase/functions/generate-image/index.ts', 'utf8');
 const verifiedUser = readFileSync('supabase/functions/_shared/verified-user.ts', 'utf8');
+const verifiedUserVerifier = readFileSync('supabase/functions/_shared/verified-user-verifier.ts', 'utf8');
 const rendererStorage = readFileSync('src/lib/mediaStorage.ts', 'utf8');
 const studio = readFileSync('src/views/Studio.tsx', 'utf8');
 const sourceProvider = readFileSync('src/core/media/providers/sourceSceneProvider.ts', 'utf8');
@@ -47,7 +48,8 @@ describe('private owner-scoped media Storage security', () => {
 
   it('validates generate-image JWT before body/provider/storage work', () => {
     expect(generatedImage.indexOf('await authorizeProtectedFunction(req, "generate-image")')).toBeLessThan(generatedImage.indexOf('await readBoundedJson<GenerateImageRequest>'));
-    expect(verifiedUser).toContain('authClient.auth.getUser(token)');
+    expect(verifiedUser).toContain('createVerifiedUserVerifier({');
+    expect(verifiedUserVerifier).toContain('auth.getUser(token)');
     expect(verifiedUser).not.toContain('service_role');
     expect(generatedImage).toContain('`${verifiedUser.userId}/generated-images/${crypto.randomUUID()}.png`');
     expect(generatedImage).not.toMatch(/const\s+\{[^}]*userId[^}]*\}\s*=\s*await req\.json/);

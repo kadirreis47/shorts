@@ -1,11 +1,13 @@
 // This entry runs in Electron's sandboxed preload context. Keep it self-contained:
 // sandboxed preloads can require Electron's built-ins but cannot require sibling files.
 const ALLOWED_FFMPEG_API_KEYS = Object.freeze([
-  'getCapabilities', 'run', 'cancel', 'fileExists', 'copyFile', 'getSegmentPath',
-  'segmentExists', 'getSegmentCacheStats', 'clearSegmentCache', 'analyzeOutput',
-  'artifactDigest', 'verifyArtifactSnapshot', 'revalidateArtifact', 'onProgress',
+  'getCapabilities', 'createCanonicalRenderPlan', 'executeCanonicalRenderPlan', 'cancel',
+  'resourceExists', 'materializeRenderArtifact', 'issueSegmentResource',
+  'getSegmentCacheStats', 'clearSegmentCache', 'analyzeRenderArtifact',
+  'verifyRenderArtifact', 'revalidateArtifact', 'onProgress',
   'pickOutputPath', 'openVerifiedExport', 'revealVerifiedExport', 'saveVerifiedExportAs',
   'probeManualMp4',
+  'resolveImageDisplayGeometry',
 ]);
 
 const ALLOWED_YOUTUBE_API_KEYS = Object.freeze([
@@ -31,13 +33,15 @@ function validChannelRef(value) {
 
 function validPublishRequest(value) {
   return Boolean(value) && typeof value === 'object' && value.platform === 'youtube'
+    && Object.keys(value).every((key) => ['jobId', 'idempotencyKey', 'platform', 'approvalFingerprint', 'approvedAt', 'target', 'account', 'artifact', 'metadata', 'outboundDescription', 'remotePublishId', 'recovery'].includes(key))
     && typeof value.jobId === 'string' && value.jobId.length > 0
     && typeof value.idempotencyKey === 'string' && value.idempotencyKey.length > 0
     && validCredentialRef(value.account?.credentialRef) && validChannelRef(value.account?.channelRef) && typeof value.account?.accountId === 'string'
     && typeof value.target?.accountId === 'string' && validChannelRef(value.target?.channelRef)
-    && typeof value.artifact?.artifactPath === 'string' && !value.artifact.artifactPath.includes('\0')
-    && Number.isSafeInteger(value.artifact?.sizeBytes) && value.artifact.sizeBytes > 0
-    && /^[a-f0-9]{64}$/.test(value.artifact?.contentDigest || '')
+    && Boolean(value.artifact) && typeof value.artifact === 'object' && !Array.isArray(value.artifact)
+    && Object.keys(value.artifact).every((key) => ['verifiedExportReference', 'artifactFingerprint'].includes(key))
+    && /^vea1_[A-Za-z0-9_-]{43}$/.test(value.artifact.verifiedExportReference || '')
+    && typeof value.artifact.artifactFingerprint === 'string' && /^[a-z0-9_-]+$/i.test(value.artifact.artifactFingerprint)
     && typeof value.outboundDescription === 'string' && value.outboundDescription.length <= 5000
     && (!value.recovery || (typeof value.recovery === 'object'
       && typeof value.recovery.jobState === 'string'
@@ -50,6 +54,29 @@ function validArtifactIntegrityRequest(value) {
     && typeof value.artifactPath === 'string' && value.artifactPath.length > 0 && !value.artifactPath.includes('\0')
     && Number.isSafeInteger(value.sizeBytes) && value.sizeBytes >= 0
     && typeof value.contentDigest === 'string' && /^[a-f0-9]{64}$/.test(value.contentDigest);
+}
+
+function validPrivateImageGeometryRequest(accessToken, media) {
+  return validAccessToken(accessToken) && Boolean(media) && typeof media === 'object' && media.bucket === 'media'
+    && typeof media.objectPath === 'string'
+    && /^[0-9a-f-]{36}\/generated-images\/[0-9a-f-]{36}\.(?:png|jpg)$/i.test(media.objectPath);
+}
+
+function validRenderPlanReference(value) {
+  return typeof value === 'string' && /^crp1_[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+function validCanonicalRenderRequest(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const allowed = new Set(['operation', 'jobId', 'outputPath', 'outputResourceReference', 'intent']);
+  let serialized;
+  try { serialized = JSON.stringify(value); } catch { return false; }
+  return Object.keys(value).every((key) => allowed.has(key))
+    && ['full-render', 'segment-render', 'segment-concat'].includes(value.operation)
+    && typeof value.jobId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.jobId)
+    && serialized.length <= 4 * 1024 * 1024
+    && Boolean(value.intent) && typeof value.intent === 'object' && !Array.isArray(value.intent)
+    && !Object.prototype.hasOwnProperty.call(value, 'args');
 }
 
 function validAnalyticsRequest(value) {
@@ -91,20 +118,28 @@ function createYouTubeBridge(ipcRenderer) {
 function createFFmpegBridge(ipcRenderer) {
   return Object.freeze({
     getCapabilities: (forceRefresh = false) => ipcRenderer.invoke('ffmpeg:capabilities', forceRefresh),
+    resolveImageDisplayGeometry: (accessToken, media) => validPrivateImageGeometryRequest(accessToken, media)
+      ? ipcRenderer.invoke('ffmpeg:resolve-image-display-geometry', { accessToken, media })
+      : Promise.reject(new TypeError('Invalid private image geometry request.')),
     probeManualMp4: (bytes) => bytes instanceof ArrayBuffer && bytes.byteLength > 0 && bytes.byteLength <= 75 * 1024 * 1024
       ? ipcRenderer.invoke('manual-video:probe-mp4', bytes)
       : Promise.reject(new TypeError('Invalid manual video payload.')),
-    run: (request) => ipcRenderer.invoke('ffmpeg:run', request),
+    createCanonicalRenderPlan: (request) => validCanonicalRenderRequest(request)
+      ? ipcRenderer.invoke('ffmpeg:create-render-plan', request)
+      : Promise.reject(new TypeError('Invalid canonical render request.')),
+    executeCanonicalRenderPlan: (reference) => validRenderPlanReference(reference)
+      ? ipcRenderer.invoke('ffmpeg:execute-render-plan', reference)
+      : Promise.reject(new TypeError('Invalid canonical render plan reference.')),
     cancel: (jobId) => ipcRenderer.invoke('ffmpeg:cancel', jobId),
-    fileExists: (targetPath) => ipcRenderer.invoke('ffmpeg:file-exists', targetPath),
-    copyFile: (sourcePath, destinationPath) => ipcRenderer.invoke('ffmpeg:copy-file', { sourcePath, destinationPath }),
-    getSegmentPath: (fingerprint) => ipcRenderer.invoke('ffmpeg:segment-path', fingerprint),
-    segmentExists: (fingerprint) => ipcRenderer.invoke('ffmpeg:segment-exists', fingerprint),
+    resourceExists: (targetPath) => ipcRenderer.invoke('ffmpeg:resource-exists', targetPath),
+    materializeRenderArtifact: (sourcePath, destinationPath) => ipcRenderer.invoke('ffmpeg:materialize-render-artifact', { sourcePath, destinationPath }),
+    issueSegmentResource: (fingerprint) => typeof fingerprint === 'string' && /^[a-f0-9]{16,128}$/i.test(fingerprint)
+      ? ipcRenderer.invoke('ffmpeg:issue-segment-resource', fingerprint)
+      : Promise.reject(new TypeError('Invalid segment resource fingerprint.')),
     getSegmentCacheStats: () => ipcRenderer.invoke('ffmpeg:segment-cache-stats'),
     clearSegmentCache: () => ipcRenderer.invoke('ffmpeg:segment-cache-clear'),
-    analyzeOutput: (targetPath) => ipcRenderer.invoke('ffmpeg:analyze-output', targetPath),
-    artifactDigest: (targetPath) => ipcRenderer.invoke('ffmpeg:artifact-digest', targetPath),
-    verifyArtifactSnapshot: (targetPath) => ipcRenderer.invoke('ffmpeg:verify-artifact-snapshot', targetPath),
+    analyzeRenderArtifact: (targetPath) => ipcRenderer.invoke('ffmpeg:analyze-render-artifact', targetPath),
+    verifyRenderArtifact: (targetPath) => ipcRenderer.invoke('ffmpeg:verify-render-artifact', targetPath),
     revalidateArtifact: (artifact) => validArtifactIntegrityRequest(artifact) ? ipcRenderer.invoke('ffmpeg:revalidate-artifact', artifact) : Promise.reject(new TypeError('Invalid artifact integrity request.')),
     pickOutputPath: (options) => ipcRenderer.invoke('ffmpeg:pick-output-path', options),
     openVerifiedExport: (artifact) => validArtifactIntegrityRequest(artifact)

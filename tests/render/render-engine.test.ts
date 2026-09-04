@@ -121,6 +121,36 @@ describe('RenderEngine', () => {
     expect(render).not.toHaveBeenCalled();
   });
 
+  it('does not let a private-image render bypass native authority through the full render cache', async () => {
+    const render = vi.fn(async () => output());
+    const cache: RenderCache = {
+      get: vi.fn(async (fingerprint) => ({ fingerprint, projectId: 'project-private', adapterId: 'fake', output: output('cache://unsafe'), createdAt: '', lastAccessedAt: '', hitCount: 1, savedRenderMs: 500 })),
+      put: vi.fn(), remove: vi.fn(), clear: vi.fn(),
+      stats: () => ({ entries: 1, hits: 1, misses: 0, invalidEntries: 0, savedRenderMs: 500 }),
+    };
+    const privateManifest = {
+      ...manifest('project-private'),
+      timeline: {
+        scenes: [{
+          sourceScene: {
+            imageStorage: {
+              bucket: 'media',
+              objectPath: 'render-user/generated-images/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.png',
+            },
+          },
+        }],
+      },
+    } as unknown as RenderManifest;
+    const { engine } = setup(adapter(render), { cache });
+
+    const job = await engine.submit({ manifest: privateManifest });
+    await waitFor(() => engine.getJob(job.id)?.status === 'completed');
+
+    expect(cache.get).not.toHaveBeenCalled();
+    expect(cache.put).not.toHaveBeenCalled();
+    expect(render).toHaveBeenCalledOnce();
+  });
+
   it('temporary hata için retry yapar ve circuit-open işini reddeder', async () => {
     const render = vi.fn<RenderAdapter['render']>()
       .mockRejectedValueOnce(new Error('timeout'))

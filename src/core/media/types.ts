@@ -6,6 +6,7 @@ import type { AudioBuildOptions, AudioTimeline } from './audioTypes';
 import type { MediaValidationReport } from './validationTypes';
 import type { NormalizedStudioProductionRecipeV1 } from './studioProductionRecipe';
 import type { NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
+import type { ImageEncodedToDisplayOrientation } from './imageDisplayGeometry';
 
 export type MediaAssetType =
   | 'image' | 'video' | 'ai_image' | 'broll' | 'overlay' | 'logo'
@@ -90,6 +91,15 @@ export interface MediaScene {
   subtitleText: string;
   intensity: number;
   sourceScene: Scene;
+  /** Opaque image-only authority. Electron main verifies it before orientation becomes executable. */
+  imageGeometryAuthority?: CanonicalImageGeometryExecutionAuthority;
+}
+
+export interface CanonicalImageGeometryExecutionAuthority {
+  readonly authorityReference: string;
+  readonly mediaIdentity: string;
+  readonly expectedOrientation: ImageEncodedToDisplayOrientation;
+  readonly contentDigest: string;
 }
 
 export interface MediaClip {
@@ -200,6 +210,8 @@ export interface CreateMediaProjectInput {
   transition?: CanonicalTransitionConfiguration;
   /** When supplied by Recipe compilation, one explicit effective configuration per source scene. */
   sceneComposition?: readonly CanonicalSceneComposition[];
+  /** One owner-bound native execution authority per private image scene. */
+  sceneImageGeometryAuthorities?: readonly (CanonicalImageGeometryExecutionAuthority | null)[];
   branding?: CanonicalBrandingConfiguration;
   productionRecipe?: NormalizedStudioProductionRecipeV1;
 }

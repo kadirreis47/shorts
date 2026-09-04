@@ -1,6 +1,7 @@
 import type { RenderExecutionContext } from './types';
 import { assertRequiredNarrationBound, buildAudioMixCommand } from './audioMixCommandBuilder';
-import { buildCanonicalSceneExecutionPlan, canonicalSceneColor } from './canonicalSceneExecutionPlan';
+import { buildCanonicalSceneExecutionPlan, canonicalSceneColor, commandFiltersForCanonicalScene } from './canonicalSceneExecutionPlan';
+import type { FFmpegImageGeometryAuthorityDeclaration } from './ffmpegTypes';
 import { buildCanonicalTransitionCompositionPlan } from './canonicalTransitionPlan';
 import { buildCanonicalBrandingRenderPlan } from './brandingRenderBuilder';
 import { canonicalQualityArgs, canonicalVideoCodec, canonicalVideoSettings } from './encodingContract';
@@ -10,6 +11,7 @@ export interface FFmpegCommandPlan {
   args: string[];
   subtitleContent: string;
   totalFrames: number;
+  imageGeometryAuthorities: FFmpegImageGeometryAuthorityDeclaration[];
 }
 
 export function buildFFmpegCommand(
@@ -22,11 +24,18 @@ export function buildFFmpegCommand(
   const scenes = manifest.timeline.scenes;
   const args: string[] = ['-hide_banner', '-y'];
   const filters: string[] = [];
+  const imageGeometryAuthorities: FFmpegImageGeometryAuthorityDeclaration[] = [];
 
   scenes.forEach((scene, index) => {
     const plan = buildCanonicalSceneExecutionPlan(manifest, scene, preset);
     if (plan.input.source) {
-      if (plan.input.kind === 'image') args.push('-framerate', String(fps), '-loop', '1', '-t', plan.durationSeconds, '-i', plan.input.source);
+      if (plan.input.kind === 'image') {
+        if (plan.imageGeometryAuthority) {
+          args.push('-noautorotate');
+          imageGeometryAuthorities.push({ inputIndex: index, ...plan.imageGeometryAuthority });
+        }
+        args.push('-framerate', String(fps), '-loop', '1', '-t', plan.durationSeconds, '-i', plan.input.source);
+      }
       else args.push('-stream_loop', '-1', '-t', plan.durationSeconds, '-i', plan.input.source);
     } else {
       args.push(
@@ -35,7 +44,7 @@ export function buildFFmpegCommand(
         '-i', `color=c=${canonicalSceneColor(index)}:s=${width}x${height}:r=${fps}`,
       );
     }
-    filters.push(`[${index}:v]${plan.filters.join(',')}[v${index}]`);
+    filters.push(`[${index}:v]${commandFiltersForCanonicalScene(plan, index).join(',')}[v${index}]`);
   });
 
   const transitionPlan = buildCanonicalTransitionCompositionPlan(manifest, scenes.map((_, index) => `v${index}`));
@@ -89,5 +98,6 @@ export function buildFFmpegCommand(
     args,
     subtitleContent: subtitlePlan.assContent ?? '',
     totalFrames: Math.ceil(durationSeconds * fps),
+    imageGeometryAuthorities,
   };
 }

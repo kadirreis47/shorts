@@ -4,10 +4,12 @@ import {
   compileStudioProductionRecipeV1,
   createAssetProviderEngine,
   createMediaEngine,
+  createImageDisplayGeometry,
   normalizeStudioProductionRecipeV1,
   resolveEffectiveSceneComposition,
   setSceneCompositionOverride,
   type StudioProductionRecipeInput,
+  type ImageEncodedToDisplayOrientation,
 } from '@/core/media';
 import { TypedEventBus } from '@/core/events/eventBus';
 import type { ApplicationEventMap } from '@/core/events';
@@ -16,11 +18,12 @@ import { setValidatedOwnerId } from '@/auth/identity';
 import { buildFFmpegCommand, createRenderFingerprint, createSceneFingerprint } from '@/core/render';
 import type { RenderPreset } from '@/core/render';
 import { normalizeStudioDraft, studioProductionRecipeInputFromDraft, type StudioDraft } from '@/lib/studioDraft';
-import { canonicalStudioCompositionOutput } from '@/lib/studioOutputIdentity';
+import { canonicalStudioCompositionOutput, isStudioOutputRevisionCurrent } from '@/lib/studioOutputIdentity';
 import type { Scene } from '@/lib/types';
 
 const PRESET: RenderPreset = { id: 'scene-composition', name: 'Scene composition', container: 'mp4', videoCodec: 'h264', audioCodec: 'aac', frameRate: 30, quality: 'standard', hardwareAcceleration: 'disabled' };
 const DEFAULTS = { motion: 'kenburns', transition: 'crossfade' } as const;
+const TEST_OWNER = '00000000-0000-4000-8000-000000000099';
 
 describe('scene-local canonical composition', () => {
   it('resolves independent overrides once into the effective multi-scene render plan', async () => {
@@ -101,6 +104,99 @@ describe('scene-local canonical composition', () => {
     expect(changed.identity).not.toBe(legacy.identity);
     const [before, after] = await Promise.all([build(recipeInput()), build(changedInput)]);
     expect(await fingerprint(before.manifest)).not.toBe(await fingerprint(after.manifest));
+  });
+
+  it('treats identity display geometry as an executable no-op and non-identity orientation as pixel authority', async () => {
+    const baseline = recipeInput();
+    const identity = structuredClone(baseline);
+    const rotated = structuredClone(baseline);
+    const path = baseline.scenes[0].imageStorage!.objectPath;
+    identity.scenes[0].imageDisplayGeometry = trustedGeometry(`media:${path}`, 1200, 800, 'identity');
+    rotated.scenes[0].imageDisplayGeometry = trustedGeometry(`media:${path}`, 1200, 800, 'rotate-90-cw');
+
+    const baselineRecipe = normalizeStudioProductionRecipeV1(baseline, ownerContext());
+    const identityRecipe = normalizeStudioProductionRecipeV1(identity, ownerContext());
+    const rotatedRecipe = normalizeStudioProductionRecipeV1(rotated, ownerContext());
+    expect(identityRecipe.identity).toBe(baselineRecipe.identity);
+    expect(identityRecipe.recipe.scenes[0].media).not.toHaveProperty('displayOrientation');
+    expect(rotatedRecipe.recipe.scenes[0].media).toHaveProperty('displayOrientation', 'rotate-90-cw');
+    expect(rotatedRecipe.identity).not.toBe(baselineRecipe.identity);
+    expect(canonicalStudioCompositionOutput(identity.scenes, DEFAULTS)).toEqual(canonicalStudioCompositionOutput(baseline.scenes, DEFAULTS));
+    expect(canonicalStudioCompositionOutput(rotated.scenes, DEFAULTS)).not.toEqual(canonicalStudioCompositionOutput(baseline.scenes, DEFAULTS));
+
+    const [before, after] = await Promise.all([build(baseline), build(rotated)]);
+    expect(after.manifest.timeline.scenes[0].imageGeometryAuthority?.expectedOrientation).toBe('rotate-90-cw');
+    expect(buildFFmpegCommand({ manifest: after.manifest, preset: PRESET }).args.join(','))
+      .toContain('{{IMAGE_DISPLAY_GEOMETRY_INPUT_0}},scale=');
+    expect(await createSceneFingerprint(before.manifest.timeline.scenes[0], before.manifest, PRESET))
+      .not.toBe(await createSceneFingerprint(after.manifest.timeline.scenes[0], after.manifest, PRESET));
+    expect(await fingerprint(before.manifest)).not.toBe(await fingerprint(after.manifest));
+
+    const completedRevision = JSON.stringify(canonicalStudioCompositionOutput(identity.scenes, DEFAULTS));
+    expect(isStudioOutputRevisionCurrent(completedRevision, JSON.stringify(canonicalStudioCompositionOutput(rotated.scenes, DEFAULTS)))).toBe(false);
+  });
+
+  it('keeps identity geometry metadata changes output-equivalent and artifact-current', async () => {
+    const first = recipeInput();
+    const second = structuredClone(first);
+    const path = first.scenes[0].imageStorage!.objectPath;
+    second.scenes[0].imageDisplayGeometry = trustedGeometry(`media:${path}`, 600, 400, 'identity');
+    const firstRecipe = normalizeStudioProductionRecipeV1(first, ownerContext());
+    const secondRecipe = normalizeStudioProductionRecipeV1(second, ownerContext());
+    expect(secondRecipe.identity).toBe(firstRecipe.identity);
+    const firstRevision = JSON.stringify(canonicalStudioCompositionOutput(first.scenes, DEFAULTS));
+    const secondRevision = JSON.stringify(canonicalStudioCompositionOutput(second.scenes, DEFAULTS));
+    expect(isStudioOutputRevisionCurrent(firstRevision, secondRevision)).toBe(true);
+    const [firstBuild, secondBuild] = await Promise.all([build(first), build(second)]);
+    expect(await fingerprint(secondBuild.manifest)).toBe(await fingerprint(firstBuild.manifest));
+  });
+
+  it('stales Recipe, scene, render, and Studio freshness when exact private image bytes change', async () => {
+    const first = recipeInput();
+    const second = structuredClone(first);
+    second.scenes[0].imageDisplayGeometry = {
+      ...second.scenes[0].imageDisplayGeometry!,
+      contentDigest: 'b'.repeat(64),
+    };
+    const firstRecipe = normalizeStudioProductionRecipeV1(first, ownerContext());
+    const secondRecipe = normalizeStudioProductionRecipeV1(second, ownerContext());
+    expect(secondRecipe.identity).not.toBe(firstRecipe.identity);
+    expect(canonicalStudioCompositionOutput(second.scenes, DEFAULTS)).not.toEqual(canonicalStudioCompositionOutput(first.scenes, DEFAULTS));
+    const [firstBuild, secondBuild] = await Promise.all([build(first), build(second)]);
+    expect(await createSceneFingerprint(firstBuild.manifest.timeline.scenes[0], firstBuild.manifest, PRESET))
+      .not.toBe(await createSceneFingerprint(secondBuild.manifest.timeline.scenes[0], secondBuild.manifest, PRESET));
+    expect(await fingerprint(firstBuild.manifest)).not.toBe(await fingerprint(secondBuild.manifest));
+  });
+
+  it('rejects media-mismatched geometry and strips image geometry from video drafts', () => {
+    const input = recipeInput(); const path = input.scenes[0].imageStorage!.objectPath;
+    input.scenes[0].imageDisplayGeometry = trustedGeometry(`media:${path.replace('000.png', '999.png')}`, 1200, 800, 'rotate-180');
+    expect(() => normalizeStudioProductionRecipeV1(input, ownerContext())).toThrow(/geometry/i);
+
+    const draft = draftFrom(recipeInput());
+    draft.scenes[0].imageDisplayGeometry = trustedGeometry(`media:${path}`, 1200, 800, 'rotate-180');
+    draft.scenes[0].videoStorage = { bucket: 'media', objectPath: `${TEST_OWNER}/videos/00000000-0000-4000-8000-000000000009.mp4` };
+    draft.scenes[0].imageStorage = undefined;
+    expect(normalizeStudioDraft(draft).scenes[0].imageDisplayGeometry).toBeUndefined();
+  });
+
+  it('strips all persisted technical geometry before hydration', () => {
+    const original = draftFrom(recipeInput());
+    original.scenes[0].imageDisplayGeometry = trustedGeometry(
+      `media:${original.scenes[0].imageStorage!.objectPath}`, 1200, 800, 'transverse',
+    );
+    const hydrated = normalizeStudioDraft(JSON.parse(JSON.stringify(normalizeStudioDraft(original))) as StudioDraft);
+    expect(hydrated.scenes[0].imageDisplayGeometry).toBeUndefined();
+
+    const replaced = structuredClone(hydrated);
+    replaced.scenes[0].imageStorage!.objectPath = replaced.scenes[0].imageStorage!.objectPath.replace('000.png', '777.png');
+    expect(normalizeStudioDraft(replaced).scenes[0].imageDisplayGeometry).toBeUndefined();
+  });
+
+  it('fails canonical Recipe compilation closed when private image geometry is unresolved', () => {
+    const input = recipeInput();
+    input.scenes[0].imageDisplayGeometry = undefined;
+    expect(() => normalizeStudioProductionRecipeV1(input, ownerContext())).toThrow(/requires source-derived display geometry/i);
   });
 
   it('rejects invalid overrides and keeps the first scene free of a phantom transition', async () => {
@@ -206,7 +302,8 @@ describe('scene-local canonical composition', () => {
     const input = recipeInput();
     input.scenes = [...input.scenes, {
       sceneId: 'visual-scene-00000000-0000-4000-8000-000000000004', text: 'Scene 4', duration: 4, visual: 'Visual', keywords: ['visual'],
-      imageStorage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000003.png' },
+      imageStorage: { bucket: 'media', objectPath: `${TEST_OWNER}/generated-images/00000000-0000-4000-8000-000000000003.png` },
+      imageDisplayGeometry: trustedGeometry(`media:${TEST_OWNER}/generated-images/00000000-0000-4000-8000-000000000003.png`, 1200, 800, 'identity'),
     }];
     input.motionStyle = 'static';
     input.transitionStyle = 'crossfade';
@@ -245,7 +342,8 @@ describe('scene-local canonical composition', () => {
     const input = recipeInput();
     input.scenes = Array.from({ length: 5 }, (_, index) => ({
       sceneId: `visual-scene-00000000-0000-4000-8000-00000000001${index}`, text: `Alternating scene ${index + 1}`, duration: 4, visual: 'Visual', keywords: ['visual'],
-      imageStorage: { bucket: 'media' as const, objectPath: `owner-a/generated-images/10000000-0000-4000-8000-00000000000${index}.png` },
+      imageStorage: { bucket: 'media' as const, objectPath: `${TEST_OWNER}/generated-images/10000000-0000-4000-8000-00000000000${index}.png` },
+      imageDisplayGeometry: trustedGeometry(`media:${TEST_OWNER}/generated-images/10000000-0000-4000-8000-00000000000${index}.png`, 1200, 800, 'identity'),
       ...(index === 2 || index === 4 ? { compositionOverride: { transition: 'none' as const } } : {}),
     }));
     input.transitionStyle = 'crossfade';
@@ -289,6 +387,8 @@ describe('scene-local canonical composition', () => {
     const saved = normalizeStudioDraft(draftFrom(input));
     const hydrated = normalizeStudioDraft(JSON.parse(JSON.stringify(saved)) as StudioDraft);
     const restored = studioProductionRecipeInputFromDraft(hydrated);
+    expect(restored.scenes.every((scene) => scene.imageDisplayGeometry === undefined)).toBe(true);
+    restored.scenes = restored.scenes.map((scene, index) => ({ ...scene, imageDisplayGeometry: input.scenes[index].imageDisplayGeometry }));
     const [before, after] = await Promise.all([build(input), build(restored)]);
 
     expect(restored.scenes[1].compositionOverride).toEqual({ motion: 'pan', transition: 'none' });
@@ -318,6 +418,12 @@ describe('scene-local canonical composition', () => {
     input.scenes[1].compositionOverride = { motion: 'zoom_in' };
     await expect(media.buildProject({ projectId: input.projectId, title: input.title, scenes: [...input.scenes] }))
       .rejects.toThrow(/require canonical Recipe compilation/i);
+    await expect(media.buildProject({
+      projectId: input.projectId,
+      title: input.title,
+      scenes: [...recipeInput().scenes],
+      sceneImageGeometryAuthorities: [{ authorityReference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', mediaIdentity: `media:${input.scenes[0].imageStorage!.objectPath}`, expectedOrientation: 'rotate-90-cw', contentDigest: 'a'.repeat(64) }, null, null],
+    })).rejects.toThrow(/compilation authority is invalid/i);
   });
 
   it('rejects malformed current mutation state and prototype-shaped compiled composition', async () => {
@@ -344,17 +450,17 @@ describe('scene-local canonical composition', () => {
         { motion: { mode: 'none' }, transition: { type: 'crossfade' } },
         ...compiled.sceneComposition!.slice(1),
       ],
-    })).rejects.toThrow(/first canonical scene transition must be cut/i);
+    })).rejects.toThrow(/compilation authority is invalid/i);
   });
 
   it('does not canonicalize forged Recipe values into safe-looking renderer defaults', () => {
     const motion = structuredClone(normalizeStudioProductionRecipeV1(recipeInput(), ownerContext()));
     (motion.recipe.composition as { motion: string }).motion = "zoompan=z='unsafe'";
-    expect(() => compileStudioProductionRecipeV1(motion)).toThrow(/Recipe motion is invalid/i);
+    expect(() => compileStudioProductionRecipeV1(motion)).toThrow(/normalization authority is invalid/i);
 
     const transition = structuredClone(normalizeStudioProductionRecipeV1(recipeInput(), ownerContext()));
     (transition.recipe.composition as { transition: string }).transition = 'xfade=wipeleft';
-    expect(() => compileStudioProductionRecipeV1(transition)).toThrow(/Recipe transition is invalid/i);
+    expect(() => compileStudioProductionRecipeV1(transition)).toThrow(/normalization authority is invalid/i);
   });
 });
 
@@ -382,10 +488,14 @@ function draftFrom(input: StudioProductionRecipeInput): StudioDraft {
 function recipeInput(): StudioProductionRecipeInput {
   return {
     projectId: 'scene-composition-project', title: 'Scene composition',
-    scenes: [0, 1, 2].map((index) => ({
-      sceneId: `visual-scene-00000000-0000-4000-8000-00000000000${index}`, text: `Scene ${index + 1}`, duration: 4, visual: 'Visual', keywords: ['visual'],
-      imageStorage: { bucket: 'media' as const, objectPath: `owner-a/generated-images/00000000-0000-4000-8000-00000000000${index}.png` },
-    })),
+    scenes: [0, 1, 2].map((index) => {
+      const objectPath = `${TEST_OWNER}/generated-images/00000000-0000-4000-8000-00000000000${index}.png`;
+      return {
+        sceneId: `visual-scene-00000000-0000-4000-8000-00000000000${index}`, text: `Scene ${index + 1}`, duration: 4, visual: 'Visual', keywords: ['visual'],
+        imageStorage: { bucket: 'media' as const, objectPath },
+        imageDisplayGeometry: trustedGeometry(`media:${objectPath}`, 1200, 800, 'identity'),
+      };
+    }),
     captionStyle: 'karaoke', transitionStyle: 'crossfade', motionStyle: 'kenburns', showSubtitles: true,
     captionTextColor: '', captionHighlightColor: '', voiceoverMode: 'none', narration: null,
     musicId: '', musicStorage: null, musicVolume: 0, beatSync: false,
@@ -395,8 +505,16 @@ function recipeInput(): StudioProductionRecipeInput {
 }
 
 function ownerContext() {
-  setValidatedOwnerId('owner-a');
+  setValidatedOwnerId(TEST_OWNER);
   return captureValidatedMediaOwnerContext();
+}
+
+function trustedGeometry(mediaIdentity: string, width: number, height: number, orientation: ImageEncodedToDisplayOrientation) {
+  return {
+    ...createImageDisplayGeometry(mediaIdentity, width, height, orientation),
+    contentDigest: 'a'.repeat(64),
+    executionAuthority: { version: 1 as const, reference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2099-01-01T00:00:00.000Z' },
+  };
 }
 
 function target(scenes: readonly Scene[], sceneIndex: number) {

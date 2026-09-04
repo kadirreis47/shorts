@@ -164,7 +164,7 @@ export function registerApplicationDependencies() {
           outputExists: async (uri) => {
             const bridge = window.electronAPI?.ffmpeg;
             if (!bridge || uri.startsWith('render-plan://')) return true;
-            return bridge.fileExists(uri);
+            return bridge.resourceExists(uri);
           },
         },
       );

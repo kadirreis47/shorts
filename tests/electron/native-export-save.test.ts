@@ -10,7 +10,7 @@ const { materializeFile, resolveSelectedOutputPath, saveVerifiedExportAs, rememb
   materializeFile: (sourcePath: string, destinationPath: string) => Promise<{ path: string; sizeBytes: number }>;
   resolveSelectedOutputPath: (result: { canceled?: boolean; filePath?: string }) => string | null;
   saveVerifiedExportAs: (webContentsId: number, request: { artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }; destinationPath: string }) => Promise<{ ok: boolean; sizeBytes?: number }>;
-  rememberApprovedExportDestination: (webContentsId: number, destinationPath: string) => void;
+  rememberApprovedExportDestination: (webContentsId: number, destinationPath: string, operation?: 'render' | 'save-copy') => void;
   rememberVerifiedExportArtifact: (webContentsId: number, artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }) => void;
 };
 
@@ -59,7 +59,7 @@ describe('native verified export save', () => {
     const artifact = { artifactPath: source, sizeBytes: bytes.length, contentDigest: createHash('sha256').update(bytes).digest('hex') };
     expect(await saveVerifiedExportAs(42, { artifact, destinationPath: destination })).toMatchObject({ ok: false });
     rememberVerifiedExportArtifact(42, artifact);
-    rememberApprovedExportDestination(42, destination);
+    rememberApprovedExportDestination(42, destination, 'save-copy');
     expect(await saveVerifiedExportAs(42, { artifact, destinationPath: destination })).toMatchObject({ ok: true, sizeBytes: bytes.length });
     expect(await readFile(destination)).toEqual(bytes);
     expect(await saveVerifiedExportAs(42, { artifact, destinationPath: destination })).toMatchObject({ ok: false });

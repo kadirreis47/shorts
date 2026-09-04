@@ -32,6 +32,15 @@ export function createIncrementalRenderPlanner(): IncrementalRenderPlanner {
 
   return {
     async createPlan({ manifest, preset, adapterId, forceRender = false }) {
+      // Private-image authority is verified only at the native FFmpeg boundary.
+      // Never satisfy such a render exclusively from renderer-addressable cache.
+      const requiresNativeImageAuthority = (manifest.assets ?? []).some((asset) => asset.type === 'image')
+        || manifest.timeline.scenes.some((scene) => Boolean(
+          scene.imageGeometryAuthority
+          || (scene.sourceScene?.imageStorage || scene.sourceScene?.imageUrl)
+            && !scene.sourceScene.videoStorage && !scene.sourceScene.videoUrl,
+        ));
+      const effectiveForceRender = forceRender || requiresNativeImageAuthority;
       const previous = snapshots.find(
         (snapshot) =>
           snapshot.projectId === manifest.projectId &&
@@ -45,7 +54,7 @@ export function createIncrementalRenderPlanner(): IncrementalRenderPlanner {
         const previousFingerprint =
           previous?.sceneFingerprints[scene.id] ?? null;
         const unchanged =
-          !forceRender &&
+          !effectiveForceRender &&
           previousFingerprint !== null &&
           previousFingerprint === fingerprint;
 
@@ -55,7 +64,7 @@ export function createIncrementalRenderPlanner(): IncrementalRenderPlanner {
           fingerprint,
           previousFingerprint,
           decision: unchanged ? 'reuse' : 'render',
-          reason: forceRender
+          reason: effectiveForceRender
             ? 'Tam render zorlandı'
             : previousFingerprint === null
               ? 'Önceki sahne çıktısı bulunamadı'
@@ -89,7 +98,7 @@ export function createIncrementalRenderPlanner(): IncrementalRenderPlanner {
         planId: createId('incremental-plan'),
         createdAt: new Date().toISOString(),
         fullRenderRequired:
-          forceRender || previous === undefined || reusable.length === 0,
+          effectiveForceRender || previous === undefined || reusable.length === 0,
         changedSceneIds: items
           .filter((item) => item.decision === 'render')
           .map((item) => item.sceneId),

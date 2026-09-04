@@ -53,15 +53,23 @@ describe('Electron FFmpeg IPC güvenliği', () => {
     expect(Object.isFrozen(bridge)).toBe(true);
     expect(bridge).not.toHaveProperty('send');
     expect(bridge).not.toHaveProperty('invoke');
+    expect(bridge).not.toHaveProperty('run');
+    expect(bridge).not.toHaveProperty('copyFile');
+    expect(bridge).not.toHaveProperty('fileExists');
+    expect(bridge).not.toHaveProperty('artifactDigest');
+    expect(bridge).not.toHaveProperty('analyzeOutput');
   });
 
   it('bridge yalnızca sabit kanal adlarına invoke yapar', async () => {
     const ipc: ElectronIpcMock = { invoke: vi.fn().mockResolvedValue(true), on: vi.fn(), removeListener: vi.fn() };
     const bridge = createFFmpegBridge(ipc) as {
       cancel: (id: string) => Promise<boolean>;
+      createCanonicalRenderPlan: (request: unknown) => Promise<unknown>;
+      executeCanonicalRenderPlan: (reference: string) => Promise<unknown>;
       openVerifiedExport: (artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }) => Promise<unknown>;
       revealVerifiedExport: (artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }) => Promise<unknown>;
       saveVerifiedExportAs: (artifact: { artifactPath: string; sizeBytes: number; contentDigest: string }, destinationPath: string) => Promise<unknown>;
+      issueSegmentResource: (fingerprint: string) => Promise<unknown>;
     };
     const artifact = { artifactPath: path.resolve('output.mp4'), sizeBytes: 1, contentDigest: 'a'.repeat(64) };
     await bridge.cancel('job-1');
@@ -73,13 +81,27 @@ describe('Electron FFmpeg IPC güvenliği', () => {
     await bridge.saveVerifiedExportAs(artifact, path.resolve('copy.mp4'));
     expect(ipc.invoke).toHaveBeenCalledWith('ffmpeg:save-verified-export-as', { artifact, destinationPath: path.resolve('copy.mp4') });
     await expect(bridge.openVerifiedExport({ ...artifact, contentDigest: 'invalid' })).rejects.toThrow('Invalid verified export artifact');
+    const renderRequest = semanticRenderRequest(path.resolve('output.mp4'));
+    await bridge.createCanonicalRenderPlan(renderRequest);
+    expect(ipc.invoke).toHaveBeenCalledWith('ffmpeg:create-render-plan', renderRequest);
+    await bridge.issueSegmentResource('a'.repeat(16));
+    expect(ipc.invoke).toHaveBeenCalledWith('ffmpeg:issue-segment-resource', 'a'.repeat(16));
+    const reference = `crp1_${'A'.repeat(43)}`;
+    await bridge.executeCanonicalRenderPlan(reference);
+    expect(ipc.invoke).toHaveBeenCalledWith('ffmpeg:execute-render-plan', reference);
+    await expect(bridge.executeCanonicalRenderPlan('forged')).rejects.toThrow('Invalid canonical render plan reference');
+    const serviceSource = readFileSync(path.resolve('electron/ffmpeg-service.cjs'), 'utf8');
+    expect(serviceSource).not.toContain("ipcMain.handle('ffmpeg:run'");
+    expect(serviceSource).not.toContain("ipcMain.handle('ffmpeg:file-exists'");
+    expect(serviceSource).not.toContain("ipcMain.handle('ffmpeg:copy-file'");
+    expect(serviceSource).not.toContain("ipcMain.handle('ffmpeg:artifact-digest'");
   });
 
   it('run request şekli, jobId ve argümanları doğrular', () => {
     expect(() => validateFFmpegRunRequest(null)).toThrow();
-    expect(() => validateFFmpegRunRequest({ jobId: '../bad', args: ['-version'] })).toThrow('jobId');
-    expect(() => validateFFmpegRunRequest({ jobId: 'ok', args: [] })).toThrow('args');
-    expect(validateFFmpegRunRequest({ jobId: 'job-1', args: ['-version'] })).toBeTruthy();
+    expect(() => validateFFmpegRunRequest({ ...semanticRenderRequest(path.resolve('output.mp4')), jobId: '../bad' })).toThrow(/job/i);
+    expect(() => validateFFmpegRunRequest({ ...semanticRenderRequest(path.resolve('output.mp4')), args: [] })).toThrow();
+    expect(validateFFmpegRunRequest(semanticRenderRequest(path.resolve('output.mp4')))).toBeTruthy();
   });
 
   it('path girdilerinde absolute path zorunlu kılar ve NUL girdisini reddeder', () => {
@@ -105,6 +127,19 @@ describe('Electron FFmpeg IPC güvenliği', () => {
     expect(ipc.invoke).toHaveBeenCalledWith('youtube:owner-context', { accessToken: 'header.payload.signature' });
     await expect(bridge.disconnect('token-value')).rejects.toThrow('Invalid YouTube credential reference');
     await expect(bridge.finalizeSelection('invalid', 'UC-A')).rejects.toThrow('Invalid YouTube channel selection');
+  });
+  it('preload rejects raw YouTube artifact paths and accepts only an opaque verified export reference', async () => {
+    const ipc: ElectronIpcMock = { invoke: vi.fn().mockResolvedValue(true), on: vi.fn(), removeListener: vi.fn() };
+    const bridge = createYouTubeBridge(ipc) as { publish: (request: unknown) => Promise<unknown> };
+    const base = {
+      jobId: 'job-1', idempotencyKey: 'key-1', platform: 'youtube', approvalFingerprint: 'approval', approvedAt: '2026-09-04T00:00:00.000Z',
+      account: { credentialRef: 'youtube_11111111-1111-1111-1111-111111111111', channelRef: 'UC-channel', accountId: 'account' }, target: { accountId: 'account', channelRef: 'UC-channel' },
+      outboundDescription: '', recovery: { jobState: 'queued', remoteState: null, failureCode: null },
+    };
+    await expect(bridge.publish({ ...base, artifact: { artifactPath: 'C:/Windows/win.ini', sizeBytes: 1, contentDigest: 'a'.repeat(64), artifactFingerprint: 'artifact' } })).rejects.toThrow('Invalid YouTube publish request');
+    const safe = { ...base, artifact: { verifiedExportReference: `vea1_${'A'.repeat(43)}`, artifactFingerprint: 'artifact' } };
+    await bridge.publish(safe);
+    expect(ipc.invoke).toHaveBeenCalledWith('youtube:publish', safe);
   });
   it('returns sanitized structured status failures with stable codes', async () => {
     const handlers = new Map<string, (event: unknown, input: unknown) => Promise<unknown>>();
@@ -137,3 +172,16 @@ describe('Electron FFmpeg IPC güvenliği', () => {
     expect(JSON.stringify(result)).not.toContain('secret');
   });
 });
+
+function semanticRenderRequest(outputPath: string) {
+  return {
+    operation: 'full-render', jobId: 'job-1', outputPath,
+    intent: {
+      version: 1, kind: 'full', width: 160, height: 90, durationMs: 100,
+      scenes: [{ durationMs: 100, cameraMotion: 'none', source: { kind: 'color', paletteIndex: 0 } }], sceneDurationsMs: [100],
+      transitions: [{ type: 'cut', overlapMs: 0 }], segmentReferences: [], branding: null, subtitleContent: '', audioTracks: [],
+      audioSettings: { masterGain: 1, targetLufs: -14, duckingAttackMs: 25, duckingReleaseMs: 250 },
+      encoding: { videoCodec: 'h264', audioCodec: 'aac', quality: 'standard', hardwareAcceleration: 'disabled', encoder: null, encoderMode: null, bitrateKbps: null, maxBitrateKbps: null, bufferSizeKbps: null, crf: null, encoderPreset: null, frameRate: 30, pixelFormat: 'yuv420p', gopFrames: null, keyframeInterval: null, threads: null, audioBitrateKbps: 192, sampleRate: 48_000, audioChannels: 2, colorSpace: null, profile: null },
+    },
+  };
+}

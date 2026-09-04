@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import type { MediaStorageObject, Scene } from '@/lib/types';
 import type { RenderManifest } from '@/core/media';
 import { mediaStorageIdentityFromMetadata } from '@/core/media/storageIdentity';
+import type { TrustedImageDisplayGeometryV1 } from '@/core/media/imageDisplayGeometry';
 
 export const PRIVATE_MEDIA_BUCKET = 'media' as const;
 export const PRIVATE_MEDIA_SIGNED_URL_TTL_SECONDS = 60 * 60;
@@ -20,6 +21,7 @@ export interface PrivateMediaUpload {
   readonly videoUrl?: string;
   readonly audioUrl?: string;
   readonly media: MediaStorageObject;
+  readonly imageDisplayGeometry?: TrustedImageDisplayGeometryV1;
 }
 
 export function captureValidatedMediaOwnerContext(): ValidatedMediaOwnerContext {

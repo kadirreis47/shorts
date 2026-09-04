@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   compileStudioProductionRecipeV1,
   createAssetProviderEngine,
+  createImageDisplayGeometry,
   createMediaEngine,
   canonicalSubtitleStyle,
   normalizeStudioProductionRecipeV1,
   type SubtitleCue,
   type SubtitleStyle,
+  type ImageEncodedToDisplayOrientation,
 } from '@/core/media';
 import type { StudioProductionRecipeInput } from '@/core/media';
 import { studioProductionRecipeInputFromDraft, type StudioDraft } from '@/lib/studioDraft';
@@ -42,7 +44,19 @@ describe('StudioProductionRecipeV1', () => {
       ...compiled,
       scenes: [compiled.scenes[0], duplicate],
       sceneComposition: compiled.sceneComposition ? [compiled.sceneComposition[0], compiled.sceneComposition[0]] : undefined,
-    })).rejects.toThrow(/unique canonical scene identities/i);
+    })).rejects.toThrow(/compilation authority is invalid/i);
+  });
+
+  it('deep-freezes the compiled execution representation against post-normalization mutation', () => {
+    const compiled = compileStudioProductionRecipeV1(normalizeStudioProductionRecipeV1(recipeInput(), ownerContext()));
+    expect(Object.isFrozen(compiled)).toBe(true);
+    expect(Object.isFrozen(compiled.scenes)).toBe(true);
+    expect(Object.isFrozen(compiled.scenes[0])).toBe(true);
+    expect(Object.isFrozen(compiled.sceneImageGeometryAuthorities)).toBe(true);
+    expect(Object.isFrozen(compiled.sceneImageGeometryAuthorities?.[0])).toBe(true);
+    expect(() => {
+      (compiled.sceneImageGeometryAuthorities![0] as { expectedOrientation: string }).expectedOrientation = 'transverse';
+    }).toThrow();
   });
 
   it('uses stable private identity instead of transient playback URLs', () => {
@@ -84,6 +98,7 @@ describe('StudioProductionRecipeV1', () => {
 
     const replaced = structuredClone(firstInput);
     replaced.scenes[0].imageStorage!.objectPath = 'owner-a/generated-images/00000000-0000-4000-8000-000000000099.png';
+    replaced.scenes[0].imageDisplayGeometry = trustedGeometry('media:owner-a/generated-images/00000000-0000-4000-8000-000000000099.png', 1200, 800, 'identity');
     expect(normalizeStudioProductionRecipeV1(replaced, ownerContext()).identity).not.toBe(first.identity);
   });
 
@@ -125,6 +140,7 @@ describe('StudioProductionRecipeV1', () => {
     planningOnly.scenes[0].sceneId = 'visual-scene-00000000-0000-4000-8000-000000000099';
     const changedMedia = structuredClone(planningOnly);
     changedMedia.scenes[0].imageStorage!.objectPath = 'owner-a/generated-images/00000000-0000-4000-8000-000000000099.png';
+    changedMedia.scenes[0].imageDisplayGeometry = trustedGeometry('media:owner-a/generated-images/00000000-0000-4000-8000-000000000099.png', 1200, 800, 'identity');
 
     const normalized = normalizeStudioProductionRecipeV1(baseline, ownerContext());
     const identityOnly = normalizeStudioProductionRecipeV1(planningOnly, ownerContext());
@@ -236,15 +252,19 @@ describe('StudioProductionRecipeV1', () => {
 
   it('accepts an authenticated owner JPEG private image and rejects foreign or malformed JPEG identities', () => {
     const ownJpeg = recipeInput();
+    const ownJpegPath = 'owner-a/generated-images/00000000-0000-4000-8000-000000000001.jpg';
     ownJpeg.scenes = [{
       ...ownJpeg.scenes[0],
-      imageStorage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000001.jpg' },
+      imageStorage: { bucket: 'media', objectPath: ownJpegPath },
+      imageDisplayGeometry: trustedGeometry(`media:${ownJpegPath}`, 1200, 800, 'identity'),
     }];
     const normalized = normalizeStudioProductionRecipeV1(ownJpeg, ownerContext());
     expect(normalized.recipe.scenes[0].media).toEqual({
       type: 'image',
       storage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000001.jpg' },
       sourceUrl: null,
+      contentDigest: 'a'.repeat(64),
+      displayGeometryAuthority: { version: 1, reference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2099-01-01T00:00:00.000Z' },
     });
 
     const foreignJpeg = recipeInput();
@@ -490,6 +510,7 @@ describe('StudioProductionRecipeV1', () => {
     input.scenes = ['One', 'Two', 'Three'].map((text, index) => ({
       sceneId: `visual-scene-00000000-0000-4000-8000-00000000000${index}`, text, duration: 5, visual: 'Visual', keywords: ['visual'],
       imageStorage: { bucket: 'media', objectPath: `owner-a/generated-images/00000000-0000-4000-8000-00000000000${index}.png` },
+      imageDisplayGeometry: trustedGeometry(`media:owner-a/generated-images/00000000-0000-4000-8000-00000000000${index}.png`, 1200, 800, 'identity'),
     }));
     const characters = [...'One Two Three'];
     const starts = [0, 80, 160, 300, 1_000, 1_080, 1_160, 1_300, 2_000, 2_080, 2_160, 2_240, 2_320];
@@ -512,6 +533,7 @@ describe('StudioProductionRecipeV1', () => {
     input.scenes = ['First', 'Second', 'Third'].map((text, index) => ({
       sceneId: `visual-scene-00000000-0000-4000-8000-00000000001${index}`, text, duration: 5, visual: 'Visual', keywords: ['visual'],
       imageStorage: { bucket: 'media', objectPath: `owner-a/generated-images/00000000-0000-4000-8000-00000000001${index}.png` },
+      imageDisplayGeometry: trustedGeometry(`media:owner-a/generated-images/00000000-0000-4000-8000-00000000001${index}.png`, 1200, 800, 'identity'),
     }));
     const characters = [...'First Second Third'];
     const starts = characters.map((_, index) => {
@@ -607,7 +629,7 @@ describe('StudioProductionRecipeV1', () => {
     await expect(createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject({
       ...compiled,
       motion: { mode: 'zoompan=unsafe' as never },
-    })).rejects.toThrow('Canonical motion mode is invalid');
+    })).rejects.toThrow(/compilation authority is invalid/i);
   });
 
   it.each([
@@ -629,7 +651,7 @@ describe('StudioProductionRecipeV1', () => {
     await expect(createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject({
       ...compiled,
       transition: { type: 'xfade=unsafe' as never },
-    })).rejects.toThrow('Canonical transition type is invalid');
+    })).rejects.toThrow(/compilation authority is invalid/i);
   });
 
   it('rejects malformed direct canonical branding before it can reach FFmpeg planning', async () => {
@@ -638,7 +660,7 @@ describe('StudioProductionRecipeV1', () => {
     await expect(createMediaEngine(bus, createAssetProviderEngine(bus)).buildProject({
       ...compiled,
       branding: { watermark: { text: 'Brand', position: 'center' as never } },
-    })).rejects.toThrow('Canonical watermark position is invalid');
+    })).rejects.toThrow(/compilation authority is invalid/i);
   });
 
   it('reconstructs an equivalent normalized recipe from durable draft fields without persisting execution data', () => {
@@ -653,11 +675,13 @@ describe('StudioProductionRecipeV1', () => {
 });
 
 function recipeInput(): StudioProductionRecipeInput {
+  const imagePath = 'owner-a/generated-images/00000000-0000-4000-8000-000000000000.png';
   return {
     projectId: 'recipe-project', title: 'Recipe video',
     scenes: [{
       sceneId: 'visual-scene-00000000-0000-4000-8000-000000000000', text: 'Scene one', duration: 4, visual: 'Visual', keywords: ['visual'],
-      imageStorage: { bucket: 'media', objectPath: 'owner-a/generated-images/00000000-0000-4000-8000-000000000000.png' },
+      imageStorage: { bucket: 'media', objectPath: imagePath },
+      imageDisplayGeometry: trustedGeometry(`media:${imagePath}`, 1200, 800, 'identity'),
       imageUrl: 'https://example.test/storage/v1/object/sign/media/owner-a/generated-images/ignored.png?token=signed',
     }],
     captionStyle: 'karaoke', transitionStyle: 'crossfade', motionStyle: 'kenburns', showSubtitles: true,
@@ -675,4 +699,12 @@ function recipeInput(): StudioProductionRecipeInput {
 function ownerContext() {
   setValidatedOwnerId(OWNER_A);
   return captureValidatedMediaOwnerContext();
+}
+
+function trustedGeometry(mediaIdentity: string, width: number, height: number, orientation: ImageEncodedToDisplayOrientation) {
+  return {
+    ...createImageDisplayGeometry(mediaIdentity, width, height, orientation),
+    contentDigest: 'a'.repeat(64),
+    executionAuthority: { version: 1 as const, reference: 'idga1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2099-01-01T00:00:00.000Z' },
+  };
 }

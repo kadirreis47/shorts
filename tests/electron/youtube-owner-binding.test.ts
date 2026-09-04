@@ -52,7 +52,7 @@ function publishRequest(credentialRef: string) {
     jobId: 'job-owner-test', idempotencyKey: 'owner-test', platform: 'youtube', approvalFingerprint: 'approved', approvedAt: '2026-08-14T00:00:00.000Z',
     target: { accountId: 'youtube:UC-owner-a', channelRef: 'UC-owner-a' },
     account: { platform: 'youtube', accountId: 'youtube:UC-owner-a', accountRef: 'UC-owner-a', channelRef: 'UC-owner-a', credentialRef },
-    artifact: { artifactPath: 'C:/safe/export.mp4', artifactFingerprint: 'artifact-owner-test', contentDigest: 'a'.repeat(64), sizeBytes: 100 },
+    artifact: { verifiedExportReference: `vea1_${'A'.repeat(43)}`, artifactFingerprint: 'artifact-owner-test' },
     metadata: { title: 'Owner test', description: '', caption: '', hashtags: [], visibility: 'private', language: null, category: null, audienceFlags: {}, thumbnailPath: null, playlistRef: null, commentsEnabled: null },
     outboundDescription: '', recovery: { jobState: 'queued', remoteState: null, failureCode: null },
   };
@@ -102,6 +102,17 @@ describe('native YouTube credential owner binding', () => {
     await context.clear();
     expect(() => context.capture()).toThrowError(expect.objectContaining({ code: 'youtube-owner-authorization-required' }));
     await expect(context.establish('invalid-owner-token-value')).rejects.toMatchObject({ code: 'youtube-owner-authorization-required' });
+  });
+
+  it('refuses a replacement owner after any of multiple old-owner critical operations reports unrecovered state', async () => {
+    const context = ownerContext(); await context.establish(TOKEN_A); const captured = context.capture();
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    const unrecovered = context.runCritical(captured, async () => { await gate; throw Object.assign(new Error('destination unproven'), { unrecoveredOwnerState: true }); });
+    const safe = context.runCritical(captured, async () => { await gate; return 'safe'; });
+    const transition = context.establish(TOKEN_B); release();
+    await expect(unrecovered).rejects.toThrow('destination unproven'); await expect(safe).resolves.toBe('safe');
+    await expect(transition).rejects.toMatchObject({ code: 'youtube-owner-recovery-required' });
+    expect(() => context.capture()).toThrow();
   });
 
   it('stores validated ownership, strips caller ownership, reuses same-owner channels, and isolates foreign credentials', async () => {
@@ -165,7 +176,8 @@ describe('native YouTube credential owner binding', () => {
     const analytics = { collect: async (input: any, owner: any) => { await auth.resolveExecutionCredential(input.credentialRef, owner); return { metrics: [], diagnostics: [] }; } };
     const handlers = new Map<string, (event: unknown, input?: any) => Promise<any>>();
     const electron = { app: { getPath: () => directory }, safeStorage, ipcMain: { handle: (name: string, handler: any) => handlers.set(name, handler), removeHandler: vi.fn() } };
-    registerYouTubeHandlers({ electron, ownerContext: context, service: auth, publishService: publisher, analyticsService: analytics });
+    const verifiedExportAuthority = { resolve: vi.fn(async () => ({ artifactPath: 'C:/safe/export.mp4', contentDigest: 'a'.repeat(64), sizeBytes: 100 })) };
+    registerYouTubeHandlers({ electron, ownerContext: context, service: auth, publishService: publisher, analyticsService: analytics, verifiedExportAuthority });
     await handlers.get('youtube:owner-context')!({}, { accessToken: TOKEN_B });
     const request = publishRequest(ref);
     const status = await handlers.get('youtube:status')!({}, { credentialRef: ref });
@@ -173,9 +185,10 @@ describe('native YouTube credential owner binding', () => {
     expect(status).toEqual(missing);
     expect(status).toMatchObject({ ok: false, error: { code: 'credential-unavailable' } });
     await expect(handlers.get('youtube:disconnect')!({}, { credentialRef: ref })).rejects.toMatchObject({ code: 'credential-unavailable' });
-    expect(await handlers.get('youtube:publish')!({}, request)).toMatchObject({ ok: false, error: { code: 'credential-unavailable', status: 401 } });
-    expect(await handlers.get('youtube:reconcile-publish')!({}, request)).toMatchObject({ ok: false, error: { code: 'credential-unavailable', status: 401 } });
-    expect(await handlers.get('youtube:acknowledge-receipt')!({}, { ...request, remotePublishId: 'remote' })).toEqual({ acknowledged: false });
+    const event = { sender: { id: 7 } };
+    expect(await handlers.get('youtube:publish')!(event, request)).toMatchObject({ ok: false, error: { code: 'credential-unavailable', status: 401 } });
+    expect(await handlers.get('youtube:reconcile-publish')!(event, request)).toMatchObject({ ok: false, error: { code: 'credential-unavailable', status: 401 } });
+    expect(await handlers.get('youtube:acknowledge-receipt')!(event, { ...request, remotePublishId: 'remote' })).toEqual({ acknowledged: false });
     expect(await handlers.get('youtube:collect-analytics')!({}, { credentialRef: ref, channelRef: 'UC-owner-a', remotePublicationId: 'remote', publishedAt: '2026-08-01T00:00:00.000Z', window: '24h' })).toMatchObject({ ok: false, error: { code: 'credential-unavailable', status: 401 } });
     expect(JSON.stringify([status, missing])).not.toContain('youtube-access-secret');
     await expect(handlers.get('youtube:clear-owner-context')!({})).resolves.toMatchObject({ ok: true, result: { ready: false } });
@@ -202,7 +215,8 @@ describe('native YouTube credential owner binding', () => {
     };
     const auth = { resolveExecutionCredential: vi.fn(async (_ref: string, owner: unknown) => { context.assertCurrent(owner); return credential; }) };
     const service = createYouTubePublishService({ auth, ownerContext: context, checkpoints, snapshots, transport, openArtifact: async () => artifact });
-    const pending = service.publish(publishRequest('youtube_11111111-1111-1111-1111-111111111111'), ownerA);
+    const rendererRequest = publishRequest('youtube_11111111-1111-1111-1111-111111111111');
+    const pending = service.publish({ ...rendererRequest, artifact: { artifactPath: 'C:/safe/export.mp4', artifactFingerprint: 'artifact-owner-test', contentDigest: 'a'.repeat(64), sizeBytes: 100 } }, ownerA);
     await started;
     await context.establish(TOKEN_B);
     await expect(pending).rejects.toBeTruthy();

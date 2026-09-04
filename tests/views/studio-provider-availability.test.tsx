@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   getProviderStatus: vi.fn(), searchImages: vi.fn(), searchVideos: vi.fn(),
   ingestPexelsImage: vi.fn(), ingestPexelsVideo: vi.fn(), discardPexelsVideoQuarantine: vi.fn(),
   researchFootage: vi.fn(), uploadMedia: vi.fn(),
+  resolveOwnedImageDisplayGeometry: vi.fn(),
   planVisualQueries: vi.fn(), issueOpaqueSpatialMediaAnalysisReference: vi.fn(),
   analyzeVisualSpatial: vi.fn(), analyzeDiscoveryCandidateSpatial: vi.fn(),
   aiService: {
@@ -47,6 +48,7 @@ vi.mock('@/lib/api', () => ({
   issueOpaqueSpatialMediaAnalysisReference: mocks.issueOpaqueSpatialMediaAnalysisReference,
   analyzeVisualSpatial: mocks.analyzeVisualSpatial,
   analyzeDiscoveryCandidateSpatial: mocks.analyzeDiscoveryCandidateSpatial,
+  resolveOwnedImageDisplayGeometry: mocks.resolveOwnedImageDisplayGeometry,
 }));
 vi.mock('@/core/di', () => ({ applicationContainer: { resolve: () => mocks.aiService }, dependencyTokens: { aiApplicationService: Symbol('ai'), mediaEngine: Symbol('media') } }));
 vi.mock('@/lib/videoRenderer', () => ({ renderVideo: vi.fn() }));
@@ -59,6 +61,7 @@ describe('Studio provider availability', () => {
   beforeEach(() => {
     setValidatedOwnerId('studio-test-user');
     mocks.createSignedUrl.mockResolvedValue({ data: { signedUrl: 'https://signed.example/restored.png' }, error: null });
+    mocks.resolveOwnedImageDisplayGeometry.mockImplementation(async (media: { objectPath: string }) => displayGeometry(media.objectPath));
     useAuthSessionStore.setState({ status: 'authenticated', user: { id: 'studio-test-user' } as never, session: { access_token: 'token' } as never, error: null });
     useProjectStore.setState({ currentProject: null, drafts: [] });
   });
@@ -231,6 +234,88 @@ describe('Studio provider availability', () => {
     await act(async () => { pending.resolve(spatialEvidence(0.2, 0.3)); });
 
     expect(container?.textContent).not.toContain('Spatial evidence: focal (0.20, 0.30)');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('hydrates source-derived display geometry without persisting the execution capability', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.resolveOwnedImageDisplayGeometry.mockResolvedValue(displayGeometry(GEOMETRY_MEDIA_A, 'rotate-90-cw'));
+    saveStudioDraft(draftWithImage(GEOMETRY_MEDIA_A));
+    const root = await renderStudio();
+    await flush();
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+
+    expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledWith({ bucket: 'media', objectPath: GEOMETRY_MEDIA_A });
+    expect(loadStudioDraft()?.scenes[0].imageDisplayGeometry).toBeUndefined();
+    await act(async () => { root.unmount(); });
+  });
+
+  it('replaces forged persisted orientation with geometry re-derived from owned bytes', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.resolveOwnedImageDisplayGeometry.mockResolvedValue(displayGeometry(GEOMETRY_MEDIA_A, 'identity'));
+    const persisted = draftWithImage(GEOMETRY_MEDIA_A);
+    persisted.scenes[0].imageDisplayGeometry = displayGeometry(GEOMETRY_MEDIA_A, 'rotate-180');
+    saveStudioDraft(persisted);
+    const root = await renderStudio();
+    await flush();
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+
+    expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledWith({ bucket: 'media', objectPath: GEOMETRY_MEDIA_A });
+    expect(loadStudioDraft()?.scenes[0].imageDisplayGeometry).toBeUndefined();
+    await act(async () => { root.unmount(); });
+  });
+
+  it('keeps legacy media viewable but without geometry authority when source resolution fails', async () => {
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.resolveOwnedImageDisplayGeometry.mockRejectedValue(new Error('temporarily unavailable'));
+    saveStudioDraft(draftWithImage(GEOMETRY_MEDIA_A));
+    const root = await renderStudio();
+    await flush();
+
+    expect(container?.querySelector('img')?.getAttribute('src')).toContain('restored.png');
+    expect(loadStudioDraft()?.scenes[0].imageDisplayGeometry).toBeUndefined();
+    await act(async () => { root.unmount(); });
+  });
+
+  it('rejects late source geometry after canonical media replacement', async () => {
+    const pending = deferred<ReturnType<typeof displayGeometry>>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.resolveOwnedImageDisplayGeometry.mockReturnValueOnce(pending.promise);
+    mocks.uploadMedia.mockResolvedValueOnce({
+      imageUrl: 'https://signed.example/replacement.png',
+      media: { bucket: 'media', objectPath: GEOMETRY_MEDIA_B },
+      imageDisplayGeometry: displayGeometry(GEOMETRY_MEDIA_B, 'rotate-180'),
+    });
+    saveStudioDraft(draftWithImage(GEOMETRY_MEDIA_A));
+    const root = await renderStudio();
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]');
+    Object.defineProperty(input!, 'files', { configurable: true, value: [pngFile()] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+    await act(async () => { pending.resolve(displayGeometry(GEOMETRY_MEDIA_A, 'rotate-90-cw')); });
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+
+    expect(loadStudioDraft()?.scenes[0]).toMatchObject({
+      imageStorage: { objectPath: GEOMETRY_MEDIA_B },
+    });
+    expect(loadStudioDraft()?.scenes[0].imageDisplayGeometry).toBeUndefined();
+    await act(async () => { root.unmount(); });
+  });
+
+  it('rejects late source geometry after a project transition', async () => {
+    const pending = deferred<ReturnType<typeof displayGeometry>>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.resolveOwnedImageDisplayGeometry.mockReturnValueOnce(pending.promise);
+    saveStudioDraft(draftWithImage(GEOMETRY_MEDIA_A));
+    const root = await renderStudio();
+    await act(async () => {
+      useProjectStore.setState({ currentProject: { id: 'geometry-project-b', name: 'Geometry B', updatedAt: '2026-09-03T00:00:00.000Z' }, drafts: [] });
+    });
+    await flush();
+    await act(async () => { pending.resolve(displayGeometry(GEOMETRY_MEDIA_A, 'rotate-90-cw')); });
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+
+    expect(loadStudioDraft()?.scenes.some((scene) => scene.imageDisplayGeometry?.mediaIdentity === `media:${GEOMETRY_MEDIA_A}`) ?? false).toBe(false);
     await act(async () => { root.unmount(); });
   });
 
@@ -611,7 +696,7 @@ describe('Studio provider availability', () => {
     await act(async () => { root.unmount(); });
   });
 
-  it('does not let late restored-media signing replace a scene collection edited after hydration', async () => {
+  it('merges late restored-media signing by stable scene identity without replacing concurrent scenes', async () => {
     const pending = deferred<{ data: { signedUrl: string }; error: null }>();
     mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
     mocks.createSignedUrl.mockReturnValueOnce(pending.promise);
@@ -630,7 +715,7 @@ describe('Studio provider availability', () => {
     await flush();
 
     expect(container?.querySelectorAll('button.text-red-400')).toHaveLength(2);
-    expect(container?.querySelector('img')?.getAttribute('src') ?? '').not.toContain('late-restored.png');
+    expect(container?.querySelector('img')?.getAttribute('src') ?? '').toContain('late-restored.png');
     await act(async () => { root.unmount(); });
   });
 
@@ -826,6 +911,25 @@ function deferred<T>() {
 
 const APPLIED_MEDIA_A = '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000010.png';
 const APPLIED_MEDIA_B = '00000000-0000-4000-8000-000000000001/generated-images/00000000-0000-4000-8000-000000000011.png';
+const GEOMETRY_MEDIA_A = 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000010.png';
+const GEOMETRY_MEDIA_B = 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000011.png';
+
+function displayGeometry(objectPath: string, encodedToDisplay: 'identity' | 'rotate-180' | 'rotate-90-cw' = 'identity') {
+  const swaps = encodedToDisplay === 'rotate-90-cw';
+  return {
+    version: 1 as const,
+    mediaIdentity: `media:${objectPath}`,
+    encodedDimensions: { width: 1200, height: 800 },
+    displayDimensions: swaps ? { width: 800, height: 1200 } : { width: 1200, height: 800 },
+    encodedToDisplay,
+    contentDigest: 'a'.repeat(64),
+    executionAuthority: {
+      version: 1 as const,
+      reference: `idga1_${'A'.repeat(43)}`,
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    },
+  };
+}
 
 function spatialEvidence(x: number, y: number) {
   return {

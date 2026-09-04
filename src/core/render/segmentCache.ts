@@ -10,14 +10,13 @@ export interface SegmentCacheStats {
 export interface SegmentCacheResolution {
   sceneId: string;
   fingerprint: string;
-  path: string;
+  resourceReference: string;
   reusable: boolean;
 }
 
 export interface SegmentCache {
   resolve(plan: IncrementalRenderPlan): Promise<SegmentCacheResolution[]>;
-  pathFor(fingerprint: string): Promise<string>;
-  exists(fingerprint: string): Promise<boolean>;
+  resourceFor(fingerprint: string): Promise<{ reference: string; exists: boolean }>;
   stats(): Promise<SegmentCacheStats>;
   clear(): Promise<void>;
 }
@@ -29,28 +28,21 @@ export function createSegmentCache(): SegmentCache {
       const resolutions: SegmentCacheResolution[] = [];
 
       for (const item of plan.items) {
-        const [path, exists] = await Promise.all([
-          bridge.getSegmentPath(item.fingerprint),
-          bridge.segmentExists(item.fingerprint),
-        ]);
+        const resource = await bridge.issueSegmentResource(item.fingerprint);
 
         resolutions.push({
           sceneId: item.sceneId,
           fingerprint: item.fingerprint,
-          path,
-          reusable: item.decision === 'reuse' && exists,
+          resourceReference: resource.reference,
+          reusable: item.decision === 'reuse' && resource.exists,
         });
       }
 
       return resolutions;
     },
 
-    pathFor(fingerprint) {
-      return requireBridge().getSegmentPath(fingerprint);
-    },
-
-    exists(fingerprint) {
-      return requireBridge().segmentExists(fingerprint);
+    resourceFor(fingerprint) {
+      return requireBridge().issueSegmentResource(fingerprint);
     },
 
     stats() {

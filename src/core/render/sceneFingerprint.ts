@@ -60,6 +60,7 @@ export async function createSceneFingerprint(
       inputKind: execution.input.kind,
       durationMs: execution.durationMs,
       filters: execution.filters,
+      imageContentDigest: execution.imageGeometryAuthority?.contentDigest ?? null,
     },
     render: manifest.render,
     preset,

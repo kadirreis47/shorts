@@ -114,6 +114,19 @@ function validateTimeline(
         scene.id,
       );
     }
+    const source = scene.sourceScene;
+    const privateImage = source.imageStorage && !source.videoStorage && !source.videoUrl;
+    if (privateImage) {
+      const authority = scene.imageGeometryAuthority;
+      if (!authority || authority.mediaIdentity !== `media:${source.imageStorage!.objectPath}`) {
+        addIssue(issues, 'IMAGE_GEOMETRY_AUTHORITY_UNRESOLVED', 'render', 'error', 'Private image display geometry must be verified before rendering.', scene.id);
+      }
+    } else if (source.imageUrl && !source.imageStorage && !source.videoUrl && !source.videoStorage) {
+      addIssue(issues, 'EXTERNAL_IMAGE_REQUIRES_PROMOTION', 'render', 'error', 'External images must be promoted to private media before verified rendering.', scene.id);
+    }
+    if ((source.videoStorage || source.videoUrl) && scene.imageGeometryAuthority) {
+      addIssue(issues, 'VIDEO_IMAGE_GEOMETRY_INVALID', 'render', 'error', 'Video scenes cannot carry image display geometry.', scene.id);
+    }
   }
 
   if (metrics.pacingScore < 45) {

@@ -5,6 +5,15 @@ class YouTubeOwnerError extends Error {
   constructor() { super(OWNER_ERROR_MESSAGE); this.name = 'YouTubeOwnerError'; this.code = OWNER_ERROR_CODE; }
 }
 
+class YouTubeOwnerRecoveryRequiredError extends Error {
+  constructor(cause) {
+    super('Owner transition is blocked because native destination recovery is required.');
+    this.name = 'YouTubeOwnerError';
+    this.code = 'youtube-owner-recovery-required';
+    this.cause = cause;
+  }
+}
+
 function validAccessToken(value) {
   return typeof value === 'string' && value.length >= 20 && value.length <= 16_384 && !/\s/.test(value);
 }
@@ -60,9 +69,18 @@ function createYouTubeOwnerContext({ validateAccessToken }) {
   let transitioning = false;
   let transitionAttempt = 0;
   let criticalOperations = 0;
+  const unrecoveredCriticalFailures = new Map();
   const criticalWaiters = new Set();
+  const transitionListeners = new Set();
+
+  function notifyTransition() {
+    for (const listener of transitionListeners) {
+      try { listener(); } catch {}
+    }
+  }
 
   function fail() { throw new YouTubeOwnerError(); }
+  function failRecovery() { throw new YouTubeOwnerRecoveryRequiredError(unrecoveredCriticalFailures.get(generation)); }
   function capture() {
     if (expiresAt !== null && expiresAt <= Date.now()) void clear();
     if (transitioning || !ownerId || ownerAbortController.signal.aborted) return fail();
@@ -79,6 +97,10 @@ function createYouTubeOwnerContext({ validateAccessToken }) {
     assertCurrent(context);
     criticalOperations += 1;
     try { return await operation(); }
+    catch (error) {
+      if (error?.unrecoveredOwnerState === true) unrecoveredCriticalFailures.set(context.generation, error);
+      throw error;
+    }
     finally {
       criticalOperations -= 1;
       if (criticalOperations === 0) {
@@ -95,8 +117,10 @@ function createYouTubeOwnerContext({ validateAccessToken }) {
     const ownTransition = ++transitionAttempt;
     transitioning = true;
     ownerAbortController.abort();
+    notifyTransition();
     await waitForCriticalOperations();
     if (attempt !== validationAttempt || ownTransition !== transitionAttempt) fail();
+    if (unrecoveredCriticalFailures.has(generation)) failRecovery();
     ownerAbortController = new AbortController();
     ownerId = nextOwnerId;
     generation += 1;
@@ -132,8 +156,10 @@ function createYouTubeOwnerContext({ validateAccessToken }) {
     if (changed) {
       transitioning = true;
       ownerAbortController.abort();
+      notifyTransition();
       await waitForCriticalOperations();
       if (ownTransition !== transitionAttempt) return { ready: false, changed: true };
+      if (unrecoveredCriticalFailures.has(generation)) failRecovery();
       ownerAbortController = new AbortController();
       ownerId = null;
       generation += 1;
@@ -142,13 +168,20 @@ function createYouTubeOwnerContext({ validateAccessToken }) {
     return { ready: false, changed };
   }
 
-  return { establish, clear, capture, assertCurrent, assertCriticalCurrent, isCurrent, runCritical };
+  function onTransition(listener) {
+    if (typeof listener !== 'function') throw new TypeError('Owner transition listener is required.');
+    transitionListeners.add(listener);
+    return () => transitionListeners.delete(listener);
+  }
+
+  return { establish, clear, capture, assertCurrent, assertCriticalCurrent, isCurrent, runCritical, onTransition };
 }
 
 module.exports = {
   OWNER_ERROR_CODE,
   OWNER_ERROR_MESSAGE,
   YouTubeOwnerError,
+  YouTubeOwnerRecoveryRequiredError,
   createSupabaseOwnerValidator,
   createYouTubeOwnerContext,
   validAccessToken,

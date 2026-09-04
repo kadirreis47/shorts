@@ -10,7 +10,7 @@ export interface YouTubePublishRequest {
   approvedAt: string;
   target: { accountId: string; channelRef: string };
   account: { platform: 'youtube'; accountId: string; accountRef: string; channelRef: string; credentialRef: string };
-  artifact: { artifactPath: string; artifactFingerprint: string; contentDigest: string; sizeBytes: number };
+  artifact: { verifiedExportReference: string; artifactFingerprint: string };
   metadata: PublishJob['metadata'];
   outboundDescription: string;
   remotePublishId?: string;
@@ -23,8 +23,8 @@ export interface YouTubePublishingClient {
   acknowledgeReceipt(request: YouTubePublishRequest & { remotePublishId: string }): Promise<{ acknowledged: boolean }>;
 }
 function request(job: PublishJob): YouTubePublishRequest {
-  if (job.target.platform !== 'youtube' || job.accountBinding.platform !== 'youtube' || !job.accountBinding.credentialRef || !job.accountBinding.channelRef || !job.artifact.contentDigest || !job.approvalFingerprint || !job.approvedAt) throw Object.assign(new Error('YouTube publish binding is incomplete.'), { code: 'youtube-binding-invalid', status: 400, retryable: false });
-  return { jobId: job.id, idempotencyKey: job.idempotencyKey, platform: 'youtube', approvalFingerprint: job.approvalFingerprint, approvedAt: job.approvedAt, target: { accountId: job.target.accountId, channelRef: job.target.channelRef ?? '' }, account: { platform: 'youtube', accountId: job.accountBinding.id, accountRef: job.accountBinding.accountRef, channelRef: job.accountBinding.channelRef, credentialRef: job.accountBinding.credentialRef }, artifact: { artifactPath: job.artifact.artifactPath, artifactFingerprint: job.artifact.artifactFingerprint, contentDigest: job.artifact.contentDigest, sizeBytes: job.artifact.sizeBytes }, metadata: job.metadata, outboundDescription: composeYouTubeDescription(job.metadata), remotePublishId: job.remotePublishId ?? undefined, recovery: { jobState: job.state, remoteState: job.progress.remoteState, failureCode: job.failure?.code ?? null } };
+  if (job.target.platform !== 'youtube' || job.accountBinding.platform !== 'youtube' || !job.accountBinding.credentialRef || !job.accountBinding.channelRef || !job.artifact.contentDigest || !job.artifact.verifiedExportReference || !/^vea1_[A-Za-z0-9_-]{43}$/.test(job.artifact.verifiedExportReference) || !job.approvalFingerprint || !job.approvedAt) throw Object.assign(new Error('YouTube publish binding is incomplete.'), { code: 'youtube-binding-invalid', status: 400, retryable: false });
+  return { jobId: job.id, idempotencyKey: job.idempotencyKey, platform: 'youtube', approvalFingerprint: job.approvalFingerprint, approvedAt: job.approvedAt, target: { accountId: job.target.accountId, channelRef: job.target.channelRef ?? '' }, account: { platform: 'youtube', accountId: job.accountBinding.id, accountRef: job.accountBinding.accountRef, channelRef: job.accountBinding.channelRef, credentialRef: job.accountBinding.credentialRef }, artifact: { verifiedExportReference: job.artifact.verifiedExportReference, artifactFingerprint: job.artifact.artifactFingerprint }, metadata: job.metadata, outboundDescription: composeYouTubeDescription(job.metadata), remotePublishId: job.remotePublishId ?? undefined, recovery: { jobState: job.state, remoteState: job.progress.remoteState, failureCode: job.failure?.code ?? null } };
 }
 function failure(error: { code: string; message: string; retryable: boolean; status: number; retryAfterUtc: string | null }): Error { return Object.assign(new Error(error.message), error); }
 export function createYouTubePublishAdapter(client?: YouTubePublishingClient): PublishAdapter {

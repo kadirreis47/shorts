@@ -1,6 +1,7 @@
 import { aiManager } from '@/lib/ai';
 import type { GeneratedSEOResult } from '@/lib/ai';
 import { apiClient } from '@/lib/api/client';
+import { getAuthenticatedSession } from '@/auth/session';
 import { supabase } from '@/lib/supabase';
 import { assertCurrentOwnerMediaIdentity, uploadPrivateMedia, type PrivateMediaClass, type PrivateMediaUpload } from '@/lib/mediaStorage';
 import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
@@ -10,6 +11,7 @@ import {
 } from '@/core/visual-intelligence';
 import { normalizeOpaqueMediaReferenceRequest, normalizeOpaqueMediaReferenceResponse, normalizeSemanticImageAnalysisRequest, normalizeSemanticImageAnalysisResponse, normalizeDiscoveryCandidateSemanticAnalysisRequest, normalizeVisualSpatialAnalysisRequest, normalizeVisualSpatialAnalysisResponse, normalizeDiscoveryCandidateSpatialAnalysisRequest, type OpaqueMediaReferenceResponse, type SemanticImageAnalysisRequest, type SemanticImageAnalysisResponse, type DiscoveryCandidateSemanticAnalysisRequest, type VisualSpatialAnalysisRequest, type VisualSpatialAnalysisResponse, type DiscoveryCandidateSpatialAnalysisRequest } from '@/core/visual-intelligence';
 import type { VisualQueryPlannerRequest } from '../../supabase/functions/_shared/visual-query-planner';
+import { normalizeTrustedImageDisplayGeometry, type TrustedImageDisplayGeometryV1 } from '@/core/media/imageDisplayGeometry';
 
 import type {
   Scene,
@@ -211,7 +213,9 @@ export async function uploadMedia(
   file: Blob,
   mediaClass: PrivateMediaClass,
 ): Promise<PrivateMediaUpload> {
-  return uploadPrivateMedia(file, mediaClass);
+  const upload = await uploadPrivateMedia(file, mediaClass);
+  if (mediaClass !== 'generated-images') return upload;
+  return { ...upload, imageDisplayGeometry: await resolveOwnedImageDisplayGeometry(upload.media) };
 }
 
 export async function getProviderStatus(): Promise<ProviderStatus> {
@@ -330,7 +334,7 @@ export async function generateAIImage(params: {
   mode: VisualMode;
   characterDesc?: string;
   sceneContext?: string;
-}): Promise<{ imageUrl: string; media: MediaStorageObject; revisedPrompt?: string }> {
+}): Promise<{ imageUrl: string; media: MediaStorageObject; imageDisplayGeometry: TrustedImageDisplayGeometryV1; revisedPrompt?: string }> {
   const result = await apiClient.post<{ imageUrl: string; media: unknown; revisedPrompt?: string }>(
     'generate-image',
     params,
@@ -338,13 +342,13 @@ export async function generateAIImage(params: {
   );
   if (typeof result.imageUrl !== 'string' || !result.imageUrl) throw new Error('Generated image returned no private viewing URL.');
   assertCurrentOwnerMediaIdentity(result.media);
-  return { ...result, media: result.media };
+  return { ...result, media: result.media, imageDisplayGeometry: await resolveOwnedImageDisplayGeometry(result.media) };
 }
 
 export async function ingestPexelsImage(
   mediaId: number,
   query: string,
-): Promise<{ media: MediaStorageObject; previewUrl: string; provenance: ProviderMediaProvenance }> {
+): Promise<{ media: MediaStorageObject; previewUrl: string; provenance: ProviderMediaProvenance; imageDisplayGeometry: TrustedImageDisplayGeometryV1 }> {
   if (!Number.isSafeInteger(mediaId) || mediaId <= 0) throw new Error('Pexels image candidate is invalid.');
   if (!query.trim() || query.length > 500) throw new Error('Pexels image query is invalid.');
   const result = await apiClient.post<PexelsImageIngestResponse>(
@@ -355,7 +359,17 @@ export async function ingestPexelsImage(
   assertCurrentOwnerMediaIdentity(result.media);
   if (!isSafePreviewUrl(result.previewUrl)) throw new Error('Pexels image ingestion returned an invalid preview URL.');
   if (!isPexelsImageProvenance(result.provenance, mediaId)) throw new Error('Pexels image ingestion returned invalid provenance.');
-  return { media: result.media, previewUrl: result.previewUrl, provenance: result.provenance };
+  return { media: result.media, previewUrl: result.previewUrl, provenance: result.provenance, imageDisplayGeometry: await resolveOwnedImageDisplayGeometry(result.media) };
+}
+
+/** Resolves source technical geometry; the renderer supplies only an opaque owner-bound capability. */
+export async function resolveOwnedImageDisplayGeometry(media: MediaStorageObject): Promise<TrustedImageDisplayGeometryV1> {
+  assertCurrentOwnerMediaIdentity(media);
+  const accessToken = getAuthenticatedSession()?.access_token;
+  const resolver = typeof window === 'undefined' ? undefined : window.electronAPI?.ffmpeg.resolveImageDisplayGeometry;
+  if (!accessToken || !resolver) throw new Error('Trusted native image display geometry is unavailable.');
+  const result = await resolver(accessToken, media);
+  return normalizeTrustedImageDisplayGeometry(result, `media:${media.objectPath}`);
 }
 
 export async function ingestPexelsVideo(

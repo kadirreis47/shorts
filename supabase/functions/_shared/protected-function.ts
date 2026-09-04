@@ -1,5 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { getVerifiedUser } from "./verified-user.ts";
+import { createProtectedFunctionAuthorizer } from "./protected-function-authorizer.ts";
+import { createBoundedJsonReader } from "./bounded-json-reader.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,6 +35,8 @@ export const FUNCTION_POLICIES = {
   "visual-query-planner": { operationClass: "medium", burstMax: 6, dailyMax: 80 },
   // Short-lived analysis capabilities may perform one bounded Storage metadata lookup.
   "media-analysis-reference": { operationClass: "low", burstMax: 12, dailyMax: 120 },
+  // Owner-bound, byte-derived technical metadata; no paid provider call.
+  "resolve-image-display-geometry": { operationClass: "low", burstMax: 12, dailyMax: 120 },
   // Explicit, paid image analysis. One request resolves one already-owned image and makes one provider call.
   "analyze-visual-semantics": { operationClass: "high", burstMax: 2, dailyMax: 20 },
   "analyze-discovery-candidate-semantics": { operationClass: "high", burstMax: 2, dailyMax: 20 },
@@ -42,7 +46,7 @@ export const FUNCTION_POLICIES = {
 
 export type ProtectedFunctionName = keyof typeof FUNCTION_POLICIES;
 
-function safeRequestId(req: Request): string | null {
+export function safeRequestId(req: Request): string | null {
   const value = req.headers.get("x-request-id") ?? req.headers.get("x-sb-request-id");
   return value && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : null;
 }
@@ -54,97 +58,29 @@ export function jsonResponse(body: Record<string, unknown>, status = 200): Respo
   });
 }
 
-export async function readBoundedJson<T extends object>(
-  req: Request,
-  maxBytes: number,
-): Promise<{ ok: true; value: T } | { ok: false; response: Response }> {
-  if (!req.body) return { ok: false, response: jsonResponse({ error: "Invalid request body." }, 400) };
-
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        await reader.cancel();
-        return { ok: false, response: jsonResponse({ error: "Request body is too large." }, 413) };
-      }
-      chunks.push(value);
-    }
-
-    const bytes = new Uint8Array(totalBytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { ok: false, response: jsonResponse({ error: "Invalid request body." }, 400) };
-    }
-    return { ok: true, value: parsed as T };
-  } catch {
-    return { ok: false, response: jsonResponse({ error: "Invalid request body." }, 400) };
-  } finally {
-    reader.releaseLock();
-  }
-}
+export const readBoundedJson = createBoundedJsonReader(jsonResponse);
 
 /**
  * Authenticates before any provider/service-role work and atomically consumes a
  * server-owned request slot. The caller never supplies an owner or counter.
  */
+const productionAuthorizer = createProtectedFunctionAuthorizer({
+  verifyUser: getVerifiedUser,
+  getEnvironment: (name) => Deno.env.get(name),
+  createServiceClient: (url, serviceRoleKey) => createClient(url, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  }),
+  policyFor: (functionName) => FUNCTION_POLICIES[functionName as ProtectedFunctionName],
+  respond: jsonResponse,
+  requestId: safeRequestId,
+  log: (message) => console.error(message),
+});
+
 export async function authorizeProtectedFunction(
   req: Request,
   functionName: ProtectedFunctionName,
 ): Promise<{ ok: true; userId: string } | { ok: false; response: Response }> {
-  const verifiedUser = await getVerifiedUser(req);
-  if ("error" in verifiedUser) {
-    return { ok: false, response: jsonResponse({ error: verifiedUser.error }, verifiedUser.status) };
-  }
-
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseUrl || !serviceRoleKey) {
-    return { ok: false, response: jsonResponse({ error: "Service is temporarily unavailable." }, 503) };
-  }
-
-  const limit = FUNCTION_POLICIES[functionName];
-  try {
-    const service = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data, error } = await service.rpc("consume_edge_function_quota", {
-      p_user_id: verifiedUser.userId,
-      // All explicit paid visual analyses share one server-owned cost ceiling.
-      p_function_name: functionName === "analyze-discovery-candidate-semantics"
-        || functionName === "analyze-visual-spatial"
-        || functionName === "analyze-discovery-candidate-spatial"
-        ? "analyze-visual-semantics" : functionName,
-      p_burst_window_seconds: 60,
-      p_burst_max_requests: limit.burstMax,
-      p_daily_max_requests: limit.dailyMax,
-    });
-    if (error || data !== true) {
-      if (error) {
-        console.error(JSON.stringify({
-          event: "edge-function.quota-error",
-          functionName,
-          code: typeof error.code === "string" ? error.code : "UNKNOWN",
-          requestId: safeRequestId(req),
-        }));
-        return { ok: false, response: jsonResponse({ error: "Service is temporarily unavailable." }, 503) };
-      }
-      return { ok: false, response: jsonResponse({ error: "Request limit reached. Please try again shortly." }, 429) };
-    }
-  } catch {
-    return { ok: false, response: jsonResponse({ error: "Service is temporarily unavailable." }, 503) };
-  }
-
-  return { ok: true, userId: verifiedUser.userId };
+  return productionAuthorizer(req, functionName);
 }
 
 export function isBoundedString(value: unknown, maxLength: number, required = false): value is string {

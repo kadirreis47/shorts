@@ -148,9 +148,9 @@ async function buildFixture(narrationMode: 'required' | 'silent'): Promise<Media
     title: 'Narration validation fixture',
     audio: { narrationMode },
     scenes: [
-      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'A clear opening line.', duration: 3, visual: 'Opening', imageUrl: 'https://images.pexels.com/photos/opening.jpg' },
-      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000002', text: 'A useful middle explanation.', duration: 4, visual: 'Middle', imageUrl: 'https://images.pexels.com/photos/middle.jpg' },
-      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'A concise closing line.', duration: 3, visual: 'Closing', imageUrl: 'https://images.pexels.com/photos/closing.jpg' },
+      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000001', text: 'A clear opening line.', duration: 3, visual: 'Opening', videoUrl: 'https://videos.pexels.com/videos/opening.mp4' },
+      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000002', text: 'A useful middle explanation.', duration: 4, visual: 'Middle', videoUrl: 'https://videos.pexels.com/videos/middle.mp4' },
+      { sceneId: 'visual-scene-00000000-0000-4000-8000-000000000003', text: 'A concise closing line.', duration: 3, visual: 'Closing', videoUrl: 'https://videos.pexels.com/videos/closing.mp4' },
     ],
   });
 }

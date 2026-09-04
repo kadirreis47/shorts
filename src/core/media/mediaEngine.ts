@@ -11,7 +11,9 @@ import { composeTracks } from './trackComposer';
 import { validateMediaProject } from './mediaValidator';
 import { privateStorageSource } from './storageIdentity';
 import { normalizeCanonicalBrandingConfiguration } from './brandingTypes';
-import type { CameraMotion, CanonicalMotionMode, CanonicalSceneComposition, CanonicalTransitionType, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
+import type { CameraMotion, CanonicalImageGeometryExecutionAuthority, CanonicalMotionMode, CanonicalSceneComposition, CanonicalTransitionType, CreateMediaProjectInput, MediaProject, MediaProjectBuildResult, MediaScene } from './types';
+import type { ImageEncodedToDisplayOrientation } from './imageDisplayGeometry';
+import { assertCanonicalStudioProductionRecipeCompilation } from './studioProductionRecipe';
 
 export interface MediaEngine { buildProject(input: CreateMediaProjectInput): Promise<MediaProjectBuildResult>; }
 
@@ -21,8 +23,14 @@ export function createMediaEngine(
 ): MediaEngine {
   return {
     async buildProject(input) {
+      if (input.productionRecipe !== undefined || input.sceneImageGeometryAuthorities !== undefined) {
+        assertCanonicalStudioProductionRecipeCompilation(input);
+      }
       if (input.sceneComposition === undefined && input.scenes.some((scene) => scene.compositionOverride !== undefined)) {
         throw new Error('Scene composition overrides require canonical Recipe compilation.');
+      }
+      if (input.sceneImageGeometryAuthorities !== undefined && input.productionRecipe === undefined) {
+        throw new Error('Image display geometry requires canonical Recipe compilation.');
       }
       const settings = normalizeMediaSettings(input.settings);
       const branding = normalizeCanonicalBrandingConfiguration(input.branding);
@@ -44,6 +52,9 @@ export function createMediaEngine(
             settings.defaultTransitionMs,
           );
         }
+      }
+      if (input.sceneImageGeometryAuthorities !== undefined) {
+        plannedScenes = applyImageGeometryAuthorities(plannedScenes, input.sceneImageGeometryAuthorities);
       }
       const semanticWindows = deriveNarrationSemanticSceneWindows(plannedScenes, input.narration?.alignment, input.narration?.durationMs);
       plannedScenes = semanticWindows
@@ -198,6 +209,42 @@ export function createMediaEngine(
       };
     },
   };
+}
+
+function applyImageGeometryAuthorities(
+  scenes: MediaScene[], authorities: readonly (CanonicalImageGeometryExecutionAuthority | null)[],
+): MediaScene[] {
+  if (authorities.length !== scenes.length) throw new Error('Canonical image geometry authority count is invalid.');
+  return scenes.map((scene, index) => {
+    const requested = authorities[index];
+    const isVideo = Boolean(scene.sourceScene.videoStorage || scene.sourceScene.videoUrl);
+    const isPrivateImage = Boolean(scene.sourceScene.imageStorage) && !isVideo;
+    if (requested === null) {
+      if (isPrivateImage) throw new Error('Private image scenes require trusted geometry authority.');
+      return { ...scene, imageGeometryAuthority: undefined };
+    }
+    if (isVideo || !isPrivateImage) throw new Error('Only private image scenes can carry image geometry authority.');
+    const orientation = canonicalImageOrientation(requested.expectedOrientation);
+    const expectedIdentity = `media:${scene.sourceScene.imageStorage!.objectPath}`;
+    if (requested.mediaIdentity !== expectedIdentity || typeof requested.authorityReference !== 'string'
+      || !/^idga1_[A-Za-z0-9_-]{43}$/.test(requested.authorityReference)
+      || typeof requested.contentDigest !== 'string' || !/^[0-9a-f]{64}$/.test(requested.contentDigest)) throw new Error('Canonical image geometry authority is invalid.');
+    return {
+      ...scene,
+      imageGeometryAuthority: Object.freeze({
+        authorityReference: requested.authorityReference,
+        mediaIdentity: expectedIdentity,
+        expectedOrientation: orientation,
+        contentDigest: requested.contentDigest,
+      }),
+    };
+  });
+}
+
+function canonicalImageOrientation(value: unknown): ImageEncodedToDisplayOrientation {
+  if (value === 'identity' || value === 'mirror-horizontal' || value === 'rotate-180' || value === 'mirror-vertical'
+    || value === 'transpose' || value === 'rotate-90-cw' || value === 'transverse' || value === 'rotate-90-ccw') return value;
+  throw new Error('Canonical image orientation is invalid.');
 }
 
 function applyEffectiveSceneComposition(

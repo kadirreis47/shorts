@@ -5,6 +5,7 @@ import { normalizeCanonicalWatermarkText } from './brandingTypes';
 import { normalizeNarrationCharacterAlignment, type NarrationCharacterAlignment } from '@/shared/voiceoverAlignment';
 import { normalizeSceneCompositionOverride, resolveEffectiveSceneComposition } from './sceneComposition';
 import { isCanonicalSceneId } from '@/lib/sceneIdentity';
+import { normalizeTrustedImageDisplayGeometry, type ImageDisplayGeometryExecutionAuthorityV1, type ImageEncodedToDisplayOrientation } from './imageDisplayGeometry';
 
 export type StudioRecipeCaptionStyle = 'karaoke' | 'highlight' | 'classic' | 'minimal';
 export type StudioRecipeTransition = 'crossfade' | 'slide' | 'zoom' | 'fadeblack' | 'glitch' | 'shake' | 'whippan' | 'none';
@@ -79,6 +80,12 @@ export interface StudioRecipeVisualMediaV1 {
   readonly sourceUrl: string | null;
   /** Information only; excluded from canonical output identity. */
   readonly provenance?: ProviderMediaProvenance | null;
+  /** Omitted for the identity transform so technical no-ops do not churn Recipe identity. */
+  readonly displayOrientation?: Exclude<ImageEncodedToDisplayOrientation, 'identity'>;
+  /** Opaque native execution authority; excluded from Recipe output identity. */
+  readonly displayGeometryAuthority?: ImageDisplayGeometryExecutionAuthorityV1;
+  /** Exact validated encoded-byte identity; included in Recipe output identity. */
+  readonly contentDigest?: string;
 }
 
 export interface StudioRecipeNarrationV1 {
@@ -157,6 +164,8 @@ const MOTIONS = new Set<StudioRecipeMotion>(['kenburns', 'pan', 'zoom_in', 'zoom
 const VOICE_MODES = new Set<StudioRecipeVoiceMode>(['elevenlabs', 'browser', 'none']);
 const VISUAL_MODES = new Set<VisualMode>(['auto', 'ai_cartoon', 'ai_realistic', 'ai_anime', 'ai_horror', 'real_footage', 'mixed']);
 const WATERMARK_POSITIONS = new Set<StudioRecipeWatermarkPosition>(['top-left', 'top-right', 'bottom-left', 'bottom-right']);
+const canonicalCompilations = new WeakSet<object>();
+const canonicalNormalizations = new WeakSet<object>();
 const PRIVATE_PATH = /^(?<owner>[^/]+)\/(?:videos\/[0-9a-f-]+\.(?:webm|mp4)|generated-images\/[0-9a-f-]+\.(?:png|jpg)|voiceovers\/[0-9a-f-]+\.mp3|music\/[0-9a-f-]+\.mp3)$/i;
 const TRANSIENT_SOURCE = /^(?:blob:|data:)|\/storage\/v1\/object\/sign\//i;
 
@@ -209,19 +218,22 @@ export function normalizeStudioProductionRecipeV1(
       characterArtStyle: optionalText(input.characterArtStyle),
     },
   };
-  return {
-    recipe,
+  const normalized: NormalizedStudioProductionRecipeV1 = Object.freeze({
+    recipe: deepFreeze(recipe),
     identity: recipeIdentity(recipe),
     exportSupport: STUDIO_PRODUCTION_RECIPE_V1_EXPORT_CAPABILITIES,
-  };
+  });
+  canonicalNormalizations.add(normalized);
+  return normalized;
 }
 
 export function compileStudioProductionRecipeV1(
   normalized: NormalizedStudioProductionRecipeV1,
 ): CreateMediaProjectInput {
+  if (!canonicalNormalizations.has(normalized)) throw new Error('Canonical Recipe normalization authority is invalid.');
   const { recipe } = normalized;
   const narration = recipe.audio.narration;
-  return {
+  const compiled: CreateMediaProjectInput = {
     projectId: recipe.projectId,
     title: recipe.title,
     scenes: recipe.scenes.map(recipeSceneToScene),
@@ -261,9 +273,24 @@ export function compileStudioProductionRecipeV1(
         transition: { type: recipeTransitionToCanonical(effective.transition) },
       };
     }),
+    sceneImageGeometryAuthorities: Object.freeze(recipe.scenes.map((scene) => scene.media?.type === 'image' && scene.media.storage && scene.media.displayGeometryAuthority
+      ? {
+          authorityReference: scene.media.displayGeometryAuthority.reference,
+          mediaIdentity: `media:${scene.media.storage.objectPath}`,
+          expectedOrientation: (scene.media.displayOrientation ?? 'identity') as ImageEncodedToDisplayOrientation,
+          contentDigest: scene.media.contentDigest!,
+        }
+      : null).map((authority) => authority ? Object.freeze(authority) : null)),
     branding: recipe.branding,
     productionRecipe: normalized,
   };
+  deepFreeze(compiled);
+  canonicalCompilations.add(compiled);
+  return compiled;
+}
+
+export function assertCanonicalStudioProductionRecipeCompilation(input: CreateMediaProjectInput): void {
+  if (!canonicalCompilations.has(input)) throw new Error('Canonical Recipe compilation authority is invalid.');
 }
 
 export function canonicalizeStudioRecipeTransition(
@@ -298,7 +325,10 @@ function recipeMotionToCanonical(motion: StudioRecipeMotion): CanonicalMotionMod
 export function recipeIdentity(recipe: StudioProductionRecipeV1): string {
   const serialized = stableStringify({
     ...recipe,
-    scenes: recipe.scenes.map(({ canonicalSceneId: _canonicalSceneId, ...scene }) => ({ ...scene, media: scene.media ? { ...scene.media, provenance: undefined } : null })),
+    scenes: recipe.scenes.map(({ canonicalSceneId: _canonicalSceneId, ...scene }) => ({
+      ...scene,
+      media: scene.media ? { ...scene.media, provenance: undefined, displayGeometryAuthority: undefined } : null,
+    })),
   });
   let first = 2166136261;
   let second = 2246822519;
@@ -351,17 +381,29 @@ function normalizeSceneMedia(scene: Scene, ownerId: string): StudioRecipeVisualM
   if (storage) {
     assertOwnedStorage(storage, ownerId);
     const mediaType = scene.videoStorage ? 'video' : 'image';
+    if (mediaType === 'video' && scene.imageDisplayGeometry !== undefined) throw new Error('Video media cannot carry image display geometry.');
+    if (mediaType === 'image' && scene.imageDisplayGeometry === undefined) {
+      throw new Error('Private image media requires source-derived display geometry.');
+    }
+    const displayGeometry = mediaType === 'image'
+      ? normalizeTrustedImageDisplayGeometry(scene.imageDisplayGeometry, `media:${storage.objectPath}`)
+      : undefined;
     const provenance = scene.imageStorage ? scene.imageProvenance : scene.videoProvenance;
     return {
       type: mediaType, storage: cloneStorage(storage), sourceUrl: null,
+      ...(displayGeometry && displayGeometry.encodedToDisplay !== 'identity' ? { displayOrientation: displayGeometry.encodedToDisplay } : {}),
+      ...(displayGeometry ? { displayGeometryAuthority: displayGeometry.executionAuthority } : {}),
+      ...(displayGeometry ? { contentDigest: displayGeometry.contentDigest } : {}),
       ...(provenance ? { provenance: normalizePexelsProvenance(provenance, mediaType) } : {}),
     };
   }
   if (!sourceUrl) return null;
+  if (scene.imageDisplayGeometry !== undefined) throw new Error('Image display geometry requires durable private image media.');
   if (!isTrustedExternalSource(sourceUrl)) {
     throw new Error('Scene media must use a durable private identity or trusted HTTPS URL.');
   }
-  return { type: scene.videoUrl ? 'video' : 'image', storage: null, sourceUrl };
+  if (!scene.videoUrl) throw new Error('External images must be promoted to durable private media before verified export.');
+  return { type: 'video', storage: null, sourceUrl };
 }
 
 function normalizeNarration(value: StudioRecipeNarrationV1, ownerId: string): StudioRecipeNarrationV1 {
@@ -484,3 +526,4 @@ function boundedInteger(value: unknown, min: number, max: number, label: string)
 function cloneStorage(storage: MediaStorageObject): MediaStorageObject { return { bucket: 'media', objectPath: storage.objectPath }; }
 function stableStringify(value: unknown): string { return JSON.stringify(sortValue(value)); }
 function sortValue(value: unknown): unknown { if (Array.isArray(value)) return value.map(sortValue); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, nested]) => [key, sortValue(nested)])); return value; }
+function deepFreeze<T>(value: T): T { if (value && typeof value === 'object' && !Object.isFrozen(value)) { Object.freeze(value); for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested); } return value; }

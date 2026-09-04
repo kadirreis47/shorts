@@ -1,7 +1,7 @@
 /** Serializable contract shared by the renderer, Edge gateway, and future analysis adapters. */
 export const OPAQUE_MEDIA_REFERENCE_VERSION = 1 as const;
 export const OPAQUE_MEDIA_REFERENCE_TTL_SECONDS = 300 as const;
-export type OpaqueMediaAnalysisScope = "semantic-image-analysis" | "spatial-image-analysis";
+export type OpaqueMediaAnalysisScope = "semantic-image-analysis" | "spatial-image-analysis" | "image-display-geometry";
 export type OpaqueMediaReferenceMediaType = "image";
 
 export interface OpaqueMediaReferenceRequest {
@@ -27,7 +27,7 @@ export function normalizeOpaqueMediaReferenceRequest(value: unknown): OpaqueMedi
   // Missing scope remains the legacy semantic request. Spatial authority must
   // always be requested explicitly and is never inferred from client context.
   const scope = source.scope ?? "semantic-image-analysis";
-  if (scope !== "semantic-image-analysis" && scope !== "spatial-image-analysis") throw new Error("Opaque media analysis scope is invalid.");
+  if (scope !== "semantic-image-analysis" && scope !== "spatial-image-analysis" && scope !== "image-display-geometry") throw new Error("Opaque media analysis scope is invalid.");
   return Object.freeze({ media: Object.freeze({ bucket: "media", objectPath: media.objectPath }), scope });
 }
 

@@ -44,6 +44,7 @@ export const V1_EDGE_FUNCTIONS = [
   'translate-subtitles',
   'visual-query-planner',
   'media-analysis-reference',
+  'resolve-image-display-geometry',
   'analyze-visual-semantics',
   'analyze-discovery-candidate-semantics',
   'analyze-visual-spatial',

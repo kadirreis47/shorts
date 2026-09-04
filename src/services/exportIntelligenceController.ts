@@ -44,7 +44,7 @@ export async function waitForActiveExport(jobId: string): Promise<ExportJob> {
         throw new Error('Verified export destination does not match the selected save path.');
       }
       const bridge = getFFmpegBridge();
-      if (!bridge?.fileExists || !await bridge.fileExists(job.outputPath)) {
+      if (!bridge?.resourceExists || !await bridge.resourceExists(job.outputPath)) {
         throw new Error('Export finished but the selected MP4 file could not be found.');
       }
       return job;
@@ -119,8 +119,8 @@ function getExportQueue(ownerId: string): ExportQueue {
       let finalPath = sourcePath;
       if (normalizePath(sourcePath) !== normalizePath(job.outputPath)) {
         const bridge = getFFmpegBridge();
-        if (!bridge?.copyFile) throw new Error('Cache artifact materialization requires the Electron filesystem boundary.');
-        const materialized = await bridge.copyFile(sourcePath, job.outputPath);
+        if (!bridge?.materializeRenderArtifact) throw new Error('Cache artifact materialization requires the Electron artifact boundary.');
+        const materialized = await bridge.materializeRenderArtifact(sourcePath, job.outputPath);
         finalPath = materialized.path;
       }
       if (normalizePath(finalPath) !== normalizePath(job.outputPath)) throw new Error('Materialized export destination does not match the requested path.');
