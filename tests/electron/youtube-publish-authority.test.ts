@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const ffmpeg = require('../../electron/ffmpeg-service.cjs') as any;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { registerYouTubeHandlers } = require('../../electron/youtube-ipc.cjs') as any;
+const { registerYouTubeHandlers, validPublishRequest } = require('../../electron/youtube-ipc.cjs') as any;
 
 const ownerA = Object.freeze({ ownerId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', generation: 4, signal: new AbortController().signal });
 const ownerB = Object.freeze({ ownerId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', generation: 5, signal: new AbortController().signal });
@@ -88,6 +89,49 @@ describe('YouTube verified-export publishing capability', () => {
     await writeFile(artifactPath, 'changed-after-verification');
     expect(await invoke(valid)).toMatchObject({ ok: false, error: { code: 'artifact-integrity-mismatch' } });
     expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidates process-local references across restart and accepts only a freshly issued same-window reference', async () => {
+    directory = await mkdtemp(join(tmpdir(), 'shortsflow-publish-restart-'));
+    const artifactPath = join(directory, 'persisted.mp4');
+    const bytes = Buffer.from('persisted-verified-export');
+    await writeFile(artifactPath, bytes);
+    const artifact = { artifactPath, sizeBytes: bytes.length, contentDigest: createHash('sha256').update(bytes).digest('hex') };
+    const stale = ffmpeg.rememberVerifiedExportArtifact(11, artifact, ownerA);
+    await expect(ffmpeg.resolveVerifiedExportPublishCapability(11, stale.reference, ownerA)).resolves.toEqual(artifact);
+
+    ffmpeg.resetFFmpegAuthorityStateForTests();
+    await expect(ffmpeg.resolveVerifiedExportPublishCapability(11, stale.reference, ownerA)).rejects.toMatchObject({ code: 'artifact-unavailable' });
+    ffmpeg.rememberRenderedArtifact(11, artifactPath, 'export', ownerA);
+    const fresh = ffmpeg.rememberVerifiedExportArtifact(11, artifact, ownerA);
+    expect(fresh.reference).not.toBe(stale.reference);
+    await expect(ffmpeg.resolveVerifiedExportPublishCapability(12, fresh.reference, ownerA)).rejects.toMatchObject({ code: 'artifact-unavailable' });
+    await expect(ffmpeg.resolveVerifiedExportPublishCapability(11, fresh.reference, ownerA)).resolves.toEqual(artifact);
+  });
+
+  it('keeps the product E2E harness on the production capability flow', () => {
+    const main = readFileSync(resolvePath('electron/product-e2e-main.cjs'), 'utf8');
+    const renderer = readFileSync(resolvePath('electron/product-e2e-renderer.html'), 'utf8');
+    const legacy = publishRequest({ artifactPath: 'C:\\Windows\\win.ini', artifactFingerprint: 'artifact-1', sizeBytes: 92, contentDigest: 'a'.repeat(64) });
+    expect(validPublishRequest(legacy)).toBe(false);
+    expect(main).toContain("const artifactPath = path.join(path.resolve(app.getPath('userData')), 'product-e2e-artifacts', 'shortsflow-product-e2e.mp4');");
+    expect(main).toContain("rememberApprovedExportDestination(window.webContents.id, artifactPath, 'render', owner);");
+    expect(main).toContain("rememberRenderedArtifact(window.webContents.id, artifactPath, 'export', owner);");
+    expect(main).toContain('verifiedExportAuthority: nativeAuthorities.verifiedExportAuthority');
+    expect(main).toContain('window.loadURL(`http://127.0.0.1:${port}/#${query}`)');
+    expect(renderer).toContain("artifact: { verifiedExportReference, artifactFingerprint: 'product-e2e-artifact' }");
+    expect(renderer).not.toMatch(/artifact:\s*\{\s*artifactPath/u);
+    expect(renderer).toContain('new URLSearchParams(window.location.hash.slice(1))');
+    expect(renderer).toContain('existing.artifactPath !== artifactPath');
+    expect(renderer).toContain("Object.prototype.hasOwnProperty.call(existing, 'verifiedExportReference')");
+    expect(renderer).toContain('const verified = await api.ffmpeg.verifyRenderArtifact(existing.artifactPath);');
+    expect(renderer).toContain('artifactPath: render.outputPath }));');
+
+    const approvedPath = resolvePath('product-e2e-artifacts/shortsflow-product-e2e.mp4');
+    const rendererChosenPath = resolvePath('arbitrary-host-file.txt');
+    ffmpeg.rememberApprovedExportDestination(11, approvedPath, 'render', ownerA);
+    expect(ffmpeg.requireApprovedDestination(11, approvedPath, 'render', ownerA)).toBe(approvedPath);
+    expect(() => ffmpeg.requireApprovedDestination(11, rendererChosenPath, 'render', ownerA)).toThrow(/unavailable/u);
   });
 });
 

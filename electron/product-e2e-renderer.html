@@ -2,24 +2,42 @@
 (async () => {
   try {
     const api = window.electronAPI;
+    console.log('[ShortsFlow Product E2E] checking bundled runtime');
     const capabilities = await api.ffmpeg.getCapabilities(true);
+    console.log('[ShortsFlow Product E2E] bundled runtime ready');
     if (!capabilities.available || !capabilities.ffprobeAvailable) throw new Error(capabilities.reason || 'Bundled FFmpeg and FFprobe are required.');
+    const parameters = new URLSearchParams(window.location.hash.slice(1)); const mode = parameters.get('mode'); const artifactPath = parameters.get('artifactPath');
+    if (!artifactPath || (mode !== 'seed' && mode !== 'resume')) throw new Error('Trusted product E2E artifact setup is unavailable.');
     const existing = JSON.parse(localStorage.getItem('shortsflow-product-e2e') || 'null');
     if (existing) {
-      if (!existing.receipt || !existing.analytics || !existing.digest) throw new Error('Durable product E2E state did not survive restart.');
-      console.log(`SHORTSFLOW_PRODUCT_E2E:${JSON.stringify({ restarted: true, ffmpeg: capabilities.executable, ffprobe: capabilities.ffprobeExecutable, receipt: existing.receipt, analyticsMetrics: existing.analytics, verified: Boolean(existing.digest) })}`);
+      if (mode !== 'resume' || !existing.receipt || !existing.analytics || !existing.digest || existing.artifactPath !== artifactPath || Object.prototype.hasOwnProperty.call(existing, 'verifiedExportReference')) throw new Error('Durable product E2E state did not survive restart safely.');
+      console.log('[ShortsFlow Product E2E] revalidating persisted export');
+      const verified = await api.ffmpeg.verifyRenderArtifact(existing.artifactPath);
+      if (verified.integrity.contentDigest !== existing.digest) throw new Error('Persisted product E2E artifact changed across restart.');
+      const reference = verified.publishCapability?.reference;
+      if (!/^vea1_[A-Za-z0-9_-]{43}$/.test(reference || '')) throw new Error('Fresh verified export authority was not issued after restart.');
+      const request = publishRequest(reference);
+      console.log('[ShortsFlow Product E2E] publishing with fresh authority');
+      const publication = await api.youtube.publish(request); if (!publication.ok || publication.result.remotePublishId !== 'e2e-video') throw new Error('Restarted publishing IPC did not resolve fresh verified authority.');
+      console.log(`SHORTSFLOW_PRODUCT_E2E:${JSON.stringify({ restarted: true, ffmpeg: capabilities.executable, ffprobe: capabilities.ffprobeExecutable, receipt: publication.result.remotePublishId, analyticsMetrics: existing.analytics, verified: true, freshAuthority: true })}`);
       return;
     }
-    const segment = await api.ffmpeg.issueSegmentResource('1111111111111111');
-    const intent = { version: 1, kind: 'segment', width: 160, height: 90, durationMs: 200, scenes: [{ durationMs: 200, cameraMotion: 'none', source: { kind: 'color', paletteIndex: 0 } }], sceneDurationsMs: [200], transitions: [{ type: 'cut', overlapMs: 0 }], segmentReferences: [], branding: null, subtitleContent: '', audioTracks: [], audioSettings: { masterGain: 1, targetLufs: -14, duckingAttackMs: 25, duckingReleaseMs: 250 }, encoding: { videoCodec: 'h264', audioCodec: 'aac', quality: 'standard', hardwareAcceleration: 'disabled', encoder: null, encoderMode: null, bitrateKbps: null, maxBitrateKbps: null, bufferSizeKbps: null, crf: null, encoderPreset: null, frameRate: 30, pixelFormat: 'yuv420p', gopFrames: null, keyframeInterval: null, threads: null, audioBitrateKbps: 192, sampleRate: 48000, audioChannels: 2, colorSpace: null, profile: null } };
-    const plan = await api.ffmpeg.createCanonicalRenderPlan({ operation: 'segment-render', jobId: 'product-e2e-render', outputResourceReference: segment.reference, intent });
+    if (mode !== 'seed') throw new Error('Product E2E resume state is missing.');
+    const intent = { version: 1, kind: 'full', width: 160, height: 90, durationMs: 200, scenes: [{ durationMs: 200, cameraMotion: 'none', source: { kind: 'color', paletteIndex: 0 } }], sceneDurationsMs: [200], transitions: [{ type: 'cut', overlapMs: 0 }], segmentReferences: [], branding: null, subtitleContent: '', audioTracks: [], audioSettings: { masterGain: 1, targetLufs: -14, duckingAttackMs: 25, duckingReleaseMs: 250 }, encoding: { videoCodec: 'h264', audioCodec: 'aac', quality: 'standard', hardwareAcceleration: 'disabled', encoder: null, encoderMode: null, bitrateKbps: null, maxBitrateKbps: null, bufferSizeKbps: null, crf: null, encoderPreset: null, frameRate: 30, pixelFormat: 'yuv420p', gopFrames: null, keyframeInterval: null, threads: null, audioBitrateKbps: 192, sampleRate: 48000, audioChannels: 2, colorSpace: null, profile: null } };
+    console.log('[ShortsFlow Product E2E] creating canonical export plan');
+    const plan = await api.ffmpeg.createCanonicalRenderPlan({ operation: 'full-render', jobId: 'product-e2e-render', outputPath: artifactPath, intent });
+    console.log('[ShortsFlow Product E2E] executing canonical export plan');
     const render = await api.ffmpeg.executeCanonicalRenderPlan(plan.reference);
-    const verified = await api.ffmpeg.verifyRenderArtifact(render.outputPath); const digest = verified.integrity;
-    const request = { jobId: 'product-e2e-publish', idempotencyKey: 'product-e2e-publish', platform: 'youtube', approvalFingerprint: 'product-e2e-approval', approvedAt: '2026-08-11T10:00:00.000Z', target: { accountId: 'youtube:UC-e2e', channelRef: 'UC-e2e' }, account: { platform: 'youtube', accountId: 'youtube:UC-e2e', accountRef: 'UC-e2e', channelRef: 'UC-e2e', credentialRef: 'youtube_11111111-1111-1111-1111-111111111111' }, artifact: { artifactPath: render.outputPath, artifactFingerprint: 'product-e2e-artifact', contentDigest: digest.contentDigest, sizeBytes: digest.sizeBytes }, metadata: { title: 'Product E2E', description: '', caption: '', hashtags: [], visibility: 'private', language: null, category: null, audienceFlags: {}, thumbnailPath: null, playlistRef: null, commentsEnabled: null }, outboundDescription: '', recovery: { jobState: 'queued', remoteState: null, failureCode: null } };
+    console.log('[ShortsFlow Product E2E] verifying canonical export');
+    const verified = await api.ffmpeg.verifyRenderArtifact(render.outputPath); const digest = verified.integrity; const reference = verified.publishCapability?.reference;
+    if (!/^vea1_[A-Za-z0-9_-]{43}$/.test(reference || '')) throw new Error('Verified export authority was not issued.');
+    const request = publishRequest(reference);
+    console.log('[ShortsFlow Product E2E] publishing verified export');
     const publication = await api.youtube.publish(request); if (!publication.ok || publication.result.remotePublishId !== 'e2e-video') throw new Error('Modern publishing IPC did not return a canonical remote publication.');
     const analytics = await api.youtube.collectAnalytics({ credentialRef: request.account.credentialRef, channelRef: 'UC-e2e', remotePublicationId: publication.result.remotePublishId, publishedAt: '2026-08-01T00:00:00.000Z', window: '24h' }); if (!analytics.ok || !analytics.result.metrics.some((metric) => metric.rawMetricId === 'views')) throw new Error('Native analytics IPC did not return metrics.');
-    localStorage.setItem('shortsflow-product-e2e', JSON.stringify({ receipt: publication.result.remotePublishId, analytics: analytics.result.metrics.length, digest: verified.integrity.contentDigest })); const persisted = JSON.parse(localStorage.getItem('shortsflow-product-e2e'));
+    localStorage.setItem('shortsflow-product-e2e', JSON.stringify({ receipt: publication.result.remotePublishId, analytics: analytics.result.metrics.length, digest: verified.integrity.contentDigest, artifactPath: render.outputPath })); const persisted = JSON.parse(localStorage.getItem('shortsflow-product-e2e'));
     console.log(`SHORTSFLOW_PRODUCT_E2E:${JSON.stringify({ seeded: true, ffmpeg: capabilities.executable, ffprobe: capabilities.ffprobeExecutable, receipt: persisted.receipt, analyticsMetrics: persisted.analytics, verified: Boolean(persisted.digest) })}`);
+    function publishRequest(verifiedExportReference) { return { jobId: 'product-e2e-publish', idempotencyKey: 'product-e2e-publish', platform: 'youtube', approvalFingerprint: 'product-e2e-approval', approvedAt: '2026-08-11T10:00:00.000Z', target: { accountId: 'youtube:UC-e2e', channelRef: 'UC-e2e' }, account: { platform: 'youtube', accountId: 'youtube:UC-e2e', accountRef: 'UC-e2e', channelRef: 'UC-e2e', credentialRef: 'youtube_11111111-1111-1111-1111-111111111111' }, artifact: { verifiedExportReference, artifactFingerprint: 'product-e2e-artifact' }, metadata: { title: 'Product E2E', description: '', caption: '', hashtags: [], visibility: 'private', language: null, category: null, audienceFlags: {}, thumbnailPath: null, playlistRef: null, commentsEnabled: null }, outboundDescription: '', recovery: { jobState: 'queued', remoteState: null, failureCode: null } }; }
   } catch (error) { console.error(`SHORTSFLOW_PRODUCT_E2E:${JSON.stringify({ error: error instanceof Error ? error.message : String(error) })}`); }
 })();
 </script>
