@@ -177,6 +177,7 @@ describe('Studio provider availability', () => {
 
     await clickButton('Analyze framing');
     expect(container?.textContent).toContain('Spatial evidence: focal (0.25, 0.35)');
+    expect(container?.textContent).not.toContain('Apply suggestion');
     await clickButton('Use This Visual');
     await flush();
     expect(container?.textContent).not.toContain('Spatial evidence: focal (0.25, 0.35)');

@@ -208,6 +208,13 @@ const en: Dict = {
   'studio.framingCenter': 'Center',
   'studio.framingCancel': 'Cancel',
   'studio.framingApply': 'Apply',
+  'studio.framingSuggestionAvailable': 'Framing suggestion available',
+  'studio.framingSuggestionConfidence': '{confidence} confidence evidence',
+  'studio.framingSuggested': 'Suggested framing',
+  'studio.framingSuggestionApply': 'Apply suggestion',
+  'studio.framingSuggestionAdjust': 'Adjust suggestion',
+  'studio.framingSuggestionDismiss': 'Dismiss',
+  'studio.framingSuggestionStale': 'The framing suggestion is no longer current. Analyze framing again.',
 
   // Studio Pro Features
   'studio.visualMode': 'Visual Mode',
@@ -1007,6 +1014,13 @@ const tr: Dict = {
   'studio.framingCenter': 'Merkez',
   'studio.framingCancel': 'İptal',
   'studio.framingApply': 'Uygula',
+  'studio.framingSuggestionAvailable': 'Kadraj önerisi hazır',
+  'studio.framingSuggestionConfidence': '{confidence} güven düzeyinde kanıt',
+  'studio.framingSuggested': 'Önerilen kadraj',
+  'studio.framingSuggestionApply': 'Öneriyi uygula',
+  'studio.framingSuggestionAdjust': 'Öneriyi ayarla',
+  'studio.framingSuggestionDismiss': 'Yoksay',
+  'studio.framingSuggestionStale': 'Kadraj önerisi artık güncel değil. Kadrajı yeniden analiz edin.',
 
   // Studio Pro Features
   'studio.visualMode': 'Görsel Mod',

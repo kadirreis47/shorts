@@ -11,3 +11,4 @@ export * from './visualSemanticAnalysis';
 export * from './visualSpatialAnalysis';
 export * from './spatial';
 export * from './spatialRequestRegistry';
+export * from './imageFramingApplication';

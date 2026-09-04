@@ -24,13 +24,13 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes, isStudioOutputRevisionCurrent } from '@/lib/studioOutputIdentity';
-import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type ImageFramingApplicationProposalV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { assignNewCanonicalSceneIds, createCanonicalSceneId } from '@/lib/sceneIdentity';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
 import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
-import { assessNarrationAlignment, canonicalizeStudioRecipeTransition, compileStudioProductionRecipeV1, isStudioRecipeCanonicalTransition, normalizeStudioProductionRecipeV1, resolveSubtitleTimingScenes, serializeCanonicalSubtitleSrt } from '@/core/media';
+import { assessNarrationAlignment, canonicalizeStudioRecipeTransition, compileStudioProductionRecipeV1, isStudioRecipeCanonicalTransition, normalizeStudioProductionRecipeV1, resolveEffectiveSceneComposition, resolveSubtitleTimingScenes, serializeCanonicalSubtitleSrt } from '@/core/media';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
 import { enqueueActiveExport, loadExportCapabilities, planActiveExport, waitForActiveExport } from '@/services/exportIntelligenceController';
@@ -65,9 +65,11 @@ import { useAuthSessionStore } from '@/auth/session';
 import { normalizeTrustedImageDisplayGeometry } from '@/core/media/imageDisplayGeometry';
 import {
   imageFramingBindingEqual,
+  imageFramingBindingFromHistoricalGeometry,
   imageFramingBindingFromTrustedGeometry,
   imageFramingBindingMatchesTrustedGeometry,
   imageFramingEqual,
+  normalizeImageFraming,
   normalizeImageFramingBinding,
   type ImageFramingBindingV1,
   type ImageFramingV1,
@@ -95,6 +97,8 @@ interface ManualImageFramingSession {
   readonly pending?: ImageFramingV1;
 }
 
+const STUDIO_IMAGE_FRAMING_OUTPUT = Object.freeze({ width: 1080, height: 1920 });
+
 function trustedSceneImageGeometry(scene: Scene) {
   if (!scene.imageStorage || scene.videoStorage || scene.videoUrl || !scene.imageDisplayGeometry) return null;
   try {
@@ -120,6 +124,70 @@ function isManualImageFramingSessionCurrent(session: ManualImageFramingSession, 
   } catch {
     return false;
   }
+}
+
+type CanonicalImageFramingCommitResult = Readonly<{
+  status: 'applied' | 'no-op' | 'stale';
+  scenes: readonly Scene[];
+}>;
+
+type PendingSpatialFramingApplyAttempt = Readonly<{
+  phase: 'queued' | 'submitted';
+  proposal: ImageFramingApplicationProposalV1;
+  expectedFraming: ImageFramingV1;
+  expectedBinding: ImageFramingBindingV1;
+  initiallyEquivalent: boolean;
+}>;
+
+/** One Slice 13A commit boundary shared by manual and advisory Spatial Apply. */
+function commitCanonicalImageFraming(
+  scenes: readonly Scene[],
+  input: {
+    readonly sceneId: string;
+    readonly sceneIndex: number;
+    readonly expectedFraming?: ImageFramingV1;
+    readonly expectedBinding?: ImageFramingBindingV1;
+    readonly proposedFraming?: ImageFramingV1;
+  },
+): CanonicalImageFramingCommitResult {
+  const scene = scenes[input.sceneIndex];
+  if (!scene || scene.sceneId !== input.sceneId
+    || !imageFramingEqual(scene.imageFraming, input.expectedFraming)
+    || !imageFramingBindingEqual(scene.imageFramingBinding, input.expectedBinding)) return { status: 'stale', scenes };
+  const geometry = trustedSceneImageGeometry(scene);
+  if (!scene.imageStorage || !geometry) return { status: 'stale', scenes };
+  let proposedFraming: ImageFramingV1 | undefined;
+  try { proposedFraming = input.proposedFraming === undefined ? undefined : normalizeImageFraming(input.proposedFraming); }
+  catch { return { status: 'stale', scenes }; }
+  if (!proposedFraming) {
+    if (scene.imageFraming === undefined && scene.imageFramingBinding === undefined) return { status: 'no-op', scenes };
+    const { imageFraming: _framing, imageFramingBinding: _binding, ...centered } = scene;
+    const next = [...scenes]; next[input.sceneIndex] = centered;
+    return { status: 'applied', scenes: next };
+  }
+  const mediaIdentity = `media:${scene.imageStorage.objectPath}`;
+  let currentBinding: ImageFramingBindingV1;
+  try { currentBinding = imageFramingBindingFromTrustedGeometry(geometry, mediaIdentity); }
+  catch { return { status: 'stale', scenes }; }
+  if (imageFramingEqual(scene.imageFraming, proposedFraming)
+    && imageFramingBindingEqual(scene.imageFramingBinding, currentBinding)) return { status: 'no-op', scenes };
+  const next = [...scenes];
+  next[input.sceneIndex] = { ...scene, imageFraming: proposedFraming, imageFramingBinding: currentBinding };
+  return { status: 'applied', scenes: next };
+}
+
+function spatialFramingAttemptReachedCanonicalResult(
+  attempt: PendingSpatialFramingApplyAttempt,
+  projectId: string,
+  scenes: readonly Scene[],
+): boolean {
+  const { proposal, expectedFraming } = attempt;
+  const scene = scenes[proposal.sceneIndex];
+  if (projectId !== proposal.projectId || !scene || scene.sceneId !== proposal.sceneId
+    || !scene.imageStorage || !imageFramingEqual(scene.imageFraming, expectedFraming)) return false;
+  const mediaIdentity = `media:${scene.imageStorage.objectPath}`;
+  return mediaIdentity === proposal.mediaIdentity
+    && imageFramingBindingEqual(scene.imageFramingBinding, attempt.expectedBinding);
 }
 
 function defaultChannelId(channels: readonly CanonicalChannelIdentity[]) {
@@ -410,6 +478,11 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [candidateSpatialBusy, setCandidateSpatialBusy] = useState<Set<string>>(new Set());
   const [visualSpatialEvidence, setVisualSpatialEvidence] = useState<Record<string, VisualSpatialEvidenceRecord>>({});
   const [candidateSpatialEvidence, setCandidateSpatialEvidence] = useState<Record<string, VisualSpatialEvidenceRecord>>({});
+  const visualSpatialEvidenceRef = useRef<Record<string, VisualSpatialEvidenceRecord>>({});
+  const [imageFramingProposals, setImageFramingProposals] = useState<Record<string, ImageFramingApplicationProposalV1>>({});
+  const dismissedImageFramingProposals = useRef<Record<string, VisualSpatialEvidenceRecord>>({});
+  const [imageFramingProposalOutcome, setImageFramingProposalOutcome] = useState<Record<string, 'stale'>>({});
+  const [pendingSpatialFramingApplyAttempt, setPendingSpatialFramingApplyAttempt] = useState<PendingSpatialFramingApplyAttempt | null>(null);
   const [cinematographyOutcome, setCinematographyOutcome] = useState<Record<string, string>>({});
   const cinematographyApplyActive = useRef(new Set<string>());
   const cinematographyProposalsRef = useRef<Record<string, CinematographyApplicationProposal>>({});
@@ -420,6 +493,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   useEffect(() => { visualShortlistsRef.current = visualShortlists; }, [visualShortlists]);
   useEffect(() => { visualPlanningRef.current = visualIntelligence; }, [visualIntelligence]);
   useEffect(() => { directorProjectIdRef.current = directorProjectId; }, [directorProjectId]);
+  useEffect(() => { visualSpatialEvidenceRef.current = visualSpatialEvidence; }, [visualSpatialEvidence]);
 
   useEffect(() => {
     setManualImageFraming((session) => session && isManualImageFramingSessionCurrent(session, scenes) ? session : null);
@@ -456,7 +530,20 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       && current[sceneIndex] === expected;
   }
 
-  function beginManualImageFraming(scene: Scene): void {
+  function dismissImageFramingProposal(sceneId: string, remember = true): void {
+    const evidence = visualSpatialEvidenceRef.current[sceneId];
+    if (remember && evidence) dismissedImageFramingProposals.current[sceneId] = evidence;
+    setImageFramingProposals((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
+    setPendingSpatialFramingApplyAttempt((current) => current?.proposal.sceneId === sceneId ? null : current);
+  }
+
+  function clearImageFramingProposalSession(sceneId: string): void {
+    setImageFramingProposals((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
+    delete dismissedImageFramingProposals.current[sceneId];
+    setImageFramingProposalOutcome((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
+  }
+
+  function beginManualImageFraming(scene: Scene, pending = scene.imageFraming): void {
     const geometry = trustedSceneImageGeometry(scene);
     if (!scene.imageStorage || !scene.imageUrl || !geometry) return;
     const mediaIdentity = `media:${scene.imageStorage.objectPath}`;
@@ -478,33 +565,45 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       initial: scene.imageFraming,
       initialBinding,
       approvalBinding,
-      pending: scene.imageFraming,
+      pending,
     });
+    dismissImageFramingProposal(scene.sceneId);
   }
+
+  function updateManualImageFraming(sceneId: string, pending: ImageFramingV1 | undefined): void {
+    dismissImageFramingProposal(sceneId);
+    setManualImageFraming((current) => current?.sceneId === sceneId ? { ...current, pending } : current);
+  }
+
+  const applyCanonicalImageFraming = useCallback((
+    resolve: (current: readonly Scene[]) => Parameters<typeof commitCanonicalImageFraming>[1] | null,
+  ): void => {
+    setScenes((current) => {
+      const request = resolve(current);
+      if (!request) return current;
+      const result = commitCanonicalImageFraming(current, request);
+      return result.scenes as Scene[];
+    });
+  }, []);
 
   function applyManualImageFraming(): void {
     const session = manualImageFraming;
     if (!session) return;
-    setScenes((current) => {
-      if (!isManualImageFramingSessionCurrent(session, current)) return current;
+    applyCanonicalImageFraming((current) => {
+      if (!isManualImageFramingSessionCurrent(session, current)) return null;
       const index = current.findIndex((scene) => scene.sceneId === session.sceneId);
       const scene = current[index];
-      if (!scene || !imageFramingEqual(scene.imageFraming, session.initial)
-        || !imageFramingBindingEqual(scene.imageFramingBinding, session.initialBinding)) return current;
-      const next = [...current];
-      if (session.pending) {
-        if (imageFramingEqual(scene.imageFraming, session.pending)
-          && imageFramingBindingEqual(scene.imageFramingBinding, session.approvalBinding)) return current;
-        next[index] = { ...scene, imageFraming: session.pending, imageFramingBinding: session.approvalBinding };
-      }
-      else {
-        if (scene.imageFraming === undefined && scene.imageFramingBinding === undefined) return current;
-        const { imageFraming: _framing, imageFramingBinding: _binding, ...centered } = scene;
-        next[index] = centered;
-      }
-      return next;
+      if (!scene) return null;
+      return {
+        sceneId: session.sceneId,
+        sceneIndex: index,
+        expectedFraming: session.initial,
+        expectedBinding: session.initialBinding,
+        proposedFraming: session.pending,
+      };
     });
     setManualImageFraming(null);
+    dismissImageFramingProposal(session.sceneId);
   }
 
   function resetManualImageFraming(sceneId: string): void {
@@ -518,11 +617,118 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       return next;
     });
     setManualImageFraming(null);
+    dismissImageFramingProposal(sceneId);
   }
+
+  function imageFramingProposalInput(
+    currentScenes: readonly Scene[],
+    proposal: ImageFramingApplicationProposalV1,
+  ) {
+    const scene = currentScenes[proposal.sceneIndex];
+    const evidence = visualSpatialEvidenceRef.current[proposal.sceneId];
+    if (!scene || !evidence) return null;
+    return {
+      projectId: directorProjectIdRef.current,
+      scenes: currentScenes,
+      sceneIndex: proposal.sceneIndex,
+      outputDimensions: STUDIO_IMAGE_FRAMING_OUTPUT,
+      effectiveMotion: resolveEffectiveSceneComposition({
+        motion: motionStyleRef.current,
+        transition: canonicalizeStudioRecipeTransition(transitionStyleRef.current),
+      }, scene.compositionOverride, proposal.sceneIndex).motion,
+      evidence,
+    } as const;
+  }
+
+  function handleApplySpatialImageFraming(proposal: ImageFramingApplicationProposalV1): void {
+    const preflight = imageFramingProposalInput(scenesRef.current, proposal);
+    if (!proposal.proposedFraming || !preflight || !isImageFramingApplicationProposalCurrent(proposal, preflight)) {
+      setManualImageFraming(null);
+      dismissImageFramingProposal(proposal.sceneId);
+      setImageFramingProposalOutcome((current) => ({ ...current, [proposal.sceneId]: 'stale' }));
+      return;
+    }
+    const preflightScene = preflight.scenes[proposal.sceneIndex];
+    let expectedBinding: ImageFramingBindingV1;
+    try {
+      expectedBinding = imageFramingBindingFromHistoricalGeometry(
+        preflightScene.imageDisplayGeometry,
+        proposal.mediaIdentity,
+      );
+    } catch {
+      setManualImageFraming(null);
+      dismissImageFramingProposal(proposal.sceneId);
+      setImageFramingProposalOutcome((current) => ({ ...current, [proposal.sceneId]: 'stale' }));
+      return;
+    }
+    setManualImageFraming(null);
+    setPendingSpatialFramingApplyAttempt({
+      phase: 'queued',
+      proposal,
+      expectedFraming: proposal.proposedFraming,
+      expectedBinding,
+      initiallyEquivalent: imageFramingEqual(
+        preflightScene.imageFraming,
+        proposal.proposedFraming,
+      ) && imageFramingBindingEqual(preflightScene.imageFramingBinding, expectedBinding),
+    });
+  }
+
+  function handleAdjustSpatialImageFraming(proposal: ImageFramingApplicationProposalV1): void {
+    const input = imageFramingProposalInput(scenes, proposal);
+    const scene = scenes[proposal.sceneIndex];
+    if (!input || !scene || !proposal.proposedFraming || !isImageFramingApplicationProposalCurrent(proposal, input)) {
+      clearImageFramingProposalSession(proposal.sceneId);
+      setImageFramingProposalOutcome((current) => ({ ...current, [proposal.sceneId]: 'stale' }));
+      return;
+    }
+    clearImageFramingProposalSession(proposal.sceneId);
+    beginManualImageFraming(scene, proposal.proposedFraming);
+  }
+
+  useEffect(() => {
+    const attempt = pendingSpatialFramingApplyAttempt;
+    if (!attempt) return;
+    if (attempt.phase === 'queued') {
+      const { proposal } = attempt;
+      applyCanonicalImageFraming((current) => {
+        const input = imageFramingProposalInput(current, proposal);
+        if (!input || !isImageFramingApplicationProposalCurrent(proposal, input)) return null;
+        const currentProposal = createImageFramingApplicationProposal(input);
+        const scene = current[proposal.sceneIndex];
+        if (!scene || currentProposal.status !== 'ready') return null;
+        return {
+          sceneId: proposal.sceneId,
+          sceneIndex: proposal.sceneIndex,
+          expectedFraming: scene.imageFraming,
+          expectedBinding: scene.imageFramingBinding,
+          proposedFraming: currentProposal.proposedFraming,
+        };
+      });
+      setPendingSpatialFramingApplyAttempt((current) => current === attempt ? { ...attempt, phase: 'submitted' } : current);
+      return;
+    }
+    const reachedExpectedResult = spatialFramingAttemptReachedCanonicalResult(attempt, directorProjectId, scenes);
+    const transactionOutcome: CanonicalImageFramingCommitResult['status'] = reachedExpectedResult
+      ? attempt.initiallyEquivalent ? 'no-op' : 'applied'
+      : 'stale';
+    setManualImageFraming(null);
+    if (transactionOutcome !== 'stale') {
+      clearImageFramingProposalSession(attempt.proposal.sceneId);
+    } else {
+      dismissImageFramingProposal(attempt.proposal.sceneId);
+      setImageFramingProposalOutcome((current) => ({ ...current, [attempt.proposal.sceneId]: 'stale' }));
+    }
+    setPendingSpatialFramingApplyAttempt(null);
+  }, [applyCanonicalImageFraming, directorProjectId, pendingSpatialFramingApplyAttempt, scenes]);
 
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('karaoke');
   const [transitionStyle, setTransitionStyle] = useState<TransitionStyle>('crossfade');
   const [motionStyle, setMotionStyle] = useState<MotionStyle>('kenburns');
+  const transitionStyleRef = useRef(transitionStyle);
+  const motionStyleRef = useRef(motionStyle);
+  transitionStyleRef.current = transitionStyle;
+  motionStyleRef.current = motionStyle;
   const [useBroll, setUseBroll] = useState(false);
   const [musicId, setMusicId] = useState<string>('');
   const [musicStorage, setMusicStorage] = useState<MediaStorageObject | null>(null);
@@ -590,6 +796,31 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
 
   const channel = channels.find((c) => c.id === channelId);
 
+  useEffect(() => {
+    const candidates: Record<string, ImageFramingApplicationProposalV1> = {};
+    for (const [sceneId, evidence] of Object.entries(visualSpatialEvidence)) {
+      const sceneIndex = scenes.findIndex((scene) => scene.sceneId === sceneId);
+      const scene = scenes[sceneIndex];
+      if (!scene) continue;
+      const effectiveMotion = resolveEffectiveSceneComposition({
+        motion: motionStyle,
+        transition: canonicalizeStudioRecipeTransition(transitionStyle),
+      }, scene.compositionOverride, sceneIndex).motion;
+      const proposal = createImageFramingApplicationProposal({
+        projectId: directorProjectId,
+        scenes,
+        sceneIndex,
+        outputDimensions: STUDIO_IMAGE_FRAMING_OUTPUT,
+        effectiveMotion,
+        evidence,
+      });
+      if (proposal.status === 'ready' && dismissedImageFramingProposals.current[sceneId] !== evidence) candidates[sceneId] = proposal;
+    }
+    setImageFramingProposals(candidates);
+    dismissedImageFramingProposals.current = Object.fromEntries(Object.entries(dismissedImageFramingProposals.current)
+      .filter(([sceneId]) => visualSpatialEvidence[sceneId] && scenes.some((scene) => scene.sceneId === sceneId)));
+  }, [directorProjectId, motionStyle, scenes, transitionStyle, visualSpatialEvidence]);
+
   function invalidateNarration(): void {
     setNarration(null);
     setAudioBlob(null);
@@ -648,6 +879,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setSelectedVisualCandidates({});
     setVisualSpatialEvidence({});
     setCandidateSpatialEvidence({});
+    setImageFramingProposals({});
+    dismissedImageFramingProposals.current = {};
+    setImageFramingProposalOutcome({});
+    setPendingSpatialFramingApplyAttempt(null);
     setVisualSpatialBusy(new Set());
     setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
@@ -689,6 +924,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setSelectedVisualCandidates({});
     setVisualSpatialEvidence({});
     setCandidateSpatialEvidence({});
+    setImageFramingProposals({});
+    dismissedImageFramingProposals.current = {};
+    setImageFramingProposalOutcome({});
+    setPendingSpatialFramingApplyAttempt(null);
     setVisualSpatialBusy(new Set());
     setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
@@ -890,6 +1129,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setSelectedVisualCandidates({});
     setVisualSpatialEvidence({});
     setCandidateSpatialEvidence({});
+    setImageFramingProposals({});
+    dismissedImageFramingProposals.current = {};
+    setImageFramingProposalOutcome({});
+    setPendingSpatialFramingApplyAttempt(null);
     setVisualSpatialBusy(new Set());
     setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
@@ -1646,6 +1889,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   async function handleAnalyzeSceneSpatial(sceneIndex: number) {
     const scene = scenesRef.current[sceneIndex]; const sceneId = scene?.sceneId;
     if (!scene || !sceneId || !scene.imageStorage || scene.videoStorage) return;
+    clearImageFramingProposalSession(sceneId);
     const projectId = directorProjectIdRef.current; const epoch = visualSessionEpoch.current;
     const mediaPath = scene.imageStorage.objectPath;
     const binding: VisualSpatialEvidenceBinding = { projectId, sceneId, sceneIndex, scope: 'applied-image', mediaIdentity: `media:${mediaPath}` };
@@ -2656,9 +2900,14 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     )}
                     {s.imageUrl && !s.videoUrl && (
                       (() => {
-                        const geometry = trustedSceneImageGeometry(s);
-                        const adjustment = manualImageFraming?.sceneId === s.sceneId ? manualImageFraming : null;
-                        if (!geometry) return <div className="mt-2 overflow-hidden rounded-lg"><img src={s.imageUrl} alt="Scene visual" className="h-24 w-full object-cover" /></div>;
+                         const geometry = trustedSceneImageGeometry(s);
+                         const adjustment = manualImageFraming?.sceneId === s.sceneId ? manualImageFraming : null;
+                         const framingProposal = imageFramingProposals[s.sceneId];
+                         const framingProposalStale = imageFramingProposalOutcome[s.sceneId] === 'stale';
+                        if (!geometry) return <div className="mt-2 overflow-hidden rounded-lg">
+                          <img src={s.imageUrl} alt="Scene visual" className="h-24 w-full object-cover" />
+                          {framingProposalStale && <p role="status" className="p-2 text-xs text-amber-700">{t('studio.framingSuggestionStale')}</p>}
+                        </div>;
                         return <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2">
                           <div className="flex items-start gap-3">
                             <div>
@@ -2686,18 +2935,46 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                                   displayDimensions={geometry.displayDimensions}
                                   framing={adjustment.pending}
                                   editable
-                                  onChange={(pending) => setManualImageFraming((current) => current?.sceneId === s.sceneId ? { ...current, pending } : current)}
+                                  onChange={(pending) => updateManualImageFraming(s.sceneId, pending)}
                                   className="h-52 w-[117px] rounded-md ring-1 ring-violet-300"
                                 />
                                 <div className="mt-2 flex flex-wrap gap-2">
                                   <button type="button" onClick={applyManualImageFraming} className="rounded-md bg-violet-700 px-2 py-1 text-xs font-medium text-white hover:bg-violet-800">{t('studio.framingApply')}</button>
-                                  <button type="button" onClick={() => setManualImageFraming((current) => current?.sceneId === s.sceneId ? { ...current, pending: undefined } : current)} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">{t('studio.framingCenter')}</button>
+                                  <button type="button" onClick={() => updateManualImageFraming(s.sceneId, undefined)} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50">{t('studio.framingCenter')}</button>
                                   <button type="button" onClick={() => setManualImageFraming(null)} className="rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">{t('studio.framingCancel')}</button>
                                 </div>
                               </>}
                             </div>
-                          </div>
-                        </div>;
+                           </div>
+                           {framingProposal && !adjustment && (
+                             <div data-testid="image-framing-suggestion" className="mt-3 border-t border-violet-100 pt-3">
+                               <div className="flex flex-wrap items-start justify-between gap-2">
+                                 <div>
+                                   <p className="text-xs font-semibold text-violet-800">{t('studio.framingSuggestionAvailable')}</p>
+                                   <p className="mt-0.5 text-[11px] text-slate-500">{t('studio.framingSuggestionConfidence', { confidence: framingProposal.confidenceBand ?? '' })}</p>
+                                 </div>
+                                 <div>
+                                   <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-violet-500">{t('studio.framingSuggested')}</p>
+                                   <ImageFramingPreview
+                                     src={s.imageUrl}
+                                     alt={t('studio.framingSuggested')}
+                                     displayDimensions={geometry.displayDimensions}
+                                     framing={framingProposal.proposedFraming}
+                                     focalPoint={framingProposal.displayFocalPoint}
+                                     subjectRegion={framingProposal.displaySubjectRegion}
+                                     className="h-40 w-[90px] rounded-md ring-1 ring-violet-300"
+                                   />
+                                 </div>
+                               </div>
+                               <div className="mt-2 flex flex-wrap gap-2">
+                                 <button type="button" onClick={() => handleApplySpatialImageFraming(framingProposal)} className="rounded-md bg-violet-700 px-2 py-1 text-xs font-medium text-white hover:bg-violet-800">{t('studio.framingSuggestionApply')}</button>
+                                 <button type="button" onClick={() => handleAdjustSpatialImageFraming(framingProposal)} className="rounded-md border border-violet-300 px-2 py-1 text-xs text-violet-700 hover:bg-violet-50">{t('studio.framingSuggestionAdjust')}</button>
+                                 <button type="button" onClick={() => dismissImageFramingProposal(s.sceneId)} className="rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">{t('studio.framingSuggestionDismiss')}</button>
+                               </div>
+                             </div>
+                           )}
+                           {framingProposalStale && !framingProposal && <p role="status" className="mt-2 text-xs text-amber-700">{t('studio.framingSuggestionStale')}</p>}
+                         </div>;
                       })()
                     )}
                     {s.imageStorage && !s.videoStorage && (() => {

@@ -1,16 +1,20 @@
-import { useRef } from 'react';
+import { useRef, type CSSProperties } from 'react';
 import {
   deriveImageCoverCropWindow,
   imageFramingFromAnchor,
   type ImageFramingDimensions,
   type ImageFramingV1,
 } from '@/core/media/imageFraming';
+import type { ImageDisplayPoint, ImageDisplayRegion } from '@/core/media/imageDisplayGeometry';
 
 interface ImageFramingPreviewProps {
   readonly src: string;
   readonly displayDimensions: ImageFramingDimensions;
   readonly outputDimensions?: ImageFramingDimensions;
   readonly framing?: ImageFramingV1;
+  /** Advisory display-space overlays; they never participate in framing authority. */
+  readonly focalPoint?: ImageDisplayPoint;
+  readonly subjectRegion?: ImageDisplayRegion;
   readonly editable?: boolean;
   readonly onChange?: (framing: ImageFramingV1 | undefined) => void;
   readonly alt?: string;
@@ -23,6 +27,8 @@ export function ImageFramingPreview({
   displayDimensions,
   outputDimensions = { width: 1080, height: 1920 },
   framing,
+  focalPoint,
+  subjectRegion,
   editable = false,
   onChange,
   alt = '',
@@ -41,6 +47,10 @@ export function ImageFramingPreview({
   const anchor = framing?.anchor ?? { x: 0.5, y: 0.5 };
   const markerX = ((anchor.x - crop.x) / crop.width) * 100;
   const markerY = ((anchor.y - crop.y) / crop.height) * 100;
+  const focalX = focalPoint ? ((focalPoint.x - crop.x) / crop.width) * 100 : 0;
+  const focalY = focalPoint ? ((focalPoint.y - crop.y) / crop.height) * 100 : 0;
+  const visibleFocal = Boolean(focalPoint && focalX >= 0 && focalX <= 100 && focalY >= 0 && focalY <= 100);
+  const subjectOverlay = subjectRegion ? clippedOverlay(subjectRegion, crop) : null;
 
   const pointerPosition = (event: React.PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -107,6 +117,22 @@ export function ImageFramingPreview({
           top: `${-100 * crop.y / crop.height}%`,
         }}
       />
+      {subjectOverlay && (
+        <span
+          aria-hidden="true"
+          data-testid="image-framing-subject-region"
+          className="pointer-events-none absolute border-2 border-amber-300 bg-amber-300/10 shadow-[0_0_0_1px_rgba(15,23,42,0.35)]"
+          style={subjectOverlay}
+        />
+      )}
+      {visibleFocal && (
+        <span
+          aria-hidden="true"
+          data-testid="image-framing-focal-point"
+          className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-amber-500 shadow"
+          style={{ left: `${focalX}%`, top: `${focalY}%` }}
+        />
+      )}
       {editable && (
         <span
           aria-hidden="true"
@@ -116,6 +142,15 @@ export function ImageFramingPreview({
       )}
     </div>
   );
+}
+
+function clippedOverlay(region: ImageDisplayRegion, crop: ReturnType<typeof deriveImageCoverCropWindow>): CSSProperties | null {
+  const left = Math.max(0, (region.x - crop.x) / crop.width);
+  const top = Math.max(0, (region.y - crop.y) / crop.height);
+  const right = Math.min(1, (region.x + region.width - crop.x) / crop.width);
+  const bottom = Math.min(1, (region.y + region.height - crop.y) / crop.height);
+  if (right <= left || bottom <= top) return null;
+  return { left: `${left * 100}%`, top: `${top * 100}%`, width: `${(right - left) * 100}%`, height: `${(bottom - top) * 100}%` };
 }
 
 function clamp(value: number): number {

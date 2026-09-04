@@ -463,6 +463,172 @@ describe('Studio canonical silent export', () => {
     await act(async () => { root.unmount(); });
   });
 
+  it('shows, dismisses, adjusts, and canonically applies an owned-image Spatial suggestion', async () => {
+    const ownerId = '00000000-0000-4000-8000-000000000001';
+    const objectPath = `${ownerId}/generated-images/00000000-0000-4000-8000-000000000010.png`;
+    setValidatedOwnerId(ownerId);
+    useAuthSessionStore.setState({ status: 'authenticated', user: { id: ownerId } as never, session: { access_token: 'token' } as never, error: null });
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial.mockResolvedValue({
+      status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+      sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.2, y: 0.4 },
+      primarySubjectRegion: { x: 0.05, y: 0.1, width: 0.3, height: 0.7 }, confidenceBand: 'low',
+    });
+    const draft = silentDraft();
+    saveStudioDraft({
+      ...draft, step: 'script', projectId: 'spatial-framing-project',
+      scenes: [{ ...draft.scenes[0], imageStorage: { bucket: 'media', objectPath } }],
+    });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const button = (label: string) => Array.from(container!.querySelectorAll<HTMLButtonElement>('button')).find((candidate) => candidate.textContent?.trim() === label);
+    const analyze = async () => { await act(async () => { button('Analyze framing')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); }); };
+
+    await analyze();
+    expect(container.querySelector('[data-testid="image-framing-suggestion"]')).not.toBeNull();
+    expect(container.textContent).toContain('Framing suggestion available');
+    expect(container.textContent).toContain('low confidence evidence');
+    expect(container.querySelector('[data-testid="image-framing-focal-point"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="image-framing-subject-region"]')).not.toBeNull();
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+
+    await act(async () => { button('Dismiss')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.querySelector('[data-testid="image-framing-suggestion"]')).toBeNull();
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+
+    await analyze();
+    await act(async () => { button('Adjust framing')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    const manualPreviews = container.querySelectorAll('[data-testid="image-framing-preview"]');
+    const manualPending = manualPreviews[manualPreviews.length - 1] as HTMLDivElement;
+    manualPending.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, width: 100, height: 200, right: 100, bottom: 200, toJSON: () => ({}) });
+    manualPending.setPointerCapture = vi.fn();
+    const manualPointer = new MouseEvent('pointerdown', { bubbles: true, clientX: 10, clientY: 100 });
+    Object.defineProperty(manualPointer, 'pointerId', { value: 21 });
+    await act(async () => { manualPending.dispatchEvent(manualPointer); });
+    await act(async () => { button('Use center')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    await act(async () => { button('Apply')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.querySelector('[data-testid="image-framing-suggestion"]')).toBeNull();
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+
+    await analyze();
+    await act(async () => { button('Adjust suggestion')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent).toContain('Pending — click or drag');
+    expect(container.querySelector('[data-testid="image-framing-suggestion"]')).toBeNull();
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+    await act(async () => { button('Cancel')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    await analyze();
+    await act(async () => { button('Apply suggestion')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent).toContain('Anchor');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+    expect(loadStudioDraft()?.scenes[0]).toMatchObject({
+      imageFraming: { version: 1, mode: 'focal-cover' },
+      imageFramingBinding: {
+        version: 1, mediaIdentity: `media:${objectPath}`, contentDigest: 'a'.repeat(64),
+        encodedDimensions: { width: 1200, height: 800 }, displayDimensions: { width: 1200, height: 800 }, encodedToDisplay: 'identity',
+      },
+    });
+
+    mocks.analyzeVisualSpatial.mockResolvedValueOnce({
+      status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+      sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.8, y: 0.5 }, confidenceBand: 'high',
+    });
+    await analyze();
+    expect(container.querySelector('[data-testid="image-framing-suggestion"]')).not.toBeNull();
+    await act(async () => { button('Reset to center')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.querySelector('[data-testid="image-framing-suggestion"]')).toBeNull();
+    expect(container.textContent).toContain('Inherited center cover');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('fails a Spatial suggestion Apply closed when its trusted geometry expires', async () => {
+    const ownerId = '00000000-0000-4000-8000-000000000001';
+    const objectPath = `${ownerId}/generated-images/00000000-0000-4000-8000-000000000010.png`;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-05T10:00:00.000Z'));
+    setValidatedOwnerId(ownerId);
+    useAuthSessionStore.setState({ status: 'authenticated', user: { id: ownerId } as never, session: { access_token: 'token' } as never, error: null });
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial.mockResolvedValue({
+      status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+      sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.2, y: 0.5 }, confidenceBand: 'medium',
+    });
+    const draft = silentDraft();
+    saveStudioDraft({
+      ...draft, step: 'script', projectId: 'spatial-framing-stale-project',
+      scenes: [{ ...draft.scenes[0], imageStorage: { bucket: 'media', objectPath } }],
+    });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const button = (label: string) => Array.from(container!.querySelectorAll<HTMLButtonElement>('button')).find((candidate) => candidate.textContent?.trim() === label);
+    await act(async () => { button('Analyze framing')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    expect(container.querySelector('[data-testid="image-framing-suggestion"]')).not.toBeNull();
+
+    now.mockReturnValue(Date.parse('2100-01-01T00:00:00.000Z'));
+    await act(async () => { button('Apply suggestion')?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.querySelector('[data-testid="image-framing-suggestion"]')).toBeNull();
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+    expect(loadStudioDraft()?.scenes[0].imageFramingBinding).toBeUndefined();
+    now.mockRestore();
+    await act(async () => { root.unmount(); });
+  });
+
+  it('surfaces a stale Spatial Apply when scene reindexing lands before the canonical updater', async () => {
+    const ownerId = '00000000-0000-4000-8000-000000000001';
+    const firstPath = `${ownerId}/generated-images/00000000-0000-4000-8000-000000000010.png`;
+    const secondPath = `${ownerId}/generated-images/00000000-0000-4000-8000-000000000011.png`;
+    setValidatedOwnerId(ownerId);
+    useAuthSessionStore.setState({ status: 'authenticated', user: { id: ownerId } as never, session: { access_token: 'token' } as never, error: null });
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial.mockResolvedValue({
+      status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+      sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.8, y: 0.5 }, confidenceBand: 'medium',
+    });
+    const draft = silentDraft();
+    saveStudioDraft({
+      ...draft,
+      step: 'script',
+      projectId: 'spatial-framing-reindex-project',
+      scenes: [
+        { ...draft.scenes[0], imageStorage: { bucket: 'media', objectPath: firstPath } },
+        {
+          ...draft.scenes[0],
+          sceneId: 'visual-scene-00000000-0000-4000-8000-000000000002',
+          text: 'Second scene',
+          imageStorage: { bucket: 'media', objectPath: secondPath },
+        },
+      ],
+    });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const analyzeButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .filter((candidate) => candidate.textContent?.trim() === 'Analyze framing');
+    expect(analyzeButtons).toHaveLength(2);
+    await act(async () => { analyzeButtons[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const apply = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((candidate) => candidate.textContent?.trim() === 'Apply suggestion');
+    const removeFirst = container.querySelectorAll<HTMLButtonElement>('button.text-red-400')[0];
+    expect(apply).toBeDefined();
+    expect(removeFirst).toBeDefined();
+
+    await act(async () => {
+      apply?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      removeFirst?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+    const remaining = loadStudioDraft()?.scenes;
+    expect(remaining).toHaveLength(1);
+    expect(remaining?.[0].sceneId).toBe('visual-scene-00000000-0000-4000-8000-000000000002');
+    expect(remaining?.[0].imageFraming).toBeUndefined();
+    expect(remaining?.[0].imageFramingBinding).toBeUndefined();
+    await act(async () => { root.unmount(); });
+  });
+
   it('keeps a verified export current across spatial evidence success and failure', async () => {
     const fixture = await editingFixture();
     const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };
@@ -482,7 +648,23 @@ describe('Studio canonical silent export', () => {
         status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
         sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.4, y: 0.3 }, confidenceBand: 'medium',
       })
-      .mockRejectedValueOnce(new Error('provider unavailable'));
+      .mockRejectedValueOnce(new Error('provider unavailable'))
+      .mockResolvedValueOnce({
+        status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+        sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.2, y: 0.5 }, confidenceBand: 'high',
+      })
+      .mockResolvedValueOnce({
+        status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+        sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.8, y: 0.5 }, confidenceBand: 'high',
+      })
+      .mockResolvedValueOnce({
+        status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+        sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.1, y: 0.5 }, confidenceBand: 'high',
+      })
+      .mockResolvedValueOnce({
+        status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
+        sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.8, y: 0.5 }, confidenceBand: 'high',
+      });
     window.electronAPI = {
       ...window.electronAPI,
       ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/silent.mp4') },
@@ -514,8 +696,22 @@ describe('Studio canonical silent export', () => {
     expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
 
     await click('Script', true);
+    await click('Adjust framing', true);
+    await click('Apply', true);
+    expect(container.textContent).not.toContain('The framing suggestion is no longer current.');
+    await click('Continue');
+    await click('Continue');
+    await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    await click('Script', true);
     await click('Analyze framing', true);
     expect(container.textContent).toContain('Spatial evidence: focal (0.40, 0.30)');
+    expect(container.textContent).toContain('Framing suggestion available');
+    await click('Adjust suggestion', true);
+    expect(container.textContent).toContain('Pending');
+    await click('Cancel', true);
     await click('Continue');
     await click('Continue');
     await click('Continue');
@@ -533,6 +729,43 @@ describe('Studio canonical silent export', () => {
     expect(mocks.issueOpaqueSpatialMediaAnalysisReference).toHaveBeenCalledTimes(2);
     expect(mocks.issueOpaqueSpatialMediaAnalysisReference).toHaveBeenCalledWith({ bucket: 'media', objectPath: ownedImagePath });
     expect(mocks.analyzeVisualSpatial).toHaveBeenCalledTimes(2);
+    await click('Script', true);
+    await click('Analyze framing', true);
+    expect(container.textContent).toContain('Framing suggestion available');
+    await click('Dismiss', true);
+    await click('Continue');
+    await click('Continue');
+    await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    await click('Script', true);
+    await click('Analyze framing', true);
+    expect(container.textContent).toContain('Framing suggestion available');
+    const applyDuringRace = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent?.trim() === 'Apply suggestion');
+    const replaceEvidenceDuringRace = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent?.trim() === 'Analyze framing');
+    await act(async () => {
+      applyDuringRace?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      replaceEvidenceDuringRace?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+    expect(loadStudioDraft()?.scenes[0].imageFramingBinding).toBeUndefined();
+    await click('Continue');
+    await click('Continue');
+    await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    await click('Script', true);
+    await click('Analyze framing', true);
+    expect(container.textContent).toContain('Framing suggestion available');
+    await click('Apply suggestion', true);
+    await click('Continue');
+    await click('Continue');
+    await click('Continue');
+    expect(container.textContent).not.toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
     await act(async () => { root.unmount(); });
   });
 

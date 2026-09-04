@@ -129,6 +129,29 @@ describe('Studio manual image framing preview', () => {
     act(() => preview.dispatchEvent(pointerEvent('pointerdown', 12, 50, 50)));
     expect(onChange).toHaveBeenLastCalledWith(undefined);
   });
+
+  it('renders display-space focal and subject overlays without changing pointer behavior', () => {
+    const onChange = vi.fn();
+    act(() => root.render(<ImageFramingPreview
+      src="image.jpg"
+      displayDimensions={{ width: 200, height: 100 }}
+      outputDimensions={{ width: 100, height: 100 }}
+      framing={{ version: 1, mode: 'focal-cover', anchor: { x: 0.5, y: 0.5 } }}
+      focalPoint={{ x: 0.5, y: 0.4 }}
+      subjectRegion={{ x: 0.4, y: 0.2, width: 0.2, height: 0.5 }}
+      onChange={onChange}
+    />));
+    const focal = host.querySelector('[data-testid="image-framing-focal-point"]') as HTMLSpanElement;
+    const subject = host.querySelector('[data-testid="image-framing-subject-region"]') as HTMLSpanElement;
+    expect(focal.style.left).toBe('50%');
+    expect(focal.style.top).toBe('40%');
+    expect(Number.parseFloat(subject.style.left)).toBeCloseTo(30);
+    expect(Number.parseFloat(subject.style.width)).toBeCloseTo(40);
+    const preview = host.querySelector('[data-testid="image-framing-preview"]') as HTMLDivElement;
+    installPointerSurface(preview, 100, 100);
+    act(() => preview.dispatchEvent(pointerEvent('pointerdown', 13, 25, 25)));
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });
 
 function installPointerSurface(preview: HTMLDivElement, width: number, height: number): void {
