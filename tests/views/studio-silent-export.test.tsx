@@ -70,6 +70,7 @@ describe('Studio canonical silent export', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     container?.remove();
     container = null;
     window.localStorage.clear();
@@ -732,6 +733,10 @@ describe('Studio canonical silent export', () => {
     await click('Script', true);
     await click('Analyze framing', true);
     expect(container.textContent).toContain('Framing suggestion available');
+    // Applied Spatial evidence also derives the session-only continuity report;
+    // neither advisory layer may change canonical output before an explicit framing Apply.
+    expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
+    expect(loadStudioDraft()?.scenes[0].imageFramingBinding).toBeUndefined();
     await click('Dismiss', true);
     await click('Continue');
     await click('Continue');
@@ -766,6 +771,202 @@ describe('Studio canonical silent export', () => {
     await click('Continue');
     expect(container.textContent).not.toContain('Video Ready');
     expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('keeps a verified export current while continuity geometry expires', async () => {
+    vi.useFakeTimers();
+    const now = Date.parse('2026-09-05T10:00:00.000Z');
+    vi.setSystemTime(now);
+    const fixture = await editingFixture();
+    const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };
+    const exportJob = verifiedExportJob();
+    const ownerId = '00000000-0000-4000-8000-000000000001';
+    const paths = [
+      `${ownerId}/generated-images/00000000-0000-4000-8000-000000000011.png`,
+      `${ownerId}/generated-images/00000000-0000-4000-8000-000000000012.png`,
+    ];
+    const liveExpiry = new Date(now + 1_000).toISOString();
+    const reauthorizedExpiry = new Date(now + 2_000).toISOString();
+    const successfulReauthorization = new Map(paths.map((path) => [path, deferred<ReturnType<typeof identityDisplayGeometry>>()]));
+    const failedReauthorization = new Map(paths.map((path) => [path, deferred<ReturnType<typeof identityDisplayGeometry>>()]));
+    let reauthorizationMode: 'none' | 'success' | 'failure' = 'none';
+    setValidatedOwnerId(ownerId);
+    useAuthSessionStore.setState({ status: 'authenticated', user: { id: ownerId } as never, session: { access_token: 'token' } as never, error: null });
+    mocks.resolveOwnedImageDisplayGeometry.mockImplementation((media: { objectPath: string }) => {
+      if (reauthorizationMode === 'success') return successfulReauthorization.get(media.objectPath)!.promise;
+      if (reauthorizationMode === 'failure') return failedReauthorization.get(media.objectPath)!.promise;
+      return Promise.resolve(identityDisplayGeometry(media.objectPath, liveExpiry, 'A'));
+    });
+    mocks.buildProject.mockResolvedValue(validBuild);
+    mocks.loadExportCapabilities.mockResolvedValue(undefined);
+    mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
+    mocks.enqueueActiveExport.mockResolvedValue(exportJob);
+    mocks.waitForActiveExport.mockResolvedValue(exportJob);
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial
+      .mockResolvedValueOnce({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.4, y: 0.3 }, confidenceBand: 'medium' })
+      .mockResolvedValueOnce({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.6, y: 0.7 }, confidenceBand: 'medium' });
+    window.electronAPI = {
+      ...window.electronAPI,
+      ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/silent.mp4') },
+    } as typeof window.electronAPI;
+    const draft = silentDraft();
+    saveStudioDraft({
+      ...draft,
+      step: 'render',
+      scenes: paths.map((objectPath, index) => ({
+        ...draft.scenes[0],
+        sceneId: `visual-scene-00000000-0000-4000-8000-00000000001${index + 1}`,
+        text: `Silent scene ${index + 1}`,
+        imageStorage: { bucket: 'media', objectPath },
+        imageDisplayGeometry: identityDisplayGeometry(objectPath, liveExpiry, 'A'),
+      })),
+    });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const click = async (label: string, exact = false) => {
+      const button = Array.from(container!.querySelectorAll('button')).find((candidate) => exact
+        ? candidate.textContent?.trim() === label
+        : candidate.textContent?.includes(label));
+      expect(button, `button ${label}`).toBeDefined();
+      await act(async () => { button?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    };
+    await click('Render Video');
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    });
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('Render Video'))?.disabled).toBe(false);
+
+    await click('Script', true);
+    const analyze = () => Array.from(container!.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    expect(container.textContent).toContain('2 analyzed');
+    const originalBoundary = container.querySelector('[data-testid="spatial-continuity-boundary"]')?.textContent;
+    expect(originalBoundary).toBeTruthy();
+
+    const geometryRequestsBeforeExpiry = mocks.resolveOwnedImageDisplayGeometry.mock.calls.length;
+    reauthorizationMode = 'success';
+    await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve(); });
+    expect(container.textContent).toContain('0 analyzed');
+    expect(container.textContent).toContain('2 evidence unavailable');
+    expect(container.textContent).toContain('spatial evidence is unavailable for this comparison');
+    expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledTimes(geometryRequestsBeforeExpiry + 1);
+    await click('Continue'); await click('Continue'); await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    await click('Script', true);
+    expect(container.textContent).toContain('0 analyzed');
+
+    await act(async () => {
+      for (const path of paths) successfulReauthorization.get(path)!.resolve(identityDisplayGeometry(path, reauthorizedExpiry, 'B'));
+      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    });
+    expect(container.textContent).toContain('2 analyzed');
+    expect(container.querySelector('[data-testid="spatial-continuity-boundary"]')?.textContent).toBe(originalBoundary);
+    await click('Continue'); await click('Continue'); await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    await click('Script', true);
+    const geometryRequestsBeforeFailure = mocks.resolveOwnedImageDisplayGeometry.mock.calls.length;
+    reauthorizationMode = 'failure';
+    await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve(); });
+    expect(container.textContent).toContain('0 analyzed');
+    expect(container.textContent).toContain('2 evidence unavailable');
+    expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledTimes(geometryRequestsBeforeFailure + 1);
+    await act(async () => {
+      for (const path of paths) failedReauthorization.get(path)!.reject(new Error('geometry authority unavailable'));
+      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    });
+    expect(container.textContent).toContain('0 analyzed');
+    expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledTimes(geometryRequestsBeforeFailure + paths.length);
+    await click('Continue'); await click('Continue'); await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('rejects a late applied Spatial response when only trusted digest changes at the same media path and dimensions', async () => {
+    const fixture = await editingFixture();
+    const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };
+    const ownerId = '00000000-0000-4000-8000-000000000001';
+    const objectPath = `${ownerId}/generated-images/00000000-0000-4000-8000-000000000021.png`;
+    const digestA = 'a'.repeat(64);
+    const digestB = 'b'.repeat(64);
+    let currentDigest = digestA;
+    const pendingA = deferred<{ status: 'evaluated'; contractVersion: 'visual-spatial-v1'; analyzerVersion: string; sourceDimensions: { width: number; height: number }; focalPoint: { x: number; y: number }; confidenceBand: 'medium' }>();
+    setValidatedOwnerId(ownerId);
+    useAuthSessionStore.setState({ status: 'authenticated', user: { id: ownerId } as never, session: { access_token: 'token' } as never, error: null });
+    mocks.resolveOwnedImageDisplayGeometry.mockImplementation(async (media: { objectPath: string }) => identityDisplayGeometry(
+      media.objectPath,
+      '2099-01-01T00:00:00.000Z',
+      currentDigest === digestA ? 'A' : 'B',
+      currentDigest,
+    ));
+    mocks.buildProject.mockResolvedValue(validBuild);
+    mocks.loadExportCapabilities.mockResolvedValue(undefined);
+    mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
+    mocks.enqueueActiveExport.mockResolvedValue(verifiedExportJob());
+    mocks.waitForActiveExport.mockResolvedValue(verifiedExportJob());
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial
+      .mockReturnValueOnce(pendingA.promise)
+      .mockResolvedValueOnce({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.7, y: 0.6 }, confidenceBand: 'medium' });
+    window.electronAPI = {
+      ...window.electronAPI,
+      ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/digest-race.mp4') },
+    } as typeof window.electronAPI;
+    const draft = silentDraft();
+    saveStudioDraft({
+      ...draft,
+      step: 'script',
+      scenes: [{
+        ...draft.scenes[0],
+        sceneId: 'visual-scene-00000000-0000-4000-8000-000000000021',
+        imageStorage: { bucket: 'media', objectPath },
+      }],
+    });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); });
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    });
+
+    const click = async (label: string, exact = false) => {
+      const button = Array.from(container!.querySelectorAll('button')).find((candidate) => exact
+        ? candidate.textContent?.trim() === label
+        : candidate.textContent?.includes(label));
+      expect(button, `button ${label}`).toBeDefined();
+      await act(async () => { button?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    };
+    await click('Analyze framing', true);
+    expect(mocks.analyzeVisualSpatial).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveOwnedImageDisplayGeometry.mock.calls.map(([media]) => media.objectPath)).toEqual([objectPath]);
+
+    // Same canonical path, scene ID, index, encoded/display dimensions, and
+    // orientation; only immutable pixel digest changes before A resolves.
+    currentDigest = digestB;
+    await click('Continue'); await click('Continue'); await click('Continue');
+    await click('Render Video');
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    });
+    expect(mocks.resolveOwnedImageDisplayGeometry.mock.calls.map(([media]) => media.objectPath)).toEqual([objectPath, objectPath]);
+    await click('Script', true);
+    await act(async () => { pendingA.resolve({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.2, y: 0.3 }, confidenceBand: 'medium' }); });
+    expect(container.textContent).not.toContain('Spatial evidence: focal (0.20, 0.30)');
+    expect(container.textContent).not.toContain('Framing suggestion available');
+
+    await click('Analyze framing', true);
+    expect(mocks.analyzeVisualSpatial).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain('Spatial evidence: focal (0.70, 0.60)');
+    expect(container.textContent).toContain('Framing suggestion available');
     await act(async () => { root.unmount(); });
   });
 
@@ -845,18 +1046,25 @@ function verifiedExportJob(): ExportJob {
   } as unknown as ExportJob;
 }
 
-function identityDisplayGeometry(objectPath: string) {
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((next, fail) => { resolve = next; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function identityDisplayGeometry(objectPath: string, expiresAt = '2099-01-01T00:00:00.000Z', referenceMarker = 'A', contentDigest = 'a'.repeat(64)) {
   return {
     version: 1 as const,
     mediaIdentity: `media:${objectPath}`,
     encodedDimensions: { width: 1200, height: 800 },
     displayDimensions: { width: 1200, height: 800 },
     encodedToDisplay: 'identity' as const,
-    contentDigest: 'a'.repeat(64),
+    contentDigest,
     executionAuthority: {
       version: 1 as const,
-      reference: `idga1_${'A'.repeat(43)}`,
-      expiresAt: '2099-01-01T00:00:00.000Z',
+      reference: `idga1_${referenceMarker.repeat(43)}`,
+      expiresAt,
     },
   };
 }

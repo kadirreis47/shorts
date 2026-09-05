@@ -12,3 +12,4 @@ export * from './visualSpatialAnalysis';
 export * from './spatial';
 export * from './spatialRequestRegistry';
 export * from './imageFramingApplication';
+export * from './spatialContinuity';

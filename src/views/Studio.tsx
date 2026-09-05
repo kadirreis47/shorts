@@ -24,7 +24,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes, isStudioOutputRevisionCurrent } from '@/lib/studioOutputIdentity';
-import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type ImageFramingApplicationProposalV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createSpatialContinuityEvidenceReport, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordBoundTo, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, visualSpatialEvidenceSourceEqual, visualSpatialEvidenceSourceFromTrustedGeometry, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type ImageFramingApplicationProposalV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { assignNewCanonicalSceneIds, createCanonicalSceneId } from '@/lib/sceneIdentity';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
@@ -98,11 +98,28 @@ interface ManualImageFramingSession {
 }
 
 const STUDIO_IMAGE_FRAMING_OUTPUT = Object.freeze({ width: 1080, height: 1920 });
+const MAX_BROWSER_TIMEOUT_MS = 2_147_483_647;
 
-function trustedSceneImageGeometry(scene: Scene) {
+function trustedSceneImageGeometry(scene: Scene, now = Date.now()) {
   if (!scene.imageStorage || scene.videoStorage || scene.videoUrl || !scene.imageDisplayGeometry) return null;
   try {
-    return normalizeTrustedImageDisplayGeometry(scene.imageDisplayGeometry, `media:${scene.imageStorage.objectPath}`);
+    return normalizeTrustedImageDisplayGeometry(scene.imageDisplayGeometry, `media:${scene.imageStorage.objectPath}`, now);
+  } catch {
+    return null;
+  }
+}
+
+function expiredTrustedSceneImageGeometry(scene: Scene, now: number) {
+  if (!scene.imageStorage || scene.videoStorage || scene.videoUrl || !scene.imageDisplayGeometry) return null;
+  const authority = (scene.imageDisplayGeometry as { readonly executionAuthority?: { readonly expiresAt?: unknown } }).executionAuthority;
+  const expiresAt = typeof authority?.expiresAt === 'string' ? Date.parse(authority.expiresAt) : Number.NaN;
+  if (!Number.isSafeInteger(expiresAt) || expiresAt > now) return null;
+  try {
+    return normalizeTrustedImageDisplayGeometry(
+      scene.imageDisplayGeometry,
+      `media:${scene.imageStorage.objectPath}`,
+      expiresAt - 1,
+    );
   } catch {
     return null;
   }
@@ -478,6 +495,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const [candidateSpatialBusy, setCandidateSpatialBusy] = useState<Set<string>>(new Set());
   const [visualSpatialEvidence, setVisualSpatialEvidence] = useState<Record<string, VisualSpatialEvidenceRecord>>({});
   const [candidateSpatialEvidence, setCandidateSpatialEvidence] = useState<Record<string, VisualSpatialEvidenceRecord>>({});
+  const [spatialGeometryTrustEpoch, setSpatialGeometryTrustEpoch] = useState(0);
+  const spatialGeometryReauthorizationAttempts = useRef(new Map<string, string>());
   const visualSpatialEvidenceRef = useRef<Record<string, VisualSpatialEvidenceRecord>>({});
   const [imageFramingProposals, setImageFramingProposals] = useState<Record<string, ImageFramingApplicationProposalV1>>({});
   const dismissedImageFramingProposals = useRef<Record<string, VisualSpatialEvidenceRecord>>({});
@@ -506,7 +525,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setVisualSpatialEvidence((current) => filterSpatialEvidence(current, (record) => {
       const scene = scenes[record.binding.sceneIndex];
       return Boolean(scene?.sceneId === record.binding.sceneId && scene.imageStorage && !scene.videoStorage
-        && isVisualSpatialEvidenceRecordCurrent(record, {
+        && isVisualSpatialEvidenceRecordBoundTo(record, {
           projectId: directorProjectId, sceneId: scene.sceneId, sceneIndex: record.binding.sceneIndex,
           scope: 'applied-image', mediaIdentity: `media:${scene.imageStorage.objectPath}`,
         }));
@@ -522,6 +541,94 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
         }));
     }));
   }, [directorProjectId, scenes, selectedVisualCandidates, visualShortlists]);
+
+  useEffect(() => {
+    const now = Date.now();
+    let earliestExpiry = Number.POSITIVE_INFINITY;
+    for (const scene of scenes) {
+      const geometry = trustedSceneImageGeometry(scene, now);
+      if (!geometry) continue;
+      earliestExpiry = Math.min(earliestExpiry, Date.parse(geometry.executionAuthority.expiresAt));
+    }
+    if (!Number.isFinite(earliestExpiry)) return undefined;
+    const delay = Math.max(1, Math.min(MAX_BROWSER_TIMEOUT_MS, earliestExpiry - now));
+    const timer = window.setTimeout(() => setSpatialGeometryTrustEpoch((current) => current + 1), delay);
+    return () => window.clearTimeout(timer);
+  }, [directorProjectId, scenes, spatialGeometryTrustEpoch]);
+
+  useEffect(() => {
+    const now = Date.now();
+    const projectId = directorProjectId;
+    const sessionEpoch = visualSessionEpoch.current;
+    let ownerContext: ValidatedMediaOwnerContext;
+    try { ownerContext = captureValidatedMediaOwnerContext(); }
+    catch { return; }
+    const currentSceneIds = new Set(scenes.map((scene) => scene.sceneId));
+    for (const sceneId of spatialGeometryReauthorizationAttempts.current.keys()) {
+      if (!currentSceneIds.has(sceneId)) spatialGeometryReauthorizationAttempts.current.delete(sceneId);
+    }
+    const requests = scenes.flatMap((scene, sceneIndex) => {
+      const geometry = expiredTrustedSceneImageGeometry(scene, now);
+      if (!geometry || !scene.imageStorage) return [];
+      const source = imageFramingBindingFromHistoricalGeometry(geometry, geometry.mediaIdentity);
+      const requestKey = JSON.stringify({
+        projectId,
+        sessionEpoch,
+        sceneId: scene.sceneId,
+        sceneIndex,
+        mediaIdentity: source.mediaIdentity,
+        contentDigest: source.contentDigest,
+        encodedDimensions: source.encodedDimensions,
+        displayDimensions: source.displayDimensions,
+        encodedToDisplay: source.encodedToDisplay,
+        authorityReference: geometry.executionAuthority.reference,
+        authorityExpiry: geometry.executionAuthority.expiresAt,
+      });
+      if (spatialGeometryReauthorizationAttempts.current.get(scene.sceneId) === requestKey) return [];
+      spatialGeometryReauthorizationAttempts.current.set(scene.sceneId, requestKey);
+      return [{ scene, sceneIndex, source, requestKey, authority: geometry.executionAuthority }];
+    });
+    if (requests.length === 0) return;
+
+    void hydrateTrustedImageGeometry(requests.map((request) => request.scene), resolveOwnedImageDisplayGeometry, { force: true })
+      .then((result) => {
+        if (!isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)
+          || directorProjectIdRef.current !== projectId || visualSessionEpoch.current !== sessionEpoch) return;
+        setScenes((current) => {
+          let next = current;
+          for (const [requestIndex, request] of requests.entries()) {
+            if (spatialGeometryReauthorizationAttempts.current.get(request.scene.sceneId) !== request.requestKey) continue;
+            const currentScene = current[request.sceneIndex];
+            const refreshedScene = result.scenes[requestIndex];
+            if (!currentScene || currentScene.sceneId !== request.scene.sceneId
+              || currentScene.imageStorage?.objectPath !== request.scene.imageStorage?.objectPath
+              || currentScene.videoStorage || !refreshedScene?.imageDisplayGeometry
+              || trustedSceneImageGeometry(currentScene, Date.now())) continue;
+            const currentExpired = expiredTrustedSceneImageGeometry(currentScene, Date.now());
+            if (!currentExpired
+              || currentExpired.executionAuthority.reference !== request.authority.reference
+              || currentExpired.executionAuthority.expiresAt !== request.authority.expiresAt) continue;
+            let currentSource: ImageFramingBindingV1;
+            let refreshedSource: ImageFramingBindingV1;
+            try {
+              currentSource = imageFramingBindingFromHistoricalGeometry(currentExpired, request.source.mediaIdentity);
+              const refreshed = normalizeTrustedImageDisplayGeometry(
+                refreshedScene.imageDisplayGeometry,
+                request.source.mediaIdentity,
+              );
+              refreshedSource = imageFramingBindingFromHistoricalGeometry(refreshed, request.source.mediaIdentity);
+            } catch { continue; }
+            if (!imageFramingBindingEqual(currentSource, request.source)
+              || !imageFramingBindingEqual(refreshedSource, request.source)) continue;
+            if (next === current) next = [...current];
+            next[request.sceneIndex] = { ...currentScene, imageDisplayGeometry: refreshedScene.imageDisplayGeometry };
+          }
+          if (next !== current) scenesRef.current = next;
+          return next;
+        });
+      })
+      .catch(() => { /* Expired geometry stays unavailable; a later distinct lifecycle may retry. */ });
+  }, [directorProjectId, scenes, spatialGeometryTrustEpoch]);
 
   function isCurrentSceneOperation(projectId: string, epoch: number, current: readonly Scene[], sceneIndex: number, expected: Scene): boolean {
     return directorProjectIdRef.current === projectId
@@ -819,7 +926,18 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setImageFramingProposals(candidates);
     dismissedImageFramingProposals.current = Object.fromEntries(Object.entries(dismissedImageFramingProposals.current)
       .filter(([sceneId]) => visualSpatialEvidence[sceneId] && scenes.some((scene) => scene.sceneId === sceneId)));
-  }, [directorProjectId, motionStyle, scenes, transitionStyle, visualSpatialEvidence]);
+  }, [directorProjectId, motionStyle, scenes, spatialGeometryTrustEpoch, transitionStyle, visualSpatialEvidence]);
+
+  const spatialGeometryTrustEvaluationTime = Date.now();
+  const spatialContinuity = useMemo(() => createSpatialContinuityEvidenceReport({
+    projectId: directorProjectId,
+    scenes,
+    appliedSpatialEvidence: visualSpatialEvidence,
+    trustedImageGeometry: Object.fromEntries(scenes.map((scene) => [scene.sceneId, scene.imageDisplayGeometry])),
+    evaluationTimeMs: spatialGeometryTrustEvaluationTime,
+    outputDimensions: STUDIO_IMAGE_FRAMING_OUTPUT,
+    compositionDefaults: { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) },
+  }), [directorProjectId, motionStyle, scenes, spatialGeometryTrustEvaluationTime, transitionStyle, visualSpatialEvidence]);
 
   function invalidateNarration(): void {
     setNarration(null);
@@ -1889,10 +2007,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   async function handleAnalyzeSceneSpatial(sceneIndex: number) {
     const scene = scenesRef.current[sceneIndex]; const sceneId = scene?.sceneId;
     if (!scene || !sceneId || !scene.imageStorage || scene.videoStorage) return;
+    const requestGeometry = trustedSceneImageGeometry(scene);
+    if (!requestGeometry) return;
     clearImageFramingProposalSession(sceneId);
     const projectId = directorProjectIdRef.current; const epoch = visualSessionEpoch.current;
     const mediaPath = scene.imageStorage.objectPath;
     const binding: VisualSpatialEvidenceBinding = { projectId, sceneId, sceneIndex, scope: 'applied-image', mediaIdentity: `media:${mediaPath}` };
+    const requestSource = visualSpatialEvidenceSourceFromTrustedGeometry(requestGeometry, binding.mediaIdentity);
     const generationKey = `applied:${sceneId}`;
     const owner = captureValidatedMediaOwnerContext();
     if (!visualSpatialRequests.current.tryAcquire(binding)) return;
@@ -1906,13 +2027,23 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (!current || current !== scene || current.sceneId !== sceneId || current.imageStorage?.objectPath !== mediaPath || current.videoStorage
         || visualSpatialGenerations.current.get(generationKey) !== generation || visualSessionEpoch.current !== epoch
         || directorProjectIdRef.current !== projectId || !isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) return;
-      setVisualSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, response) }));
+      const currentGeometry = trustedSceneImageGeometry(current);
+      if (!currentGeometry) return;
+      const currentSource = visualSpatialEvidenceSourceFromTrustedGeometry(currentGeometry, binding.mediaIdentity);
+      if (!visualSpatialEvidenceSourceEqual(requestSource, currentSource)) return;
+      setVisualSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, response, requestSource) }));
     } catch {
       const current = scenesRef.current[sceneIndex];
       if (current === scene && current.sceneId === sceneId && current.imageStorage?.objectPath === mediaPath && !current.videoStorage
         && visualSpatialGenerations.current.get(generationKey) === generation && visualSessionEpoch.current === epoch
         && directorProjectIdRef.current === projectId && isCurrentValidatedOwnerContext(owner.ownerId, owner.generation)) {
-        setVisualSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, unavailableVisualSpatialAnalysis('provider-unavailable')) }));
+        const currentGeometry = trustedSceneImageGeometry(current);
+        const currentSource = currentGeometry
+          ? visualSpatialEvidenceSourceFromTrustedGeometry(currentGeometry, binding.mediaIdentity)
+          : undefined;
+        if (currentSource && visualSpatialEvidenceSourceEqual(requestSource, currentSource)) {
+          setVisualSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, unavailableVisualSpatialAnalysis('provider-unavailable'), requestSource) }));
+        }
       }
     } finally {
       visualSpatialRequests.current.release(binding);
@@ -2857,6 +2988,20 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                     className="text-xs font-medium text-blue-600 hover:underline">{t('studio.addScene')}</button>
                 </div>
               </div>
+              {scenes.length > 1 && <div data-testid="spatial-continuity-panel" className="mt-3 rounded-lg border border-sky-200 bg-sky-50/60 p-3 text-xs text-slate-700">
+                <p className="font-semibold text-sky-900">{t('studio.spatialContinuityTitle')}</p>
+                <p className="mt-0.5 text-[11px] text-slate-600">{t('studio.spatialContinuityCoverage', {
+                  analyzed: spatialContinuity.coverage.analyzedSceneIds.length,
+                  unavailable: spatialContinuity.coverage.unavailableSceneIds.length,
+                  unsupported: spatialContinuity.coverage.unsupportedSceneIds.length,
+                })}</p>
+                <div className="mt-2 space-y-1.5">
+                  {spatialContinuity.boundaries.map((boundary) => <div key={`${boundary.fromSceneId}:${boundary.toSceneId}`} data-testid="spatial-continuity-boundary" className="rounded border border-sky-100 bg-white/80 px-2 py-1.5">
+                    <span className="font-medium">{t('studio.spatialContinuityScenes', { from: boundary.fromSceneIndex + 1, to: boundary.toSceneIndex + 1 })}</span>
+                    <span className="text-slate-500"> · {boundary.findings.map((finding) => t(`studio.spatialContinuity.${finding}`)).join(' · ')}</span>
+                  </div>)}
+                </div>
+              </div>}
               <div className="mt-2 space-y-2">
                 {scenes.map((s, i) => (
                   <div key={s.sceneId} className="rounded-lg bg-slate-50 p-3">
@@ -2986,9 +3131,13 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                       const assessment = record && record.mediaPath === s.imageStorage?.objectPath && record.briefFingerprint === plan?.briefFingerprint ? record.assessment : undefined;
                       const busy = Boolean(sceneId && visualSemanticBusy.has(sceneId));
                       const spatialRecord = sceneId ? visualSpatialEvidence[sceneId] : undefined;
-                      const spatial = spatialRecord && isVisualSpatialEvidenceRecordCurrent(spatialRecord, {
+                      const spatialGeometry = trustedSceneImageGeometry(s);
+                      const spatialSource = spatialGeometry && s.imageStorage
+                        ? visualSpatialEvidenceSourceFromTrustedGeometry(spatialGeometry, `media:${s.imageStorage.objectPath}`)
+                        : undefined;
+                      const spatial = spatialRecord && spatialSource && isVisualSpatialEvidenceRecordCurrent(spatialRecord, {
                         projectId: directorProjectId, sceneId, sceneIndex: i, scope: 'applied-image', mediaIdentity: `media:${s.imageStorage.objectPath}`,
-                      }) ? spatialRecord.response : undefined;
+                      }, spatialSource) ? spatialRecord.response : undefined;
                       const spatialBusy = Boolean(sceneId && visualSpatialBusy.has(sceneId));
                       const score = assessment ? semanticRankingAdjustment(assessment) : 0;
                       const fit = score >= 3 ? 'High' : score <= -3 ? 'Low' : 'Medium';

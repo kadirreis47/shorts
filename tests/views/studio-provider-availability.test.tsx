@@ -67,6 +67,7 @@ describe('Studio provider availability', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     container?.remove();
     container = null;
     window.localStorage.clear();
@@ -167,6 +168,7 @@ describe('Studio provider availability', () => {
     mocks.ingestPexelsImage.mockResolvedValueOnce({
       media: { bucket: 'media', objectPath: APPLIED_MEDIA_B },
       previewUrl: 'https://signed.example/applied-42.jpg',
+      imageDisplayGeometry: displayGeometry(APPLIED_MEDIA_B),
       provenance: { provider: 'pexels', providerMediaId: 42, originalSourceUrl: 'https://images.pexels.com/photos/42/original.jpg', query: 'Visual' },
     });
     mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
@@ -215,6 +217,58 @@ describe('Studio provider availability', () => {
 
     expect(container?.querySelector('img')?.getAttribute('src')).toContain('replacement.png');
     expect(container?.textContent).not.toContain('Spatial evidence: focal (0.20, 0.30)');
+    await act(async () => { root.unmount(); });
+  });
+
+  it('rejects stale geometry reauthorization after same-path immutable digest replacement', async () => {
+    vi.useFakeTimers();
+    const now = Date.parse('2026-09-05T10:00:00.000Z');
+    vi.setSystemTime(now);
+    const digestA = 'a'.repeat(64);
+    const digestB = 'b'.repeat(64);
+    const pendingA = deferred<ReturnType<typeof displayGeometry>>();
+    mocks.getProviderStatus.mockResolvedValue({ openai: { configured: false }, elevenlabs: { configured: false }, pexels: { configured: false } });
+    mocks.resolveOwnedImageDisplayGeometry.mockReturnValueOnce(pendingA.promise);
+    mocks.uploadMedia
+      .mockResolvedValueOnce({
+        imageUrl: 'https://signed.example/same-path-old-bytes.png',
+        media: { bucket: 'media', objectPath: APPLIED_MEDIA_A },
+        imageDisplayGeometry: displayGeometry(APPLIED_MEDIA_A, 'identity', digestA, new Date(now + 1_000).toISOString(), 'A'),
+      })
+      .mockResolvedValueOnce({
+        imageUrl: 'https://signed.example/same-path-new-bytes.png',
+        media: { bucket: 'media', objectPath: APPLIED_MEDIA_A },
+        imageDisplayGeometry: displayGeometry(APPLIED_MEDIA_A, 'identity', digestB, new Date(now + 60_000).toISOString(), 'B'),
+      });
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial.mockResolvedValueOnce(spatialEvidence(0.7, 0.6));
+    saveStudioDraft(draft('script'));
+    const root = await renderStudio();
+    const input = container?.querySelector<HTMLInputElement>('input[type="file"][accept="image/png,image/jpeg"]');
+    Object.defineProperty(input!, 'files', { configurable: true, value: [pngFile()] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+    expect(mocks.resolveOwnedImageDisplayGeometry).not.toHaveBeenCalled();
+
+    await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve(); });
+    expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(input!, 'files', { configurable: true, value: [pngFile()] });
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+    await flush();
+    await act(async () => {
+      pendingA.resolve(displayGeometry(APPLIED_MEDIA_A, 'identity', digestA, new Date(now + 60_000).toISOString(), 'C'));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await clickButton('Analyze framing');
+    await flush();
+    await clickButton('Apply suggestion');
+    await flush();
+    await act(async () => { vi.advanceTimersByTime(700); await Promise.resolve(); });
+    expect(loadStudioDraft()?.scenes[0].imageStorage?.objectPath).toBe(APPLIED_MEDIA_A);
+    expect(loadStudioDraft()?.scenes[0].imageFramingBinding?.contentDigest).toBe(digestB);
     await act(async () => { root.unmount(); });
   });
 
@@ -915,7 +969,13 @@ const APPLIED_MEDIA_B = '00000000-0000-4000-8000-000000000001/generated-images/0
 const GEOMETRY_MEDIA_A = 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000010.png';
 const GEOMETRY_MEDIA_B = 'studio-test-user/generated-images/00000000-0000-4000-8000-000000000011.png';
 
-function displayGeometry(objectPath: string, encodedToDisplay: 'identity' | 'rotate-180' | 'rotate-90-cw' = 'identity') {
+function displayGeometry(
+  objectPath: string,
+  encodedToDisplay: 'identity' | 'rotate-180' | 'rotate-90-cw' = 'identity',
+  contentDigest = 'a'.repeat(64),
+  expiresAt = '2099-01-01T00:00:00.000Z',
+  referenceMarker = 'A',
+) {
   const swaps = encodedToDisplay === 'rotate-90-cw';
   return {
     version: 1 as const,
@@ -923,11 +983,11 @@ function displayGeometry(objectPath: string, encodedToDisplay: 'identity' | 'rot
     encodedDimensions: { width: 1200, height: 800 },
     displayDimensions: swaps ? { width: 800, height: 1200 } : { width: 1200, height: 800 },
     encodedToDisplay,
-    contentDigest: 'a'.repeat(64),
+    contentDigest,
     executionAuthority: {
       version: 1 as const,
-      reference: `idga1_${'A'.repeat(43)}`,
-      expiresAt: '2099-01-01T00:00:00.000Z',
+      reference: `idga1_${referenceMarker.repeat(43)}`,
+      expiresAt,
     },
   };
 }

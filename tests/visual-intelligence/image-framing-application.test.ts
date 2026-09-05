@@ -205,7 +205,7 @@ describe('Spatial image framing application proposal', () => {
     const input = proposalInput({ focalPoint: { x: 0.2, y: 0.5 } });
     const unavailable = createVisualSpatialEvidenceRecord(input.evidence!.binding, {
       status: 'unavailable', reason: 'provider-unavailable', contractVersion: 'visual-spatial-v1',
-    });
+    }, input.evidence!.source);
     const proposal = createImageFramingApplicationProposal({ ...input, evidence: unavailable });
     expect(proposal).toMatchObject({ status: 'unavailable', reason: 'spatial-evidence-unavailable' });
     expect(proposal.proposedFraming).toBeUndefined();
@@ -325,6 +325,10 @@ function proposalInput(options: {
     status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test',
     sourceDimensions: { width: options.encodedWidth ?? 1200, height: options.encodedHeight ?? 800 },
     focalPoint: options.focalPoint, primarySubjectRegion: options.subjectRegion ?? null, confidenceBand: 'low',
+  }, {
+    mediaIdentity: `media:${STORAGE.objectPath}`,
+    contentDigest: 'a'.repeat(64),
+    encodedDimensions: { width: options.encodedWidth ?? 1200, height: options.encodedHeight ?? 800 },
   });
   return { projectId: PROJECT, scenes: [scene], sceneIndex: 0, outputDimensions: OUTPUT, effectiveMotion: 'kenburns', evidence, now: NOW };
 }

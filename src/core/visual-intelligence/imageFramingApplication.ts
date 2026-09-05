@@ -18,9 +18,9 @@ import {
 import { isCanonicalPrivateMediaIdentity } from '@/core/media/storageIdentity';
 import type { Scene, SceneCompositionMotion } from '@/lib/types';
 import {
-  createVisualSpatialEvidenceRecord,
   isVisualSpatialEvidenceRecordCurrent,
-  VISUAL_SPATIAL_EVIDENCE_VERSION,
+  normalizeVisualSpatialEvidenceRecord,
+  visualSpatialEvidenceSourceFromTrustedGeometry,
   type VisualSpatialEvidenceRecord,
 } from './spatial';
 
@@ -100,13 +100,14 @@ export function createImageFramingApplicationProposal(
   try { evidence = normalizeEvidenceRecord(input.evidence); }
   catch { return invalid('invalid-evidence'); }
 
+  const currentEvidenceSource = visualSpatialEvidenceSourceFromTrustedGeometry(geometry, mediaIdentity, input.now);
   if (!isVisualSpatialEvidenceRecordCurrent(evidence, {
     projectId: input.projectId,
     sceneId: scene.sceneId,
     sceneIndex: input.sceneIndex,
     scope: 'applied-image',
     mediaIdentity,
-  })) return invalid('invalid-evidence');
+  }, currentEvidenceSource)) return invalid('invalid-evidence');
   if (evidence.response.status !== 'evaluated') {
     return proposal({
       status: 'unavailable', reason: 'spatial-evidence-unavailable', projectId: input.projectId,
@@ -196,12 +197,7 @@ export function isImageFramingApplicationProposalCurrent(
 }
 
 function normalizeEvidenceRecord(value: unknown): VisualSpatialEvidenceRecord {
-  const source = strictObject(value, ['version', 'binding', 'response']);
-  if (source.version !== VISUAL_SPATIAL_EVIDENCE_VERSION) throw new Error('Spatial evidence record is invalid.');
-  return createVisualSpatialEvidenceRecord(
-    source.binding as VisualSpatialEvidenceRecord['binding'],
-    source.response,
-  );
+  return normalizeVisualSpatialEvidenceRecord(value);
 }
 
 function recommendedCanonicalFraming(
@@ -365,14 +361,6 @@ function validProjectId(value: unknown): value is string {
 
 function validMotion(value: unknown): value is SceneCompositionMotion {
   return value === 'kenburns' || value === 'pan' || value === 'zoom_in' || value === 'zoom_out' || value === 'static';
-}
-
-function strictObject(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('Spatial evidence record is invalid.');
-  const source = value as Record<string, unknown>;
-  if (Object.keys(source).length !== keys.length || keys.some((key) => !Object.prototype.hasOwnProperty.call(source, key))
-    || Object.keys(source).some((key) => !keys.includes(key))) throw new Error('Spatial evidence record is invalid.');
-  return source;
 }
 
 function canonicalSerialize(value: unknown): string {
