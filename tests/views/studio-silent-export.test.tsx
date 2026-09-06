@@ -695,6 +695,8 @@ describe('Studio canonical silent export', () => {
     await click('Render Video');
     expect(container.textContent).toContain('Video Ready');
     expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    expect(mocks.waitForActiveExport).toHaveBeenCalledTimes(1);
+    expect(mocks.waitForActiveExport).toHaveBeenLastCalledWith(exportJob.id);
 
     await click('Script', true);
     await click('Adjust framing', true);
@@ -748,11 +750,11 @@ describe('Studio canonical silent export', () => {
     expect(container.textContent).toContain('Framing suggestion available');
     const applyDuringRace = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent?.trim() === 'Apply suggestion');
     const replaceEvidenceDuringRace = Array.from(container.querySelectorAll('button')).find((candidate) => candidate.textContent?.trim() === 'Analyze framing');
-    await act(async () => {
-      applyDuringRace?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      replaceEvidenceDuringRace?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-    });
+    vi.useFakeTimers();
+    await act(async () => { applyDuringRace?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { replaceEvidenceDuringRace?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    vi.useRealTimers();
     expect(container.textContent).toContain('The framing suggestion is no longer current.');
     expect(loadStudioDraft()?.scenes[0].imageFraming).toBeUndefined();
     expect(loadStudioDraft()?.scenes[0].imageFramingBinding).toBeUndefined();
@@ -848,6 +850,9 @@ describe('Studio canonical silent export', () => {
     expect(container.textContent).toContain('2 analyzed');
     const originalBoundary = container.querySelector('[data-testid="spatial-continuity-boundary"]')?.textContent;
     expect(originalBoundary).toBeTruthy();
+    const originalRecommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')?.textContent;
+    expect(originalRecommendation).toContain('Alternative framing available for Scene 2');
+    expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"] img')).not.toBeNull();
 
     const geometryRequestsBeforeExpiry = mocks.resolveOwnedImageDisplayGeometry.mock.calls.length;
     reauthorizationMode = 'success';
@@ -855,6 +860,7 @@ describe('Studio canonical silent export', () => {
     expect(container.textContent).toContain('0 analyzed');
     expect(container.textContent).toContain('2 evidence unavailable');
     expect(container.textContent).toContain('spatial evidence is unavailable for this comparison');
+    expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')).toBeNull();
     expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledTimes(geometryRequestsBeforeExpiry + 1);
     await click('Continue'); await click('Continue'); await click('Continue');
     expect(container.textContent).toContain('Video Ready');
@@ -868,6 +874,13 @@ describe('Studio canonical silent export', () => {
     });
     expect(container.textContent).toContain('2 analyzed');
     expect(container.querySelector('[data-testid="spatial-continuity-boundary"]')?.textContent).toBe(originalBoundary);
+    expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')?.textContent).toBe(originalRecommendation);
+    const restoredRecommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const dismissRecommendation = Array.from(restoredRecommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Dismiss');
+    await act(async () => { dismissRecommendation?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')).toBeNull();
+    expect(container.querySelectorAll('[data-testid="image-framing-suggestion"]')).toHaveLength(2);
     await click('Continue'); await click('Continue'); await click('Continue');
     expect(container.textContent).toContain('Video Ready');
     expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
@@ -887,6 +900,113 @@ describe('Studio canonical silent export', () => {
     expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledTimes(geometryRequestsBeforeFailure + paths.length);
     await click('Continue'); await click('Continue'); await click('Continue');
     expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('stales a verified export only when continuity delegates an explicit target-scene framing Apply', async () => {
+    const fixture = await editingFixture();
+    const validBuild = { ...fixture, renderReady: true, validation: { ...fixture.validation, valid: true, renderReady: true, errorCount: 0 } };
+    const exportJob = verifiedExportJob();
+    const ownerId = '00000000-0000-4000-8000-000000000001';
+    const paths = [
+      `${ownerId}/generated-images/00000000-0000-4000-8000-000000000031.png`,
+      `${ownerId}/generated-images/00000000-0000-4000-8000-000000000032.png`,
+    ];
+    setValidatedOwnerId(ownerId);
+    useAuthSessionStore.setState({ status: 'authenticated', user: { id: ownerId } as never, session: { access_token: 'token' } as never, error: null });
+    mocks.resolveOwnedImageDisplayGeometry.mockImplementation(async (media: { objectPath: string }) => identityDisplayGeometry(media.objectPath));
+    mocks.buildProject.mockResolvedValue(validBuild);
+    mocks.loadExportCapabilities.mockResolvedValue(undefined);
+    mocks.planActiveExport.mockResolvedValue({ id: 'plan', blockingIssues: [] });
+    mocks.enqueueActiveExport.mockResolvedValue(exportJob);
+    mocks.waitForActiveExport.mockResolvedValue(exportJob);
+    mocks.issueOpaqueSpatialMediaAnalysisReference.mockResolvedValue({ reference: 'owned-spatial-reference' });
+    mocks.analyzeVisualSpatial
+      .mockResolvedValueOnce({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.35, y: 0.5 }, confidenceBand: 'medium' })
+      .mockResolvedValueOnce({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.35, y: 0.5 }, confidenceBand: 'medium' })
+      .mockRejectedValueOnce(new Error('predecessor evidence changed'))
+      .mockResolvedValueOnce({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.35, y: 0.5 }, confidenceBand: 'medium' })
+      .mockResolvedValueOnce({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.36, y: 0.5 }, confidenceBand: 'medium' })
+      .mockResolvedValueOnce({ status: 'evaluated', contractVersion: 'visual-spatial-v1', analyzerVersion: 'openai:gpt-test', sourceDimensions: { width: 1200, height: 800 }, focalPoint: { x: 0.37, y: 0.5 }, confidenceBand: 'medium' });
+    window.electronAPI = {
+      ...window.electronAPI,
+      ffmpeg: { ...window.electronAPI?.ffmpeg, pickOutputPath: vi.fn().mockResolvedValue('C:/exports/continuity-apply.mp4') },
+    } as typeof window.electronAPI;
+    const draft = silentDraft();
+    saveStudioDraft({
+      ...draft,
+      step: 'render',
+      scenes: paths.map((objectPath, index) => ({
+        ...draft.scenes[0],
+        sceneId: `visual-scene-00000000-0000-4000-8000-00000000003${index + 1}`,
+        text: `Continuity Apply ${index + 1}`,
+        imageStorage: { bucket: 'media', objectPath },
+      })),
+    });
+    container = document.createElement('div'); document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const click = async (label: string, exact = false) => {
+      const button = Array.from(container!.querySelectorAll('button')).find((candidate) => exact
+        ? candidate.textContent?.trim() === label
+        : candidate.textContent?.includes(label));
+      expect(button, `button ${label}`).toBeDefined();
+      await act(async () => { button?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    };
+    await click('Render Video');
+    await act(async () => { for (let index = 0; index < 12; index += 1) await Promise.resolve(); });
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    await click('Script', true);
+    const analyze = () => Array.from(container!.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const staleRecommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const staleApply = Array.from(staleRecommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+    const canonicalScenesBeforeStaleAttempt = structuredClone(loadStudioDraft()?.scenes);
+    vi.useFakeTimers();
+    await act(async () => { staleApply?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    vi.useRealTimers();
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    expect(loadStudioDraft()?.scenes).toEqual(canonicalScenesBeforeStaleAttempt);
+    await click('Continue'); await click('Continue'); await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+    expect(mocks.waitForActiveExport).toHaveBeenCalledTimes(1);
+    expect(mocks.waitForActiveExport).toHaveBeenLastCalledWith(exportJob.id);
+
+    await click('Script', true);
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const adjust = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Adjust suggestion');
+    await act(async () => { adjust?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent).toContain('Pending — click or drag');
+    await click('Cancel', true);
+    await click('Continue'); await click('Continue'); await click('Continue');
+    expect(container.textContent).toContain('Video Ready');
+    expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
+
+    await click('Script', true);
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const refreshedRecommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const apply = Array.from(refreshedRecommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+    await act(async () => { apply?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+    const saved = loadStudioDraft()?.scenes;
+    expect(saved?.[0].imageFraming).toBeUndefined();
+    expect(saved?.[0].imageFramingBinding).toBeUndefined();
+    expect(saved?.[1].imageFraming).toBeDefined();
+    expect(saved?.[1].imageFramingBinding?.contentDigest).toBe('a'.repeat(64));
+    await click('Continue'); await click('Continue'); await click('Continue');
+    expect(container.textContent).not.toContain('Video Ready');
     expect(mocks.enqueueActiveExport).toHaveBeenCalledTimes(1);
     await act(async () => { root.unmount(); });
   });

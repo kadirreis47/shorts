@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { SetStateAction } from 'react';
+import { flushSync } from 'react-dom';
 import {
   Sparkles, Mic, Film, Youtube, ArrowRight, ArrowLeft, Check, Loader2,
   Wand2, RefreshCw, AlertCircle, Volume2, X, Palette, Music, Video,
@@ -24,7 +26,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes, isStudioOutputRevisionCurrent } from '@/lib/studioOutputIdentity';
-import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createSpatialContinuityEvidenceReport, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordBoundTo, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, visualSpatialEvidenceSourceEqual, visualSpatialEvidenceSourceFromTrustedGeometry, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type ImageFramingApplicationProposalV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createSpatialContinuityEvidenceReport, createSpatialContinuityFramingRecommendations, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isSpatialContinuityFramingRecommendationCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordBoundTo, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, visualSpatialEvidenceSourceEqual, visualSpatialEvidenceSourceFromTrustedGeometry, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type ImageFramingApplicationProposalV1, type SpatialContinuityFramingRecommendationV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { assignNewCanonicalSceneIds, createCanonicalSceneId } from '@/lib/sceneIdentity';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
@@ -148,9 +150,32 @@ type CanonicalImageFramingCommitResult = Readonly<{
   scenes: readonly Scene[];
 }>;
 
+type SpatialFramingTransactionLease = Readonly<{
+  transactionTimeMs: number;
+  transactionGeneration: number;
+  projectId: string;
+  visualSessionEpoch: number;
+  validatedOwnerContext: ValidatedMediaOwnerContext;
+  appliedSpatialEvidence: Readonly<Record<string, VisualSpatialEvidenceRecord>>;
+  compositionDefaults: Readonly<{
+    motion: MotionStyle;
+    transition: ReturnType<typeof canonicalizeStudioRecipeTransition>;
+  }>;
+}>;
+
 type PendingSpatialFramingApplyAttempt = Readonly<{
   phase: 'queued' | 'submitted';
   proposal: ImageFramingApplicationProposalV1;
+  continuityRecommendation?: SpatialContinuityFramingRecommendationV1;
+  continuityTransaction?: Readonly<{
+    transactionGeneration: number;
+    expectedProjectId: string;
+    expectedVisualSessionEpoch: number;
+    expectedAuthenticatedOwnerId: string;
+    expectedAuthSession: ReturnType<typeof useAuthSessionStore.getState>['session'];
+    expectedValidatedOwnerContext: ValidatedMediaOwnerContext;
+  }>;
+  submissionGuardRejected?: boolean;
   expectedFraming: ImageFramingV1;
   expectedBinding: ImageFramingBindingV1;
   initiallyEquivalent: boolean;
@@ -165,13 +190,14 @@ function commitCanonicalImageFraming(
     readonly expectedFraming?: ImageFramingV1;
     readonly expectedBinding?: ImageFramingBindingV1;
     readonly proposedFraming?: ImageFramingV1;
+    readonly evaluationTimeMs?: number;
   },
 ): CanonicalImageFramingCommitResult {
   const scene = scenes[input.sceneIndex];
   if (!scene || scene.sceneId !== input.sceneId
     || !imageFramingEqual(scene.imageFraming, input.expectedFraming)
     || !imageFramingBindingEqual(scene.imageFramingBinding, input.expectedBinding)) return { status: 'stale', scenes };
-  const geometry = trustedSceneImageGeometry(scene);
+  const geometry = trustedSceneImageGeometry(scene, input.evaluationTimeMs);
   if (!scene.imageStorage || !geometry) return { status: 'stale', scenes };
   let proposedFraming: ImageFramingV1 | undefined;
   try { proposedFraming = input.proposedFraming === undefined ? undefined : normalizeImageFraming(input.proposedFraming); }
@@ -184,7 +210,7 @@ function commitCanonicalImageFraming(
   }
   const mediaIdentity = `media:${scene.imageStorage.objectPath}`;
   let currentBinding: ImageFramingBindingV1;
-  try { currentBinding = imageFramingBindingFromTrustedGeometry(geometry, mediaIdentity); }
+  try { currentBinding = imageFramingBindingFromTrustedGeometry(geometry, mediaIdentity, input.evaluationTimeMs); }
   catch { return { status: 'stale', scenes }; }
   if (imageFramingEqual(scene.imageFraming, proposedFraming)
     && imageFramingBindingEqual(scene.imageFramingBinding, currentBinding)) return { status: 'no-op', scenes };
@@ -500,19 +526,45 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const visualSpatialEvidenceRef = useRef<Record<string, VisualSpatialEvidenceRecord>>({});
   const [imageFramingProposals, setImageFramingProposals] = useState<Record<string, ImageFramingApplicationProposalV1>>({});
   const dismissedImageFramingProposals = useRef<Record<string, VisualSpatialEvidenceRecord>>({});
+  const [dismissedContinuityFramingRecommendations, setDismissedContinuityFramingRecommendations] = useState<Record<string, string>>({});
   const [imageFramingProposalOutcome, setImageFramingProposalOutcome] = useState<Record<string, 'stale'>>({});
   const [pendingSpatialFramingApplyAttempt, setPendingSpatialFramingApplyAttempt] = useState<PendingSpatialFramingApplyAttempt | null>(null);
+  const pendingSpatialFramingApplyAttemptRef = useRef<PendingSpatialFramingApplyAttempt | null>(null);
   const [cinematographyOutcome, setCinematographyOutcome] = useState<Record<string, string>>({});
   const cinematographyApplyActive = useRef(new Set<string>());
   const cinematographyProposalsRef = useRef<Record<string, CinematographyApplicationProposal>>({});
   const visualSessionEpoch = useRef(0);
+  const spatialFramingTransactionGeneration = useRef(0);
   const directorProjectIdRef = useRef(directorProjectId);
   useEffect(() => { scenesRef.current = scenes; }, [scenes]);
   useEffect(() => { selectedVisualCandidatesRef.current = selectedVisualCandidates; }, [selectedVisualCandidates]);
   useEffect(() => { visualShortlistsRef.current = visualShortlists; }, [visualShortlists]);
   useEffect(() => { visualPlanningRef.current = visualIntelligence; }, [visualIntelligence]);
-  useEffect(() => { directorProjectIdRef.current = directorProjectId; }, [directorProjectId]);
-  useEffect(() => { visualSpatialEvidenceRef.current = visualSpatialEvidence; }, [visualSpatialEvidence]);
+  useLayoutEffect(() => { directorProjectIdRef.current = directorProjectId; }, [directorProjectId]);
+  useLayoutEffect(() => { visualSpatialEvidenceRef.current = visualSpatialEvidence; }, [visualSpatialEvidence]);
+  useLayoutEffect(() => { pendingSpatialFramingApplyAttemptRef.current = pendingSpatialFramingApplyAttempt; }, [pendingSpatialFramingApplyAttempt]);
+
+  const invalidateSpatialFramingTransactions = useCallback((): void => {
+    spatialFramingTransactionGeneration.current += 1;
+  }, []);
+
+  const requestDirectorProjectIdChange = useCallback((projectId: string): void => {
+    if (directorProjectIdRef.current === projectId) return;
+    invalidateSpatialFramingTransactions();
+    setDirectorProjectId(projectId);
+  }, [invalidateSpatialFramingTransactions]);
+
+  const requestVisualSessionInvalidation = useCallback((): void => {
+    invalidateSpatialFramingTransactions();
+    visualSessionEpoch.current += 1;
+  }, [invalidateSpatialFramingTransactions]);
+
+  const requestVisualSpatialEvidenceChange = useCallback((
+    update: SetStateAction<Record<string, VisualSpatialEvidenceRecord>>,
+  ): void => {
+    invalidateSpatialFramingTransactions();
+    setVisualSpatialEvidence(update);
+  }, [invalidateSpatialFramingTransactions]);
 
   useEffect(() => {
     setManualImageFraming((session) => session && isManualImageFramingSessionCurrent(session, scenes) ? session : null);
@@ -522,14 +574,17 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   // Spatial evidence is session-only and remains visible only while its exact
   // project, scene/order, and media binding is current.
   useEffect(() => {
-    setVisualSpatialEvidence((current) => filterSpatialEvidence(current, (record) => {
+    const filteredAppliedEvidence = filterSpatialEvidence(visualSpatialEvidenceRef.current, (record) => {
       const scene = scenes[record.binding.sceneIndex];
       return Boolean(scene?.sceneId === record.binding.sceneId && scene.imageStorage && !scene.videoStorage
         && isVisualSpatialEvidenceRecordBoundTo(record, {
           projectId: directorProjectId, sceneId: scene.sceneId, sceneIndex: record.binding.sceneIndex,
           scope: 'applied-image', mediaIdentity: `media:${scene.imageStorage.objectPath}`,
         }));
-    }));
+    });
+    if (filteredAppliedEvidence !== visualSpatialEvidenceRef.current) {
+      requestVisualSpatialEvidenceChange(filteredAppliedEvidence);
+    }
     setCandidateSpatialEvidence((current) => filterSpatialEvidence(current, (record) => {
       const scene = scenes[record.binding.sceneIndex]; const shortlist = scene ? visualShortlists[scene.sceneId] : undefined;
       const selectedId = scene ? selectedVisualCandidates[scene.sceneId] : undefined;
@@ -540,7 +595,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           scope: 'discovery-candidate-image', mediaIdentity: `pexels:image:${candidate.providerMediaIdentity}`,
         }));
     }));
-  }, [directorProjectId, scenes, selectedVisualCandidates, visualShortlists]);
+  }, [directorProjectId, requestVisualSpatialEvidenceChange, scenes, selectedVisualCandidates, visualShortlists]);
 
   useEffect(() => {
     const now = Date.now();
@@ -730,24 +785,34 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   function imageFramingProposalInput(
     currentScenes: readonly Scene[],
     proposal: ImageFramingApplicationProposalV1,
+    runtime?: SpatialFramingTransactionLease,
   ) {
     const scene = currentScenes[proposal.sceneIndex];
-    const evidence = visualSpatialEvidenceRef.current[proposal.sceneId];
+    const evidence = (runtime?.appliedSpatialEvidence ?? visualSpatialEvidenceRef.current)[proposal.sceneId];
     if (!scene || !evidence) return null;
+    const compositionDefaults = runtime?.compositionDefaults ?? {
+      motion: motionStyleRef.current,
+      transition: canonicalizeStudioRecipeTransition(transitionStyleRef.current),
+    } as const;
     return {
-      projectId: directorProjectIdRef.current,
+      projectId: runtime?.projectId ?? directorProjectIdRef.current,
       scenes: currentScenes,
       sceneIndex: proposal.sceneIndex,
       outputDimensions: STUDIO_IMAGE_FRAMING_OUTPUT,
-      effectiveMotion: resolveEffectiveSceneComposition({
-        motion: motionStyleRef.current,
-        transition: canonicalizeStudioRecipeTransition(transitionStyleRef.current),
-      }, scene.compositionOverride, proposal.sceneIndex).motion,
+      effectiveMotion: resolveEffectiveSceneComposition(
+        compositionDefaults,
+        scene.compositionOverride,
+        proposal.sceneIndex,
+      ).motion,
       evidence,
+      ...(runtime ? { now: runtime.transactionTimeMs } : {}),
     } as const;
   }
 
-  function handleApplySpatialImageFraming(proposal: ImageFramingApplicationProposalV1): void {
+  function handleApplySpatialImageFraming(
+    proposal: ImageFramingApplicationProposalV1,
+    continuityRecommendation?: SpatialContinuityFramingRecommendationV1,
+  ): void {
     const preflight = imageFramingProposalInput(scenesRef.current, proposal);
     if (!proposal.proposedFraming || !preflight || !isImageFramingApplicationProposalCurrent(proposal, preflight)) {
       setManualImageFraming(null);
@@ -768,10 +833,35 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setImageFramingProposalOutcome((current) => ({ ...current, [proposal.sceneId]: 'stale' }));
       return;
     }
+    let continuityTransaction: PendingSpatialFramingApplyAttempt['continuityTransaction'];
+    if (continuityRecommendation) {
+      const authState = useAuthSessionStore.getState();
+      try {
+        const ownerContext = captureValidatedMediaOwnerContext();
+        if (authState.status !== 'authenticated' || !authState.user || !authState.session
+          || authState.user.id !== ownerContext.ownerId
+          || !isCurrentValidatedOwnerContext(ownerContext.ownerId, ownerContext.generation)) throw new Error('Stale owner context.');
+        continuityTransaction = Object.freeze({
+          transactionGeneration: spatialFramingTransactionGeneration.current,
+          expectedProjectId: directorProjectIdRef.current,
+          expectedVisualSessionEpoch: visualSessionEpoch.current,
+          expectedAuthenticatedOwnerId: authState.user.id,
+          expectedAuthSession: authState.session,
+          expectedValidatedOwnerContext: ownerContext,
+        });
+      } catch {
+        setManualImageFraming(null);
+        dismissImageFramingProposal(proposal.sceneId);
+        setImageFramingProposalOutcome((current) => ({ ...current, [proposal.sceneId]: 'stale' }));
+        return;
+      }
+    }
     setManualImageFraming(null);
     setPendingSpatialFramingApplyAttempt({
       phase: 'queued',
       proposal,
+      ...(continuityRecommendation ? { continuityRecommendation } : {}),
+      ...(continuityTransaction ? { continuityTransaction } : {}),
       expectedFraming: proposal.proposedFraming,
       expectedBinding,
       initiallyEquivalent: imageFramingEqual(
@@ -793,30 +883,162 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     beginManualImageFraming(scene, proposal.proposedFraming);
   }
 
-  useEffect(() => {
-    const attempt = pendingSpatialFramingApplyAttempt;
-    if (!attempt) return;
-    if (attempt.phase === 'queued') {
-      const { proposal } = attempt;
-      applyCanonicalImageFraming((current) => {
-        const input = imageFramingProposalInput(current, proposal);
-        if (!input || !isImageFramingApplicationProposalCurrent(proposal, input)) return null;
-        const currentProposal = createImageFramingApplicationProposal(input);
-        const scene = current[proposal.sceneIndex];
-        if (!scene || currentProposal.status !== 'ready') return null;
-        return {
-          sceneId: proposal.sceneId,
-          sceneIndex: proposal.sceneIndex,
-          expectedFraming: scene.imageFraming,
-          expectedBinding: scene.imageFramingBinding,
-          proposedFraming: currentProposal.proposedFraming,
-        };
-      });
-      setPendingSpatialFramingApplyAttempt((current) => current === attempt ? { ...attempt, phase: 'submitted' } : current);
+  function currentContinuityFramingInput(
+    currentScenes: readonly Scene[],
+    runtime?: SpatialFramingTransactionLease,
+  ) {
+    const evaluationTimeMs = runtime?.transactionTimeMs ?? Date.now();
+    const projectId = runtime?.projectId ?? directorProjectIdRef.current;
+    const appliedSpatialEvidence = runtime?.appliedSpatialEvidence ?? visualSpatialEvidenceRef.current;
+    const compositionDefaults = runtime?.compositionDefaults ?? {
+      motion: motionStyleRef.current,
+      transition: canonicalizeStudioRecipeTransition(transitionStyleRef.current),
+    } as const;
+    const continuityInput = {
+      projectId,
+      scenes: currentScenes,
+      appliedSpatialEvidence,
+      trustedImageGeometry: Object.fromEntries(currentScenes.map((scene) => [scene.sceneId, scene.imageDisplayGeometry])),
+      evaluationTimeMs,
+      outputDimensions: STUDIO_IMAGE_FRAMING_OUTPUT,
+      compositionDefaults,
+    } as const;
+    const continuityReport = createSpatialContinuityEvidenceReport(continuityInput);
+    const framingProposals = Object.fromEntries(currentScenes.flatMap((scene, sceneIndex) => {
+      const evidence = appliedSpatialEvidence[scene.sceneId];
+      if (!evidence) return [];
+      const effective = resolveEffectiveSceneComposition(compositionDefaults, scene.compositionOverride, sceneIndex);
+      return [[scene.sceneId, createImageFramingApplicationProposal({
+        projectId,
+        scenes: currentScenes,
+        sceneIndex,
+        outputDimensions: STUDIO_IMAGE_FRAMING_OUTPUT,
+        effectiveMotion: effective.motion,
+        evidence,
+        now: evaluationTimeMs,
+      })]];
+    }));
+    return { continuityReport, continuityInput, framingProposals };
+  }
+
+  function handleApplySpatialContinuityFraming(recommendation: SpatialContinuityFramingRecommendationV1): void {
+    const input = currentContinuityFramingInput(scenesRef.current);
+    if (!isSpatialContinuityFramingRecommendationCurrent(recommendation, input)) {
+      setImageFramingProposalOutcome((current) => ({ ...current, [recommendation.target.sceneId]: 'stale' }));
       return;
     }
+    const current = createSpatialContinuityFramingRecommendations(input).find((candidate) =>
+      candidate.freshnessFingerprint === recommendation.freshnessFingerprint);
+    if (!current) {
+      setImageFramingProposalOutcome((outcomes) => ({ ...outcomes, [recommendation.target.sceneId]: 'stale' }));
+      return;
+    }
+    handleApplySpatialImageFraming(current.framingProposal, recommendation);
+  }
+
+  function handleAdjustSpatialContinuityFraming(recommendation: SpatialContinuityFramingRecommendationV1): void {
+    const input = currentContinuityFramingInput(scenesRef.current);
+    const current = createSpatialContinuityFramingRecommendations(input).find((candidate) =>
+      candidate.freshnessFingerprint === recommendation.freshnessFingerprint);
+    if (!current || !isSpatialContinuityFramingRecommendationCurrent(recommendation, input)) {
+      setImageFramingProposalOutcome((outcomes) => ({ ...outcomes, [recommendation.target.sceneId]: 'stale' }));
+      return;
+    }
+    setDismissedContinuityFramingRecommendations((dismissed) => ({
+      ...dismissed,
+      [`${recommendation.boundary.fromSceneId}:${recommendation.boundary.toSceneId}`]: recommendation.freshnessFingerprint,
+    }));
+    handleAdjustSpatialImageFraming(current.framingProposal);
+  }
+
+  useEffect(() => {
+    const attempt = pendingSpatialFramingApplyAttempt;
+    if (!attempt || attempt.phase !== 'queued') return;
+    let cancelled = false;
+    const task = window.setTimeout(() => {
+      if (cancelled || pendingSpatialFramingApplyAttemptRef.current !== attempt) return;
+      const { proposal } = attempt;
+      let continuityLease: SpatialFramingTransactionLease | undefined;
+      if (attempt.continuityRecommendation) {
+        const transaction = attempt.continuityTransaction;
+        const authState = useAuthSessionStore.getState();
+        let currentOwnerContext: ValidatedMediaOwnerContext | null = null;
+        try { currentOwnerContext = captureValidatedMediaOwnerContext(); } catch { /* Rejected below. */ }
+        if (!transaction || authState.status !== 'authenticated'
+          || authState.user?.id !== transaction.expectedAuthenticatedOwnerId
+          || authState.session !== transaction.expectedAuthSession
+          || !currentOwnerContext
+          || currentOwnerContext.ownerId !== transaction.expectedValidatedOwnerContext.ownerId
+          || currentOwnerContext.generation !== transaction.expectedValidatedOwnerContext.generation
+          || !isCurrentValidatedOwnerContext(currentOwnerContext.ownerId, currentOwnerContext.generation)
+          || directorProjectIdRef.current !== transaction.expectedProjectId
+          || visualSessionEpoch.current !== transaction.expectedVisualSessionEpoch
+          || spatialFramingTransactionGeneration.current !== transaction.transactionGeneration) {
+          setPendingSpatialFramingApplyAttempt((current) => current === attempt
+            ? { ...attempt, phase: 'submitted', submissionGuardRejected: true }
+            : current);
+          return;
+        }
+        const leaseProjectId = directorProjectIdRef.current;
+        const leaseVisualSessionEpoch = visualSessionEpoch.current;
+        const leaseAppliedSpatialEvidence = Object.freeze({ ...visualSpatialEvidenceRef.current });
+        const leaseCompositionDefaults = Object.freeze({
+          motion: motionStyleRef.current,
+          transition: canonicalizeStudioRecipeTransition(transitionStyleRef.current),
+        });
+        const transactionTimeMs = Date.now();
+        continuityLease = Object.freeze({
+          transactionTimeMs,
+          transactionGeneration: transaction.transactionGeneration,
+          projectId: leaseProjectId,
+          visualSessionEpoch: leaseVisualSessionEpoch,
+          validatedOwnerContext: Object.freeze({ ...currentOwnerContext }),
+          appliedSpatialEvidence: leaseAppliedSpatialEvidence,
+          compositionDefaults: leaseCompositionDefaults,
+        });
+      }
+
+      flushSync(() => {
+        applyCanonicalImageFraming((current) => {
+          if (attempt.continuityRecommendation) {
+            if (!continuityLease) return null;
+            const continuityInput = currentContinuityFramingInput(current, continuityLease);
+            const regeneratedRecommendation = createSpatialContinuityFramingRecommendations(continuityInput)
+              .find((candidate) => candidate.freshnessFingerprint === attempt.continuityRecommendation?.freshnessFingerprint);
+            if (!regeneratedRecommendation
+              || !isSpatialContinuityFramingRecommendationCurrent(attempt.continuityRecommendation, continuityInput)
+              || regeneratedRecommendation.framingProposal.authority !== proposal.authority) return null;
+          }
+          const input = imageFramingProposalInput(current, proposal, continuityLease);
+          if (!input || !isImageFramingApplicationProposalCurrent(proposal, input)) return null;
+          const currentProposal = createImageFramingApplicationProposal(input);
+          const scene = current[proposal.sceneIndex];
+          if (!scene || currentProposal.status !== 'ready') return null;
+          return {
+            sceneId: proposal.sceneId,
+            sceneIndex: proposal.sceneIndex,
+            expectedFraming: scene.imageFraming,
+            expectedBinding: scene.imageFramingBinding,
+            proposedFraming: currentProposal.proposedFraming,
+            ...(continuityLease ? { evaluationTimeMs: continuityLease.transactionTimeMs } : {}),
+          };
+        });
+        setPendingSpatialFramingApplyAttempt((current) => current === attempt
+          ? { ...attempt, phase: 'submitted' }
+          : current);
+      });
+    }, 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(task);
+    };
+  }, [applyCanonicalImageFraming, pendingSpatialFramingApplyAttempt]);
+
+  useEffect(() => {
+    const attempt = pendingSpatialFramingApplyAttempt;
+    if (!attempt || attempt.phase !== 'submitted') return;
     const reachedExpectedResult = spatialFramingAttemptReachedCanonicalResult(attempt, directorProjectId, scenes);
-    const transactionOutcome: CanonicalImageFramingCommitResult['status'] = reachedExpectedResult
+    const transactionOutcome: CanonicalImageFramingCommitResult['status'] = !attempt.submissionGuardRejected && reachedExpectedResult
       ? attempt.initiallyEquivalent ? 'no-op' : 'applied'
       : 'stale';
     setManualImageFraming(null);
@@ -827,15 +1049,27 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       setImageFramingProposalOutcome((current) => ({ ...current, [attempt.proposal.sceneId]: 'stale' }));
     }
     setPendingSpatialFramingApplyAttempt(null);
-  }, [applyCanonicalImageFraming, directorProjectId, pendingSpatialFramingApplyAttempt, scenes]);
+  }, [directorProjectId, pendingSpatialFramingApplyAttempt, scenes]);
 
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('karaoke');
   const [transitionStyle, setTransitionStyle] = useState<TransitionStyle>('crossfade');
   const [motionStyle, setMotionStyle] = useState<MotionStyle>('kenburns');
   const transitionStyleRef = useRef(transitionStyle);
   const motionStyleRef = useRef(motionStyle);
-  transitionStyleRef.current = transitionStyle;
-  motionStyleRef.current = motionStyle;
+  useLayoutEffect(() => { transitionStyleRef.current = transitionStyle; }, [transitionStyle]);
+  useLayoutEffect(() => { motionStyleRef.current = motionStyle; }, [motionStyle]);
+
+  const requestTransitionStyleChange = useCallback((style: TransitionStyle): void => {
+    if (transitionStyleRef.current === style) return;
+    invalidateSpatialFramingTransactions();
+    setTransitionStyle(style);
+  }, [invalidateSpatialFramingTransactions]);
+
+  const requestMotionStyleChange = useCallback((style: MotionStyle): void => {
+    if (motionStyleRef.current === style) return;
+    invalidateSpatialFramingTransactions();
+    setMotionStyle(style);
+  }, [invalidateSpatialFramingTransactions]);
   const [useBroll, setUseBroll] = useState(false);
   const [musicId, setMusicId] = useState<string>('');
   const [musicStorage, setMusicStorage] = useState<MediaStorageObject | null>(null);
@@ -929,7 +1163,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   }, [directorProjectId, motionStyle, scenes, spatialGeometryTrustEpoch, transitionStyle, visualSpatialEvidence]);
 
   const spatialGeometryTrustEvaluationTime = Date.now();
-  const spatialContinuity = useMemo(() => createSpatialContinuityEvidenceReport({
+  const spatialContinuityInput = useMemo(() => ({
     projectId: directorProjectId,
     scenes,
     appliedSpatialEvidence: visualSpatialEvidence,
@@ -937,7 +1171,25 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     evaluationTimeMs: spatialGeometryTrustEvaluationTime,
     outputDimensions: STUDIO_IMAGE_FRAMING_OUTPUT,
     compositionDefaults: { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) },
-  }), [directorProjectId, motionStyle, scenes, spatialGeometryTrustEvaluationTime, transitionStyle, visualSpatialEvidence]);
+  } as const), [directorProjectId, motionStyle, scenes, spatialGeometryTrustEvaluationTime, transitionStyle, visualSpatialEvidence]);
+  const spatialContinuity = useMemo(() => createSpatialContinuityEvidenceReport(spatialContinuityInput), [spatialContinuityInput]);
+  const spatialContinuityFramingRecommendations = useMemo(() => createSpatialContinuityFramingRecommendations({
+    continuityReport: spatialContinuity,
+    continuityInput: spatialContinuityInput,
+    framingProposals: imageFramingProposals,
+  }), [imageFramingProposals, spatialContinuity, spatialContinuityInput]);
+  const visibleSpatialContinuityFramingRecommendations = spatialContinuityFramingRecommendations.filter((recommendation) =>
+    dismissedContinuityFramingRecommendations[`${recommendation.boundary.fromSceneId}:${recommendation.boundary.toSceneId}`]
+      !== recommendation.freshnessFingerprint);
+  const continuityFramingTargetSceneIds = new Set(visibleSpatialContinuityFramingRecommendations.map((recommendation) => recommendation.target.sceneId));
+
+  useEffect(() => {
+    const currentBoundaryKeys = new Set(spatialContinuity.boundaries.map((boundary) => `${boundary.fromSceneId}:${boundary.toSceneId}`));
+    setDismissedContinuityFramingRecommendations((current) => {
+      const entries = Object.entries(current).filter(([key]) => currentBoundaryKeys.has(key));
+      return entries.length === Object.keys(current).length ? current : Object.fromEntries(entries);
+    });
+  }, [spatialContinuity.boundaries]);
 
   function invalidateNarration(): void {
     setNarration(null);
@@ -995,9 +1247,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     // Owner-scoped state must never cross an authenticated owner transition.
     setVisualShortlists({});
     setSelectedVisualCandidates({});
-    setVisualSpatialEvidence({});
+    requestVisualSpatialEvidenceChange({});
     setCandidateSpatialEvidence({});
     setImageFramingProposals({});
+    setDismissedContinuityFramingRecommendations({});
     dismissedImageFramingProposals.current = {};
     setImageFramingProposalOutcome({});
     setPendingSpatialFramingApplyAttempt(null);
@@ -1005,7 +1258,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
     cinematographyProposalsRef.current = {};
-    visualSessionEpoch.current += 1;
+    requestVisualSessionInvalidation();
     visualApplyActive.current.clear();
     setIngestingPexelsImages(new Set());
     setIngestingPexelsVideos(new Set());
@@ -1018,7 +1271,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setResearchingFootage(false);
     setGeneratingVisuals(false);
     setGenerating(false);
-  }, [authenticatedUserId]);
+  }, [authenticatedUserId, requestVisualSessionInvalidation, requestVisualSpatialEvidenceChange]);
 
   useEffect(() => {
     if (completedExport && !isStudioOutputRevisionCurrent(completedExport.revision, canonicalStudioRevision)) setPostRenderNotice(t('studio.exportOutdated'));
@@ -1035,14 +1288,15 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     const { draft } = decision;
     const projectId = resolveStudioProjectId(currentProject?.id, decision.projectId);
     activateStudioProject(projectIdentity.current, projectId);
-    setDirectorProjectId(projectId);
+    requestDirectorProjectIdChange(projectId);
     // Discovery results, selection, and provider previews are intentionally session-only
     // and must never follow a project hydration transition.
     setVisualShortlists({});
     setSelectedVisualCandidates({});
-    setVisualSpatialEvidence({});
+    requestVisualSpatialEvidenceChange({});
     setCandidateSpatialEvidence({});
     setImageFramingProposals({});
+    setDismissedContinuityFramingRecommendations({});
     dismissedImageFramingProposals.current = {};
     setImageFramingProposalOutcome({});
     setPendingSpatialFramingApplyAttempt(null);
@@ -1050,7 +1304,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
     cinematographyProposalsRef.current = {};
-    visualSessionEpoch.current += 1;
+    requestVisualSessionInvalidation();
     visualApplyActive.current.clear();
     setIngestingPexelsImages(new Set());
     setIngestingPexelsVideos(new Set());
@@ -1109,8 +1363,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           .catch(() => { /* Stable identity remains available for a later signed-URL retry. */ });
       }
       setCaptionStyle(draft.captionStyle);
-      setTransitionStyle(draft.transitionStyle);
-      setMotionStyle(draft.motionStyle);
+      requestTransitionStyleChange(draft.transitionStyle);
+      requestMotionStyleChange(draft.motionStyle);
       setUseBroll(draft.useBroll);
       // Legacy drafts only persisted a transient track id/object URL. They
       // cannot be revived as canonical audio until the bounded track is
@@ -1164,7 +1418,8 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     }
     draftHydratedRef.current = true;
     return () => { cancelled = true; };
-  }, [channels, currentProject?.id]);
+  }, [channels, currentProject?.id, requestDirectorProjectIdChange, requestMotionStyleChange,
+    requestTransitionStyleChange, requestVisualSessionInvalidation, requestVisualSpatialEvidenceChange]);
 
   const draft = useMemo<StudioDraft>(() => ({
     version: 1,
@@ -1234,7 +1489,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   function handleClearDraft() {
     clearStudioDraft();
     const projectId = startNewStudioProject(projectIdentity.current);
-    setDirectorProjectId(projectId);
+    requestDirectorProjectIdChange(projectId);
     setStep('topic');
     setTopic('');
     setTitle('');
@@ -1245,9 +1500,10 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setVisualIntelligence(undefined);
     setVisualShortlists({});
     setSelectedVisualCandidates({});
-    setVisualSpatialEvidence({});
+    requestVisualSpatialEvidenceChange({});
     setCandidateSpatialEvidence({});
     setImageFramingProposals({});
+    setDismissedContinuityFramingRecommendations({});
     dismissedImageFramingProposals.current = {};
     setImageFramingProposalOutcome({});
     setPendingSpatialFramingApplyAttempt(null);
@@ -1255,7 +1511,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     setCandidateSpatialBusy(new Set());
     setCinematographyOutcome({});
     cinematographyProposalsRef.current = {};
-    visualSessionEpoch.current += 1;
+    requestVisualSessionInvalidation();
     visualApplyActive.current.clear();
     setIngestingPexelsImages(new Set());
     setIngestingPexelsVideos(new Set());
@@ -1835,7 +2091,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     if (!scene || !sceneId || !candidate || visualApplyActive.current.has(`${visualSessionEpoch.current}:${sceneId}`)) return;
     visualSpatialGenerations.current.set(`applied:${sceneId}`, (visualSpatialGenerations.current.get(`applied:${sceneId}`) ?? 0) + 1);
     visualSpatialGenerations.current.set(`candidate:${sceneId}`, (visualSpatialGenerations.current.get(`candidate:${sceneId}`) ?? 0) + 1);
-    setVisualSpatialEvidence((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
+    requestVisualSpatialEvidenceChange((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
     setCandidateSpatialEvidence((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });
     setVisualSpatialBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
     setCandidateSpatialBusy((current) => { const next = new Set(current); next.delete(sceneId); return next; });
@@ -2031,7 +2287,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       if (!currentGeometry) return;
       const currentSource = visualSpatialEvidenceSourceFromTrustedGeometry(currentGeometry, binding.mediaIdentity);
       if (!visualSpatialEvidenceSourceEqual(requestSource, currentSource)) return;
-      setVisualSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, response, requestSource) }));
+      requestVisualSpatialEvidenceChange((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, response, requestSource) }));
     } catch {
       const current = scenesRef.current[sceneIndex];
       if (current === scene && current.sceneId === sceneId && current.imageStorage?.objectPath === mediaPath && !current.videoStorage
@@ -2042,7 +2298,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
           ? visualSpatialEvidenceSourceFromTrustedGeometry(currentGeometry, binding.mediaIdentity)
           : undefined;
         if (currentSource && visualSpatialEvidenceSourceEqual(requestSource, currentSource)) {
-          setVisualSpatialEvidence((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, unavailableVisualSpatialAnalysis('provider-unavailable'), requestSource) }));
+          requestVisualSpatialEvidenceChange((records) => ({ ...records, [sceneId]: createVisualSpatialEvidenceRecord(binding, unavailableVisualSpatialAnalysis('provider-unavailable'), requestSource) }));
         }
       }
     } finally {
@@ -2996,10 +3252,42 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                   unsupported: spatialContinuity.coverage.unsupportedSceneIds.length,
                 })}</p>
                 <div className="mt-2 space-y-1.5">
-                  {spatialContinuity.boundaries.map((boundary) => <div key={`${boundary.fromSceneId}:${boundary.toSceneId}`} data-testid="spatial-continuity-boundary" className="rounded border border-sky-100 bg-white/80 px-2 py-1.5">
-                    <span className="font-medium">{t('studio.spatialContinuityScenes', { from: boundary.fromSceneIndex + 1, to: boundary.toSceneIndex + 1 })}</span>
-                    <span className="text-slate-500"> · {boundary.findings.map((finding) => t(`studio.spatialContinuity.${finding}`)).join(' · ')}</span>
-                  </div>)}
+                  {spatialContinuity.boundaries.map((boundary) => {
+                    const boundaryKey = `${boundary.fromSceneId}:${boundary.toSceneId}`;
+                    const recommendation = visibleSpatialContinuityFramingRecommendations.find((candidate) =>
+                      `${candidate.boundary.fromSceneId}:${candidate.boundary.toSceneId}` === boundaryKey);
+                    const targetScene = recommendation ? scenes[recommendation.target.sceneIndex] : undefined;
+                    const targetGeometry = targetScene ? trustedSceneImageGeometry(targetScene) : null;
+                    const stale = imageFramingProposalOutcome[boundary.toSceneId] === 'stale';
+                    return <div key={boundaryKey} data-testid="spatial-continuity-boundary" className="rounded border border-sky-100 bg-white/80 px-2 py-1.5">
+                      <span className="font-medium">{t('studio.spatialContinuityScenes', { from: boundary.fromSceneIndex + 1, to: boundary.toSceneIndex + 1 })}</span>
+                      <span className="text-slate-500"> · {boundary.findings.map((finding) => t(`studio.spatialContinuity.${finding}`)).join(' · ')}</span>
+                      {recommendation && targetScene?.imageUrl && targetGeometry && <div data-testid="spatial-continuity-framing-recommendation" className="mt-2 border-t border-violet-100 pt-2">
+                        <p className="font-medium text-violet-800">{t('studio.spatialContinuityFramingAvailable', { scene: recommendation.target.sceneIndex + 1 })}</p>
+                        <div className="mt-2 flex flex-wrap items-start justify-between gap-2">
+                          <p className="max-w-xs text-[11px] text-slate-500">{t('studio.spatialContinuityFramingDescription')}</p>
+                          <div>
+                            <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-violet-500">{t('studio.framingSuggested')}</p>
+                            <ImageFramingPreview
+                              src={targetScene.imageUrl}
+                              alt={t('studio.framingSuggested')}
+                              displayDimensions={targetGeometry.displayDimensions}
+                              framing={recommendation.framingProposal.proposedFraming}
+                              focalPoint={recommendation.framingProposal.displayFocalPoint}
+                              subjectRegion={recommendation.framingProposal.displaySubjectRegion}
+                              className="h-40 w-[90px] rounded-md ring-1 ring-violet-300"
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button type="button" onClick={() => handleApplySpatialContinuityFraming(recommendation)} className="rounded-md bg-violet-700 px-2 py-1 text-xs font-medium text-white hover:bg-violet-800">{t('studio.framingSuggestionApply')}</button>
+                          <button type="button" onClick={() => handleAdjustSpatialContinuityFraming(recommendation)} className="rounded-md border border-violet-300 px-2 py-1 text-xs text-violet-700 hover:bg-violet-50">{t('studio.framingSuggestionAdjust')}</button>
+                          <button type="button" onClick={() => setDismissedContinuityFramingRecommendations((current) => ({ ...current, [boundaryKey]: recommendation.freshnessFingerprint }))} className="rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">{t('studio.framingSuggestionDismiss')}</button>
+                        </div>
+                      </div>}
+                      {stale && !recommendation && <p role="status" className="mt-1 text-xs text-amber-700">{t('studio.framingSuggestionStale')}</p>}
+                    </div>;
+                  })}
                 </div>
               </div>}
               <div className="mt-2 space-y-2">
@@ -3091,7 +3379,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                               </>}
                             </div>
                            </div>
-                           {framingProposal && !adjustment && (
+                           {framingProposal && !adjustment && !continuityFramingTargetSceneIds.has(s.sceneId) && (
                              <div data-testid="image-framing-suggestion" className="mt-3 border-t border-violet-100 pt-3">
                                <div className="flex flex-wrap items-start justify-between gap-2">
                                  <div>
@@ -3461,7 +3749,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
               <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">{t('studio.transitions')}</label>
               <div className="mt-2 flex flex-wrap gap-2">
                 {TRANSITION_STYLES.map((transition) => (
-                  <button key={transition.key} onClick={transition.canonical ? () => setTransitionStyle(transition.key) : undefined} disabled={!transition.canonical}
+                  <button key={transition.key} onClick={transition.canonical ? () => requestTransitionStyleChange(transition.key) : undefined} disabled={!transition.canonical}
                     className={classNames(
                       'rounded-lg border px-3 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400',
                       transition.canonical && transitionStyle === transition.key ? 'border-slate-900 bg-slate-50 font-medium text-slate-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50',
@@ -3484,7 +3772,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                 {MOTION_STYLES.map((m) => {
                   const Icon = m.icon;
                   return (
-                    <button key={m.key} onClick={() => setMotionStyle(m.key)}
+                    <button key={m.key} onClick={() => requestMotionStyleChange(m.key)}
                       className={classNames(
                         'flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition-colors',
                         motionStyle === m.key ? 'border-slate-900 bg-slate-50 font-medium text-slate-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50',

@@ -1,7 +1,7 @@
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setValidatedOwnerId } from '@/auth/identity';
+import { advanceValidatedOwnerGeneration, setValidatedOwnerId } from '@/auth/identity';
 import { useAuthSessionStore } from '@/auth/session';
 import { I18nProvider } from '@/lib/i18n';
 import { loadStudioDraft, saveStudioDraft, type StudioDraft } from '@/lib/studioDraft';
@@ -51,6 +51,11 @@ describe('Studio Spatial Continuity Evidence V1', () => {
   afterEach(() => { vi.useRealTimers(); container.remove(); window.localStorage.clear(); vi.clearAllMocks(); });
 
   it('renders ordered advisory continuity conditions from applied Spatial evidence without an Apply or fix action', async () => {
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.65, y: 0.5 }));
     const root = createRoot(container);
     await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
     expect(container.querySelector('[data-testid="spatial-continuity-panel"]')).not.toBeNull();
@@ -68,7 +73,261 @@ describe('Studio Spatial Continuity Evidence V1', () => {
     expect(container.textContent).toContain('same final crop window');
     expect(container.textContent).toContain('focal subject remains in the same visual zone');
     expect(container.textContent).not.toMatch(/Apply continuity|Fix continuity|Reframe all/u);
+    const continuityRecommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    expect(continuityRecommendation?.textContent).toContain('Alternative framing available for Scene 2');
+    expect(container.querySelectorAll('[data-testid="image-framing-suggestion"]')).toHaveLength(1);
     expect(loadStudioDraft()?.scenes).toEqual(scenesBeforeAnalysis);
+
+    const dismiss = Array.from(continuityRecommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Dismiss');
+    await act(async () => { dismiss?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')).toBeNull();
+    expect(container.querySelectorAll('[data-testid="image-framing-suggestion"]')).toHaveLength(2);
+    expect(loadStudioDraft()?.scenes).toEqual(scenesBeforeAnalysis);
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')).not.toBeNull();
+    expect(container.querySelectorAll('[data-testid="image-framing-suggestion"]')).toHaveLength(1);
+    await act(async () => root.unmount());
+  });
+
+  it('applies the shared 13B proposal only to the later scene and removes the repeated crop recommendation', async () => {
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }));
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const analyze = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const apply = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+    expect(apply).toBeDefined();
+    await act(async () => { apply?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+
+    const saved = loadStudioDraft()?.scenes;
+    expect(saved?.[0].imageFraming).toBeUndefined();
+    expect(saved?.[0].imageFramingBinding).toBeUndefined();
+    expect(saved?.[1].imageFraming).toBeDefined();
+    expect(saved?.[1].imageFramingBinding?.contentDigest).toBe('a'.repeat(64));
+    expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')).toBeNull();
+    expect(container.textContent).not.toContain('same final crop window');
+    await act(async () => root.unmount());
+  });
+
+  it('uses the existing single manual framing editor for continuity Adjust without canonical mutation', async () => {
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }));
+    const scenesBefore = structuredClone(loadStudioDraft()?.scenes);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const analyze = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const adjust = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Adjust suggestion');
+    await act(async () => { adjust?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')).toBeNull();
+    expect(container.textContent?.match(/Pending — click or drag/gu)).toHaveLength(1);
+    expect(loadStudioDraft()?.scenes).toEqual(scenesBefore);
+    await act(async () => root.unmount());
+  });
+
+  it('fails a continuity Apply closed when the target reindexes before the existing 13B updater', async () => {
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }));
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const analyze = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const apply = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+    const removePredecessor = container.querySelectorAll<HTMLButtonElement>('button.text-red-400')[0];
+    expect(apply).toBeDefined();
+    expect(removePredecessor).toBeDefined();
+    await act(async () => {
+      apply?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      removePredecessor.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+    const remaining = loadStudioDraft()?.scenes;
+    expect(remaining).toHaveLength(1);
+    expect(remaining?.[0].text).toBe('Scene 2');
+    expect(remaining?.[0].imageFraming).toBeUndefined();
+    expect(remaining?.[0].imageFramingBinding).toBeUndefined();
+    await act(async () => root.unmount());
+  });
+
+  it('fails a continuity Apply closed when only the predecessor framing changes before the existing 13B updater', async () => {
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }));
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const analyze = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+
+    const predecessorSuggestion = container.querySelector('[data-testid="image-framing-suggestion"]');
+    const adjustPredecessor = Array.from(predecessorSuggestion!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Adjust suggestion');
+    await act(async () => { adjustPredecessor?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(container.textContent?.match(/Pending — click or drag/gu)).toHaveLength(1);
+
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const applyContinuity = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+    const applyPredecessor = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply');
+    expect(applyContinuity).toBeDefined();
+    expect(applyPredecessor).toBeDefined();
+    await act(async () => {
+      applyContinuity?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      applyPredecessor?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 700)); });
+    const saved = loadStudioDraft()?.scenes;
+    expect(saved).toHaveLength(2);
+    expect(saved?.[0].imageFraming).toBeDefined();
+    expect(saved?.[0].imageFramingBinding?.contentDigest).toBe('a'.repeat(64));
+    expect(saved?.[1].imageFraming).toBeUndefined();
+    expect(saved?.[1].imageFramingBinding).toBeUndefined();
+    await act(async () => root.unmount());
+  });
+
+  it('rejects continuity Apply when predecessor evidence changes after its one-shot task is scheduled', async () => {
+    vi.useFakeTimers();
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.65, y: 0.5 }));
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const analyze = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const apply = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+
+    await act(async () => { apply?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(0); });
+
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    await act(async () => { vi.advanceTimersByTime(700); });
+    const saved = loadStudioDraft()?.scenes;
+    expect(saved?.[0].imageFraming).toBeUndefined();
+    expect(saved?.[1].imageFraming).toBeUndefined();
+    expect(saved?.[1].imageFramingBinding).toBeUndefined();
+    await act(async () => root.unmount());
+  });
+
+  it('rejects continuity Apply when validated-owner generation changes after its one-shot task is scheduled', async () => {
+    vi.useFakeTimers();
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }));
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const analyze = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const apply = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+
+    await act(async () => { apply?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    advanceValidatedOwnerGeneration();
+    await act(async () => { vi.advanceTimersByTime(0); });
+
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    await act(async () => { vi.advanceTimersByTime(700); });
+    const saved = loadStudioDraft()?.scenes;
+    expect(saved?.[0].imageFraming).toBeUndefined();
+    expect(saved?.[1].imageFraming).toBeUndefined();
+    expect(saved?.[1].imageFramingBinding).toBeUndefined();
+    await act(async () => root.unmount());
+  });
+
+  it('rejects continuity Apply at transaction time when predecessor geometry expires but target geometry remains live', async () => {
+    vi.useFakeTimers();
+    const start = Date.parse('2026-09-06T10:00:00.000Z');
+    vi.setSystemTime(start);
+    mocks.resolveOwnedImageDisplayGeometry.mockImplementation(async (storage: { objectPath: string }) => geometry(
+      storage.objectPath,
+      'a'.repeat(64),
+      new Date(start + (storage.objectPath.endsWith('101.png') ? 1_000 : 10_000)).toISOString(),
+    ));
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }));
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider>); await Promise.resolve(); });
+    const analyze = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const apply = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+
+    await act(async () => { apply?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    vi.setSystemTime(start + 1_000);
+    await act(async () => { vi.advanceTimersByTime(0); });
+
+    expect(container.textContent).toContain('The framing suggestion is no longer current.');
+    vi.setSystemTime(start + 1_500);
+    await act(async () => { vi.advanceTimersByTime(700); });
+    const saved = loadStudioDraft()?.scenes;
+    expect(saved?.[0].imageFraming).toBeUndefined();
+    expect(saved?.[1].imageFraming).toBeUndefined();
+    expect(saved?.[1].imageFramingBinding).toBeUndefined();
+    await act(async () => root.unmount());
+  });
+
+  it('submits one continuity mutation under StrictMode effect replay', async () => {
+    vi.useFakeTimers();
+    mocks.analyzeVisualSpatial
+      .mockReset()
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }))
+      .mockResolvedValueOnce(spatial({ x: 0.35, y: 0.5 }));
+    const root = createRoot(container);
+    await act(async () => { root.render(<StrictMode><I18nProvider><Studio channels={[channel()]} onNavigateDirector={vi.fn()} /></I18nProvider></StrictMode>); await Promise.resolve(); });
+    const analyze = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.textContent?.trim() === 'Analyze framing');
+    await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    const recommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');
+    const apply = Array.from(recommendation!.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === 'Apply suggestion');
+
+    await act(async () => { apply?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => { vi.advanceTimersByTime(700); });
+
+    const saved = loadStudioDraft()?.scenes;
+    expect(saved?.[0].imageFraming).toBeUndefined();
+    expect(saved?.[0].imageFramingBinding).toBeUndefined();
+    expect(saved?.[1].imageFraming).toBeDefined();
+    expect(saved?.[1].imageFramingBinding?.contentDigest).toBe('a'.repeat(64));
+    expect(container.textContent).not.toContain('The framing suggestion is no longer current.');
     await act(async () => root.unmount());
   });
 

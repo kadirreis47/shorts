@@ -65,11 +65,11 @@ describe('visual spatial client boundary', () => {
     const search = studio.slice(studio.indexOf('async function handleFindPremiumVisuals'), studio.indexOf('async function handleApplyPremiumVisual'));
     const apply = studio.slice(studio.indexOf('async function handleApplyPremiumVisual'), studio.indexOf('function handleApplyCinematography'));
     expect(search.indexOf('setCandidateSpatialEvidence')).toBeLessThan(search.indexOf('await planVisualQueries'));
-    expect(apply).toContain('setVisualSpatialEvidence');
+    expect(apply).toContain('requestVisualSpatialEvidenceChange');
     expect(apply).toContain('setCandidateSpatialEvidence');
     expect(studio).toContain('setCandidateSpatialEvidence((current) => { const { [sceneId]: _ignored, ...rest } = current; return rest; });');
-    expect(studio).toContain('filterSpatialEvidence(current');
-    expect(studio).toContain('setVisualSpatialEvidence({});');
+    expect(studio).toContain('filterSpatialEvidence(visualSpatialEvidenceRef.current');
+    expect(studio).toContain('requestVisualSpatialEvidenceChange({});');
     expect(studio).toContain('setCandidateSpatialEvidence({});');
   });
 
