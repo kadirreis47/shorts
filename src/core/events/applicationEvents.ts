@@ -2,6 +2,13 @@ import type { AppErrorCode } from '@/core/errors';
 import type { Channel } from '@/lib/types';
 import type { PersistenceHydrationResult } from '@/persistence/persistenceManager';
 
+/** Runtime-only proof that the existing Director monitor admitted one exact report. */
+export interface DirectorCompletionAdmissionV1 {
+  readonly validate: (report: import('@/core/director').DirectorReport) => boolean;
+  readonly acknowledgeStored: (report: import('@/core/director').DirectorReport) => void;
+  readonly fail: (error: unknown) => void;
+}
+
 export interface ApplicationEventMap extends Record<string, unknown> {
   'analytics.collection.started': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
   'analytics.collection.completed': { collectionId: string; projectId: string; publicationId: string | null; platform: import('@/core/analytics').AnalyticsPlatform; accountRef: string; };
@@ -76,6 +83,8 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     projectId: string;
     sceneCount: number;
     startedAt: string;
+    /** Runtime-only lifecycle admission. Never persisted or included in report identity. */
+    admit?: () => boolean;
   };
   'director:analyzer-completed': {
     projectId: string;
@@ -84,6 +93,7 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     affectedSceneCount: number;
     message: string;
     completedAt: string;
+    admit?: () => boolean;
   };
   'director:analysis-completed': {
     projectId: string;
@@ -92,16 +102,18 @@ export interface ApplicationEventMap extends Record<string, unknown> {
     analyzerFailureCount: number;
     completedAt: string;
     report: import('@/core/director').DirectorReport;
+    admission: DirectorCompletionAdmissionV1;
   };
   'director:analysis-failed': {
     projectId: string;
     message: string;
     cancelled: boolean;
     failedAt: string;
+    admit?: () => boolean;
   };
-  'director:scene-ranked': { projectId: string; sceneCount: number; rankedAt: string };
-  'director:retention-map-completed': { projectId: string; segmentCount: number; completedAt: string };
-  'director:edit-plan-created': { projectId: string; decisionCount: number; createdAt: string };
+  'director:scene-ranked': { projectId: string; sceneCount: number; rankedAt: string; admit?: () => boolean };
+  'director:retention-map-completed': { projectId: string; segmentCount: number; completedAt: string; admit?: () => boolean };
+  'director:edit-plan-created': { projectId: string; decisionCount: number; createdAt: string; admit?: () => boolean };
   'director:report-persisted': { projectId: string; reportVersion: string; persistedAt: string };
   'app:bootstrap-started': { startedAt: string };
   'app:hydration-completed': {

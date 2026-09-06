@@ -33,7 +33,7 @@ export const VIEW_REGISTRY: Record<V1ViewKey, ViewRenderer> = {
     <Videos channels={productionChannels} onNavigateStudio={() => navigate('studio')} />
   ),
   calendar: ({ productionChannels }) => <CalendarView channels={productionChannels} />,
-  director: ({ navigate }) => <AIDirector onNavigateEditor={() => navigate('editor')} />,
+  director: ({ navigate }) => <AIDirector onNavigateEditor={() => navigate('editor')} onNavigateStudio={() => navigate('studio')} />,
   editor: ({ navigate }) => <AIEditor onNavigateAudio={() => navigate('audio-studio')} />,
   'audio-studio': () => <AIAudioStudio />,
   'visual-studio': () => <AIVisualStudio />,

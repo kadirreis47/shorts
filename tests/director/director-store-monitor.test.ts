@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDirectorEngine } from '@/core/director';
 import { TypedEventBus } from '@/core/events';
-import type { ApplicationEventMap } from '@/core/events';
+import type { ApplicationEventMap, DirectorCompletionAdmissionV1 } from '@/core/events';
 import { createDirectorMonitor } from '@/services/directorMonitor';
 import { mergeDirectorPersistedState, useDirectorReportStore } from '@/store/directorReportStore';
 import { directorInput } from './fixtures';
@@ -37,11 +37,23 @@ describe('Director Report Store ve Monitor', () => {
   it('completed eventte reportu storea yazar ve persisted eventi yayınlar', async () => {
     const bus = new TypedEventBus<ApplicationEventMap>(); const persisted = vi.fn(); bus.on('director:report-persisted', persisted);
     const monitor = createDirectorMonitor(bus); monitor.start(); const report = await createDirectorEngine().analyze(directorInput());
+    const receipt = completionAdmission();
     await bus.emit('director:analysis-completed', { projectId: report.projectId, overallScore: report.overallScore, recommendationCount: 0,
-      analyzerFailureCount: 0, completedAt: new Date(0).toISOString(), report });
+      analyzerFailureCount: 0, completedAt: new Date(0).toISOString(), report, admission: receipt.admission });
     expect(useDirectorReportStore.getState().currentReport).toEqual(report);
     expect(useDirectorReportStore.getState().lastAnalyzedAt).toBe(new Date(0).toISOString());
+    expect(receipt.acknowledgeStored).toHaveBeenCalledOnce();
     expect(persisted).toHaveBeenCalledOnce(); monitor.stop();
+  });
+  it('completion admission fails closed before the existing store writer', async () => {
+    const bus = new TypedEventBus<ApplicationEventMap>(); const persisted = vi.fn(); bus.on('director:report-persisted', persisted);
+    const monitor = createDirectorMonitor(bus); monitor.start(); const report = await createDirectorEngine().analyze(directorInput());
+    const receipt = completionAdmission(false);
+    await bus.emit('director:analysis-completed', { projectId: report.projectId, overallScore: report.overallScore, recommendationCount: 0,
+      analyzerFailureCount: 0, completedAt: new Date(0).toISOString(), report, admission: receipt.admission });
+    expect(useDirectorReportStore.getState().currentReport).toBeNull();
+    expect(receipt.acknowledgeStored).not.toHaveBeenCalled();
+    expect(persisted).not.toHaveBeenCalled(); monitor.stop();
   });
   it('aynı rapor yeniden analiz edildiğinde completion zamanını ilerletir', async () => {
     const report = await createDirectorEngine().analyze(directorInput());
@@ -81,4 +93,40 @@ describe('Director Report Store ve Monitor', () => {
     const hydrated = mergeDirectorPersistedState({ reportsByProject: { [report.projectId]: report }, activeProjectId: report.projectId }, useDirectorReportStore.getState());
     expect(hydrated.lastAnalyzedAt).toBe(report.generatedAt);
   });
+  it('does not acknowledge validator or store-writer failures', async () => {
+    const bus = new TypedEventBus<ApplicationEventMap>(); const monitor = createDirectorMonitor(bus); monitor.start();
+    const report = await createDirectorEngine().analyze(directorInput());
+    const validatorFailure = completionAdmission(() => { throw new Error('validator failed'); });
+    await bus.emit('director:analysis-completed', { projectId: report.projectId, overallScore: report.overallScore, recommendationCount: 0,
+      analyzerFailureCount: 0, completedAt: new Date(0).toISOString(), report, admission: validatorFailure.admission });
+    expect(useDirectorReportStore.getState().currentReport).toBeNull();
+    expect(validatorFailure.acknowledgeStored).not.toHaveBeenCalled();
+    expect(validatorFailure.fail).toHaveBeenCalledOnce();
+
+    const storeFailure = completionAdmission();
+    const write = vi.spyOn(useDirectorReportStore.getState(), 'analysisCompleted').mockImplementation(() => { throw new Error('store failed'); });
+    await bus.emit('director:analysis-completed', { projectId: report.projectId, overallScore: report.overallScore, recommendationCount: 0,
+      analyzerFailureCount: 0, completedAt: new Date(0).toISOString(), report, admission: storeFailure.admission });
+    expect(write).toHaveBeenCalledOnce();
+    expect(storeFailure.acknowledgeStored).not.toHaveBeenCalled();
+    expect(storeFailure.fail).toHaveBeenCalledOnce();
+    write.mockRestore();
+    monitor.stop();
+  });
+  it('fails closed when runtime completion admission is missing', async () => {
+    const bus = new TypedEventBus<ApplicationEventMap>(); const monitor = createDirectorMonitor(bus); monitor.start();
+    const report = await createDirectorEngine().analyze(directorInput());
+    await bus.emit('director:analysis-completed', { projectId: report.projectId, overallScore: report.overallScore, recommendationCount: 0,
+      analyzerFailureCount: 0, completedAt: new Date(0).toISOString(), report, admission: undefined as never });
+    expect(useDirectorReportStore.getState().currentReport).toBeNull();
+    monitor.stop();
+  });
 });
+
+function completionAdmission(validate: boolean | (() => boolean) = true) {
+  const validateReport = vi.fn(typeof validate === 'function' ? validate : () => validate);
+  const acknowledgeStored = vi.fn();
+  const fail = vi.fn();
+  const admission: DirectorCompletionAdmissionV1 = { validate: validateReport, acknowledgeStored, fail };
+  return { admission, validate: validateReport, acknowledgeStored, fail };
+}

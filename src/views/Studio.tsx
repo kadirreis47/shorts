@@ -24,9 +24,9 @@ import { Card, Button } from '@/components/ui';
 import { AIPipelineMonitor } from '@/components/AIPipelineMonitor';
 import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
-import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
+import { clearStudioDraft, loadStudioDraft, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes, isStudioOutputRevisionCurrent } from '@/lib/studioOutputIdentity';
-import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createSpatialContinuityEvidenceReport, createSpatialContinuityFramingRecommendations, createVisualRhythmEvidenceReport, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isSpatialContinuityFramingRecommendationCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordBoundTo, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, visualSpatialEvidenceSourceEqual, visualSpatialEvidenceSourceFromTrustedGeometry, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type ImageFramingApplicationProposalV1, type SpatialContinuityFramingRecommendationV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createSpatialContinuityEvidenceReport, createSpatialContinuityFramingRecommendations, createVisualRhythmEvidenceReport, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isSpatialContinuityFramingRecommendationCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordBoundTo, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, visualSpatialEvidenceSourceEqual, visualSpatialEvidenceSourceFromTrustedGeometry, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type CreateSpatialContinuityEvidenceReportInput, type ImageFramingApplicationProposalV1, type SpatialContinuityFramingRecommendationV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { assignNewCanonicalSceneIds, createCanonicalSceneId } from '@/lib/sceneIdentity';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
@@ -34,6 +34,7 @@ import { getStudioWorkflow } from '@/lib/studioWorkflow';
 import { applicationContainer, dependencyTokens } from '@/core/di';
 import { assessNarrationAlignment, canonicalizeStudioRecipeTransition, compileStudioProductionRecipeV1, isStudioRecipeCanonicalTransition, normalizeStudioProductionRecipeV1, resolveEffectiveSceneComposition, resolveSubtitleTimingScenes, serializeCanonicalSubtitleSrt } from '@/core/media';
 import { DirectorAnalysisAction } from '@/components/DirectorAnalysisAction';
+import { createDirectorRequestSourceLifetimeV1, createDirectorSnapshotRequestSourceV1, type DirectorCurrentRequestSourceV1 } from '@/services/directorSnapshotRequestAdapter';
 import { activateStudioProject, createStudioProjectIdentity, resolveStudioProjectId, startNewStudioProject } from '@/services/studioProjectIdentity';
 import { enqueueActiveExport, loadExportCapabilities, planActiveExport, waitForActiveExport } from '@/services/exportIntelligenceController';
 import { isVerifiedExportJob, type ExportJob } from '@/core/export-intelligence';
@@ -536,7 +537,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
   const visualSessionEpoch = useRef(0);
   const spatialFramingTransactionGeneration = useRef(0);
   const directorProjectIdRef = useRef(directorProjectId);
-  useEffect(() => { scenesRef.current = scenes; }, [scenes]);
+  useLayoutEffect(() => { scenesRef.current = scenes; }, [scenes]);
   useEffect(() => { selectedVisualCandidatesRef.current = selectedVisualCandidates; }, [selectedVisualCandidates]);
   useEffect(() => { visualShortlistsRef.current = visualShortlists; }, [visualShortlists]);
   useEffect(() => { visualPlanningRef.current = visualIntelligence; }, [visualIntelligence]);
@@ -1919,6 +1920,58 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
       characterAppearance,
       characterArtStyle,
     }, ownerContext);
+  }
+
+  function captureDirectorCanonicalSource() {
+    const evaluationTimeMs = Date.now();
+    const ownerContext = captureValidatedMediaOwnerContext();
+    const recipe = currentProductionRecipe(ownerContext, showSubtitles, scenes);
+    const visualPlanningInput: CreateSpatialContinuityEvidenceReportInput = {
+      projectId: directorProjectId,
+      scenes,
+      appliedSpatialEvidence: visualSpatialEvidence,
+      trustedImageGeometry: Object.fromEntries(scenes.map((scene) => [scene.sceneId, scene.imageDisplayGeometry])),
+      evaluationTimeMs,
+      outputDimensions: STUDIO_IMAGE_FRAMING_OUTPUT,
+      compositionDefaults: {
+        motion: motionStyle,
+        transition: canonicalizeStudioRecipeTransition(transitionStyle),
+      },
+    };
+    return { recipe, visualPlanningInput };
+  }
+
+  function readDirectorCurrentSource(): DirectorCurrentRequestSourceV1 {
+    const captured = captureDirectorCanonicalSource();
+    return Object.freeze({
+      projectId: directorProjectId,
+      studioRecipeIdentity: captured.recipe.identity,
+      visualPlanningInput: captured.visualPlanningInput,
+    });
+  }
+
+  const directorCurrentSourceReaderRef = useRef(readDirectorCurrentSource);
+  const directorSourceLifetimeRef = useRef(createDirectorRequestSourceLifetimeV1());
+  useLayoutEffect(() => {
+    const lifetime = directorSourceLifetimeRef.current;
+    lifetime.activate();
+    return () => lifetime.invalidate();
+  }, []);
+  useLayoutEffect(() => {
+    directorCurrentSourceReaderRef.current = readDirectorCurrentSource;
+  });
+
+  function captureDirectorAnalysisRequestSource() {
+    const captured = captureDirectorCanonicalSource();
+    const sourceLifetime = directorSourceLifetimeRef.current;
+    return createDirectorSnapshotRequestSourceV1({
+      projectId: directorProjectId,
+      buildInput: compileStudioProductionRecipeV1(captured.recipe),
+      studioRecipeIdentity: captured.recipe.identity,
+      visualPlanningInput: captured.visualPlanningInput,
+      readCurrentProjectId: () => sourceLifetime.read(() => directorProjectIdRef.current),
+      readCurrentSource: () => sourceLifetime.read(() => directorCurrentSourceReaderRef.current()),
+    });
   }
 
   async function canonicalSubtitleSrt(): Promise<string> {
@@ -4301,7 +4354,7 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                   )}
                   <div className="flex justify-between gap-2">
                     <Button variant="secondary" onClick={() => setStep('voice')}><ArrowLeft size={16} /> {t('studio.back')}</Button>
-                    <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} request={{ projectId: directorProjectId, buildInput: { title: title || topic || 'Untitled Studio Project', scenes, audio: { narrationMode: resolveStudioAudioNarrationMode(voiceoverMode, hasCanonicalNarration) }, narration: hasCanonicalNarration && narration ? { storage: narration.storage, durationMs: narration.durationMs, scriptRevision: narration.scriptRevision, voiceId: narration.voiceId, ...(narration.alignment ? { alignment: narration.alignment } : {}) } : undefined } }} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={() => void prepareModernPublish()} disabled={!channel || preparingPublish}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
+                    <div className="flex gap-2"><DirectorAnalysisAction navigate={() => onNavigateDirector()} captureRequest={captureDirectorAnalysisRequestSource} />{onNavigatePlatform && <Button onClick={onNavigatePlatform}><Sparkles size={16} /> Optimize for platform</Button>}<Button onClick={() => void prepareModernPublish()} disabled={!channel || preparingPublish}><Film size={16} /> {t('studio.renderVideo')}</Button></div>
                   </div>
                 </>
               )}

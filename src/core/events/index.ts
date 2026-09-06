@@ -1,5 +1,5 @@
 export { TypedEventBus } from './eventBus';
-export type { ApplicationEventMap } from './applicationEvents';
+export type { ApplicationEventMap, DirectorCompletionAdmissionV1 } from './applicationEvents';
 export type {
   EventBus,
   EventHandler,

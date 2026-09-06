@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   createSignedUrl: vi.fn(),
   issueOpaqueSpatialMediaAnalysisReference: vi.fn(),
   analyzeVisualSpatial: vi.fn(),
+  analyzeDirector: vi.fn(),
 }));
 
 vi.mock('@/core/di', () => ({
@@ -28,6 +29,10 @@ vi.mock('@/lib/api', () => ({
   issueOpaqueSpatialMediaAnalysisReference: mocks.issueOpaqueSpatialMediaAnalysisReference, analyzeVisualSpatial: mocks.analyzeVisualSpatial, resolveOwnedImageDisplayGeometry: mocks.resolveOwnedImageDisplayGeometry,
 }));
 vi.mock('@/lib/videoRenderer', () => ({ renderVideo: vi.fn() }));
+vi.mock('@/services/directorAnalysisController', () => ({
+  analyzeActiveDirectorProject: mocks.analyzeDirector,
+  cancelActiveDirectorAnalysis: vi.fn(),
+}));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -43,9 +48,41 @@ describe('Studio Spatial Continuity Evidence V1', () => {
     mocks.analyzeVisualSpatial
       .mockResolvedValueOnce(spatial({ x: 0.5, y: 0.5 }))
       .mockResolvedValueOnce(spatial({ x: 0.5, y: 0.5 }));
+    mocks.analyzeDirector.mockResolvedValue({ status: 'rejected', reason: 'source-unavailable' });
     saveStudioDraft(draft());
     container = document.createElement('div');
     document.body.append(container);
+  });
+
+  it('invalidates a captured Director current-source reader when its Studio instance unmounts', async () => {
+    const base = draft();
+    saveStudioDraft({
+      ...base,
+      step: 'render',
+      scenes: base.scenes.map(({ imageStorage: _imageStorage, ...scene }) => scene),
+    });
+    const navigate = vi.fn();
+    const pending = deferred<{ status: 'rejected'; reason: 'source-unavailable' }>();
+    mocks.analyzeDirector.mockReturnValue(pending.promise);
+    const root = createRoot(container);
+    await act(async () => { root.render(<I18nProvider><Studio channels={[channel()]} onNavigateDirector={navigate} /></I18nProvider>); await Promise.resolve(); });
+    const analyze = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('AI Director'));
+    expect(analyze).toBeDefined();
+    await act(async () => { analyze?.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
+    expect(mocks.analyzeDirector).toHaveBeenCalledOnce();
+    const source = mocks.analyzeDirector.mock.calls[0][0] as {
+      readCurrentProjectId: () => string | null;
+      readCurrentSource: () => unknown | null;
+    };
+    expect(source.readCurrentProjectId()).toBe(base.projectId);
+    expect(source.readCurrentSource()).not.toBeNull();
+    await act(async () => root.unmount());
+    expect(source.readCurrentProjectId()).toBeNull();
+    expect(source.readCurrentSource()).toBeNull();
+    pending.resolve({ status: 'rejected', reason: 'source-unavailable' });
+    await act(async () => { await pending.promise; });
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   afterEach(() => { vi.useRealTimers(); container.remove(); window.localStorage.clear(); vi.clearAllMocks(); });
@@ -398,4 +435,11 @@ function draft(): StudioDraft {
 }
 function channel(): CanonicalChannelIdentity {
   return { id: 'youtube:UC-CONTINUITY', source: 'native-youtube', legacyChannelId: null, publishingAccountId: 'youtube:continuity', platform: 'youtube', channelRef: 'UC-CONTINUITY', name: 'Continuity', handle: null, niche: null, avatar_color: '#000000', status: 'active', subscriber_count: 0, video_count: 0 };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
