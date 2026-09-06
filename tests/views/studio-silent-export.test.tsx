@@ -848,6 +848,8 @@ describe('Studio canonical silent export', () => {
     await act(async () => { analyze()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
     await act(async () => { analyze()[1].dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve(); });
     expect(container.textContent).toContain('2 analyzed');
+    expect(container.querySelector('[data-testid="visual-rhythm-panel"]')?.textContent).toContain('2 spatially analyzed');
+    const originalRhythm = container.querySelector('[data-testid="visual-rhythm-panel"]')?.textContent;
     const originalBoundary = container.querySelector('[data-testid="spatial-continuity-boundary"]')?.textContent;
     expect(originalBoundary).toBeTruthy();
     const originalRecommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')?.textContent;
@@ -859,6 +861,7 @@ describe('Studio canonical silent export', () => {
     await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve(); });
     expect(container.textContent).toContain('0 analyzed');
     expect(container.textContent).toContain('2 evidence unavailable');
+    expect(container.querySelector('[data-testid="visual-rhythm-panel"]')?.textContent).toContain('2 spatial evidence unavailable');
     expect(container.textContent).toContain('spatial evidence is unavailable for this comparison');
     expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')).toBeNull();
     expect(mocks.resolveOwnedImageDisplayGeometry).toHaveBeenCalledTimes(geometryRequestsBeforeExpiry + 1);
@@ -873,6 +876,7 @@ describe('Studio canonical silent export', () => {
       for (let index = 0; index < 12; index += 1) await Promise.resolve();
     });
     expect(container.textContent).toContain('2 analyzed');
+    expect(container.querySelector('[data-testid="visual-rhythm-panel"]')?.textContent).toBe(originalRhythm);
     expect(container.querySelector('[data-testid="spatial-continuity-boundary"]')?.textContent).toBe(originalBoundary);
     expect(container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]')?.textContent).toBe(originalRecommendation);
     const restoredRecommendation = container.querySelector('[data-testid="spatial-continuity-framing-recommendation"]');

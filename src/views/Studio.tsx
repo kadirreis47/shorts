@@ -26,7 +26,7 @@ import { classNames } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { clearStudioDraft, loadStudioDraft, resolveStudioAudioNarrationMode, saveStudioDraft, type BrowserTtsFinalIntent, type StudioDraft, type StudioStep, type StudioVoiceoverMode } from '@/lib/studioDraft';
 import { canonicalStudioCompositionOutput, canonicalStudioOutputScenes, isStudioOutputRevisionCurrent } from '@/lib/studioOutputIdentity';
-import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createSpatialContinuityEvidenceReport, createSpatialContinuityFramingRecommendations, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isSpatialContinuityFramingRecommendationCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordBoundTo, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, visualSpatialEvidenceSourceEqual, visualSpatialEvidenceSourceFromTrustedGeometry, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type ImageFramingApplicationProposalV1, type SpatialContinuityFramingRecommendationV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
+import { applyCinematographyApplicationProposal, assessCinematography, createCinematographyApplicationProposal, createImageFramingApplicationProposal, createSceneVisualBinding, createSpatialContinuityEvidenceReport, createSpatialContinuityFramingRecommendations, createVisualRhythmEvidenceReport, createVisualSemanticRequestRegistry, createVisualSpatialEvidenceRecord, createVisualSpatialRequestRegistry, createVisualStoryPlan, discoverVisualCandidates, interpretVisualSemanticAnalysis, isImageFramingApplicationProposalCurrent, isSceneVisualBindingCurrent, isSpatialContinuityFramingRecommendationCurrent, isVisualQueryPlanCurrent, isVisualSpatialEvidenceRecordBoundTo, isVisualSpatialEvidenceRecordCurrent, semanticRankingAdjustment, unavailableVisualSpatialAnalysis, visualBriefFingerprint, visualSpatialEvidenceSourceEqual, visualSpatialEvidenceSourceFromTrustedGeometry, VISUAL_SEMANTIC_ANALYSIS_DIMENSIONS, type CinematographyApplicationProposal, type ImageFramingApplicationProposalV1, type SpatialContinuityFramingRecommendationV1, type VisualDiscoveryShortlist, type VisualIntelligencePlanningState, type VisualSemanticAssessment, type VisualSpatialEvidenceBinding, type VisualSpatialEvidenceRecord, type VisualStoryMediaContext } from '@/core/visual-intelligence';
 import { assignNewCanonicalSceneIds, createCanonicalSceneId } from '@/lib/sceneIdentity';
 import { createPexelsVisualDiscoveryProvider } from '@/services/pexelsVisualDiscoveryProvider';
 import { mergeVisualIntelligencePlanning } from '@/services/visualQueryPlannerController';
@@ -1173,6 +1173,12 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
     compositionDefaults: { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) },
   } as const), [directorProjectId, motionStyle, scenes, spatialGeometryTrustEvaluationTime, transitionStyle, visualSpatialEvidence]);
   const spatialContinuity = useMemo(() => createSpatialContinuityEvidenceReport(spatialContinuityInput), [spatialContinuityInput]);
+  const visualRhythm = useMemo(() => createVisualRhythmEvidenceReport({
+    projectId: directorProjectId,
+    scenes,
+    compositionDefaults: { motion: motionStyle, transition: canonicalizeStudioRecipeTransition(transitionStyle) },
+    spatialContinuityReport: spatialContinuity,
+  }), [directorProjectId, motionStyle, scenes, spatialContinuity, transitionStyle]);
   const spatialContinuityFramingRecommendations = useMemo(() => createSpatialContinuityFramingRecommendations({
     continuityReport: spatialContinuity,
     continuityInput: spatialContinuityInput,
@@ -3288,6 +3294,22 @@ export function Studio({ channels, onNavigateDirector, onNavigatePlatform }: Stu
                       {stale && !recommendation && <p role="status" className="mt-1 text-xs text-amber-700">{t('studio.framingSuggestionStale')}</p>}
                     </div>;
                   })}
+                </div>
+                <div data-testid="visual-rhythm-panel" className="mt-3 border-t border-sky-200 pt-3">
+                  <p className="font-semibold text-sky-900">{t('studio.visualRhythmTitle')}</p>
+                  <p className="mt-0.5 text-[11px] text-slate-600">{t('studio.visualRhythmCoverage', {
+                    structural: visualRhythm.coverage.structuralSceneIds.length,
+                    analyzed: visualRhythm.coverage.spatialAnalyzedSceneIds.length,
+                    unavailable: visualRhythm.coverage.spatialUnavailableSceneIds.length,
+                    unsupported: visualRhythm.coverage.spatialUnsupportedSceneIds.length,
+                  })}</p>
+                  {(visualRhythm.coverage.spatialUnavailableSceneIds.length > 0 || visualRhythm.coverage.spatialUnsupportedSceneIds.length > 0) && <p className="mt-1 text-[11px] text-slate-500">{t('studio.visualRhythmSpatialGap')}</p>}
+                  {visualRhythm.runs.length > 0 && <div className="mt-2 space-y-1">
+                    {visualRhythm.runs.map((run) => <p key={run.key} data-testid="visual-rhythm-run" className="rounded border border-sky-100 bg-white/80 px-2 py-1">
+                      {t(`studio.visualRhythm.${run.kind}`, { scenes: run.sceneIds.length, boundaries: run.boundaryKeys.length })}
+                    </p>)}
+                  </div>}
+                  {visualRhythm.runs.length === 0 && <p className="mt-1 text-[11px] text-slate-500">{t('studio.visualRhythmNoRuns')}</p>}
                 </div>
               </div>}
               <div className="mt-2 space-y-2">

@@ -14,3 +14,4 @@ export * from './spatialRequestRegistry';
 export * from './imageFramingApplication';
 export * from './spatialContinuity';
 export * from './spatialContinuityProposal';
+export * from './visualRhythm';
