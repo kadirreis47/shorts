@@ -1,4 +1,12 @@
-import type { DirectorEngine, DirectorInput, DirectorReport, DirectorSceneInput } from '@/core/director';
+import {
+  isVisualBoundDirectorReportV2_1,
+  type DirectorEngine,
+  type DirectorInput,
+  type DirectorReport,
+  type DirectorSceneInput,
+  type LegacyDirectorReportV2,
+  type VisualBoundDirectorReportV2_1,
+} from '@/core/director';
 import type { ApplicationEventMap, DirectorCompletionAdmissionV1, EventBus } from '@/core/events';
 import type { RenderManifest } from '@/core/media';
 import { createManifestRevisionId, MANIFEST_FINGERPRINT_VERSION } from '@/core/editing';
@@ -10,6 +18,8 @@ export interface DirectorRequestLifecycleV1 {
   readonly canEmitLifecycleEvent: () => boolean;
   /** Failure admission ignores explicit cancellation but still requires request ownership. */
   readonly ownsRequestLifecycle: () => boolean;
+  /** Creates the immutable 2.1 report from this request's same-boundary Visual provenance. */
+  readonly bindReport: (report: LegacyDirectorReportV2) => Promise<VisualBoundDirectorReportV2_1>;
   /** Re-evaluated both before emit and synchronously by the completion monitor. */
   readonly validateCompletion: (report: DirectorReport) => DirectorRequestValidation;
 }
@@ -50,11 +60,11 @@ export interface DirectorApplicationService {
   analyzeManifest(
     manifest: RenderManifest,
     options: DirectorApplicationOptions,
-  ): Promise<DirectorReport>;
+  ): Promise<VisualBoundDirectorReportV2_1>;
   analyzeInput(
     input: DirectorInput,
     options: DirectorApplicationOptions,
-  ): Promise<DirectorReport>;
+  ): Promise<VisualBoundDirectorReportV2_1>;
 }
 
 export function createDirectorInput(manifest: RenderManifest): DirectorInput {
@@ -118,7 +128,7 @@ export function createDirectorApplicationService(
   async function analyzeInput(
     input: DirectorInput,
     options: DirectorApplicationOptions,
-  ): Promise<DirectorReport> {
+  ): Promise<VisualBoundDirectorReportV2_1> {
     const lifecycle = requireDirectorApplicationLifecycle(options);
     const startedAt = new Date().toISOString();
     try {
@@ -130,7 +140,7 @@ export function createDirectorApplicationService(
         admit: lifecycle.canEmitLifecycleEvent,
       });
       requireLifecycleAdmission(lifecycle);
-      const report = await engine.analyze(input, {
+      const engineReport = await engine.analyze(input, {
         signal: options.signal,
         onAnalyzerCompleted: async (diagnostic) => {
           if (!lifecycle.canEmitLifecycleEvent()) return;
@@ -145,6 +155,8 @@ export function createDirectorApplicationService(
           });
         },
       });
+      const report = await lifecycle.bindReport(engineReport);
+      if (!isVisualBoundDirectorReportV2_1(report)) throw new DirectorLifecycleContractError();
       await emitIfCurrent('director:scene-ranked', { projectId: input.projectId, sceneCount: report.sceneRanking.scenes.length, rankedAt: new Date().toISOString(), admit: lifecycle.canEmitLifecycleEvent }, lifecycle);
       await emitIfCurrent('director:retention-map-completed', { projectId: input.projectId, segmentCount: report.retentionRiskMap.length, completedAt: new Date().toISOString(), admit: lifecycle.canEmitLifecycleEvent }, lifecycle);
       await emitIfCurrent('director:edit-plan-created', { projectId: input.projectId, decisionCount: report.editDecisionPlan.decisions.length, createdAt: new Date().toISOString(), admit: lifecycle.canEmitLifecycleEvent }, lifecycle);
@@ -233,6 +245,7 @@ function requireDirectorApplicationLifecycle(options: unknown): DirectorRequestL
   const candidate = lifecycle as Partial<DirectorRequestLifecycleV1>;
   if (typeof candidate.canEmitLifecycleEvent !== 'function'
     || typeof candidate.ownsRequestLifecycle !== 'function'
+    || typeof candidate.bindReport !== 'function'
     || typeof candidate.validateCompletion !== 'function') {
     throw new DirectorLifecycleContractError();
   }

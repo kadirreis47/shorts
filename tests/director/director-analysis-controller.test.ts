@@ -114,14 +114,19 @@ describe('Director analysis controller', () => {
   it('accepts one current canonical request and stores its report once', async () => {
     const current = { value: {} as DirectorCurrentRequestSourceV1 };
     const completed = vi.fn();
+    const write = vi.spyOn(useDirectorReportStore.getState(), 'analysisCompleted');
     bus.on('director:analysis-completed', completed);
     const outcome = await analyzeActiveDirectorProject(request(current));
     expect(outcome.status).toBe('accepted');
     if (outcome.status !== 'accepted') throw new Error('Expected accepted outcome.');
     expect(outcome.report.projectId).toBe(PROJECT);
+    expect(outcome.report.reportVersion).toBe('2.1');
+    expect(outcome.report).toHaveProperty('visualPlanningBinding');
     expect(useMediaStore.getState().manifest?.projectId).toBe(PROJECT);
     expect(useDirectorReportStore.getState().currentReport).toEqual(outcome.report);
     expect(completed).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledOnce();
+    expect(write.mock.calls[0][0]).toBe(outcome.report);
   });
 
   it('does not install a late build after a newer request owns the generation', async () => {

@@ -1,11 +1,13 @@
-import type { DirectorReport } from '@/core/director';
+import type { DirectorReport, VisualBoundDirectorReportV2_1 } from '@/core/director';
 import { createManifestRevisionId, MANIFEST_FINGERPRINT_VERSION } from '@/core/editing';
 import type { CreateMediaProjectInput, RenderManifest } from '@/core/media';
 import {
-  createValidatedVisualPlanningSnapshot,
+  createValidatedVisualPlanningSnapshotBundleV1,
+  isTrustedValidatedVisualPlanningSnapshotBundleV1,
   isValidatedVisualPlanningSnapshotCurrent,
   VALIDATED_VISUAL_PLANNING_SNAPSHOT_VERSION,
   type CreateSpatialContinuityEvidenceReportInput,
+  type ValidatedVisualPlanningSnapshotBundleV1,
   type ValidatedVisualPlanningSnapshotSceneV1,
   type ValidatedVisualPlanningSnapshotV1,
 } from '@/core/visual-intelligence';
@@ -24,7 +26,7 @@ export type DirectorAnalysisRejectionReason =
   | 'inconsistent-request';
 
 export type DirectorAnalysisOutcome =
-  | Readonly<{ status: 'accepted'; report: DirectorReport }>
+  | Readonly<{ status: 'accepted'; report: VisualBoundDirectorReportV2_1 }>
   | Readonly<{ status: 'rejected'; reason: DirectorAnalysisRejectionReason }>;
 
 export interface DirectorCurrentRequestSourceV1 {
@@ -38,6 +40,7 @@ export interface DirectorSnapshotRequestSourceV1 {
   readonly buildInput: CreateMediaProjectInput;
   readonly studioRecipeIdentity: string;
   readonly snapshot: ValidatedVisualPlanningSnapshotV1;
+  readonly visualPlanningBundle: ValidatedVisualPlanningSnapshotBundleV1;
   readonly readCurrentProjectId: () => string | null;
   readonly readCurrentSource: () => DirectorCurrentRequestSourceV1 | null;
 }
@@ -73,6 +76,7 @@ export interface DirectorVisualAnalysisRequestV1 {
     startingMediaManifestFingerprint: string | null;
   }>;
   readonly snapshot: ValidatedVisualPlanningSnapshotV1;
+  readonly visualPlanningBundle: ValidatedVisualPlanningSnapshotBundleV1;
   readonly readCurrentProjectId: () => string | null;
   readonly readCurrentSource: () => DirectorCurrentRequestSourceV1 | null;
 }
@@ -100,13 +104,15 @@ export function createDirectorSnapshotRequestSourceV1(input: Readonly<{
     || input.buildInput.productionRecipe.identity !== input.studioRecipeIdentity) {
     throw new Error('Director build input must be the compilation of the captured canonical Studio Recipe.');
   }
-  const snapshot = createValidatedVisualPlanningSnapshot(input.visualPlanningInput);
+  const visualPlanningBundle = createValidatedVisualPlanningSnapshotBundleV1(input.visualPlanningInput);
+  const { snapshot } = visualPlanningBundle;
   if (snapshot.projectId !== projectId) throw new Error('Director visual planning source project identity is invalid.');
   return Object.freeze({
     projectId,
     buildInput: input.buildInput,
     studioRecipeIdentity: input.studioRecipeIdentity,
     snapshot,
+    visualPlanningBundle,
     readCurrentProjectId: input.readCurrentProjectId,
     readCurrentSource: input.readCurrentSource,
   });
@@ -130,6 +136,10 @@ export function createDirectorVisualAnalysisRequestV1(
   lease: DirectorMediaStoreLeaseV1,
 ): DirectorVisualAnalysisRequestV1 {
   if (!Number.isSafeInteger(requestId) || requestId < 1) throw new Error('Director request id is invalid.');
+  if (!isTrustedValidatedVisualPlanningSnapshotBundleV1(source.visualPlanningBundle)
+    || source.snapshot !== source.visualPlanningBundle.snapshot) {
+    throw new DirectorRequestConsistencyError('unsupported-binding');
+  }
   if (manifest.metadata.productionRecipe?.identity !== source.studioRecipeIdentity) {
     throw new DirectorRequestConsistencyError('inconsistent-request');
   }
@@ -153,6 +163,7 @@ export function createDirectorVisualAnalysisRequestV1(
       startingMediaManifestFingerprint: lease.startingMediaManifestFingerprint,
     }),
     snapshot: source.snapshot,
+    visualPlanningBundle: source.visualPlanningBundle,
     readCurrentProjectId: source.readCurrentProjectId,
     readCurrentSource: source.readCurrentSource,
   };
@@ -245,7 +256,8 @@ function isSupportedRequest(request: DirectorVisualAnalysisRequestV1): boolean {
     && request.manifestBinding.manifestBindingVersion === DIRECTOR_MANIFEST_BINDING_VERSION
     && request.manifestBinding.manifestFingerprintVersion === MANIFEST_FINGERPRINT_VERSION
     && request.visualPlanningBinding.snapshotVersion === VALIDATED_VISUAL_PLANNING_SNAPSHOT_VERSION
-    && request.snapshot.version === VALIDATED_VISUAL_PLANNING_SNAPSHOT_VERSION;
+    && isTrustedValidatedVisualPlanningSnapshotBundleV1(request.visualPlanningBundle)
+    && request.snapshot === request.visualPlanningBundle.snapshot;
 }
 
 function mediaKind(scene: CreateMediaProjectInput['scenes'][number]): ValidatedVisualPlanningSnapshotSceneV1['mediaKind'] {

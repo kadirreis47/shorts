@@ -11,7 +11,11 @@ import {
   validateDirectorRequestCompletionV1,
   validateDirectorRequestSourceCurrentV1,
 } from '@/services/directorSnapshotRequestAdapter';
-import { createVisualSpatialEvidenceRecord, type CreateSpatialContinuityEvidenceReportInput } from '@/core/visual-intelligence';
+import {
+  createVisualSpatialEvidenceRecord,
+  isTrustedValidatedVisualPlanningSnapshotBundleV1,
+  type CreateSpatialContinuityEvidenceReportInput,
+} from '@/core/visual-intelligence';
 import type { TrustedImageDisplayGeometryV1 } from '@/core/media/imageDisplayGeometry';
 import type { Scene } from '@/lib/types';
 import { setValidatedOwnerId } from '@/auth/identity';
@@ -109,6 +113,9 @@ describe('Director Snapshot Request Adapter V1', () => {
       visualPlanningBinding: { snapshotVersion: 1 },
       sourceBinding: { studioRecipeIdentity: captured.recipeIdentity },
     });
+    expect(isTrustedValidatedVisualPlanningSnapshotBundleV1(captured.request.visualPlanningBundle)).toBe(true);
+    expect(request.visualPlanningBundle).toBe(captured.request.visualPlanningBundle);
+    expect(request.snapshot).toBe(request.visualPlanningBundle.snapshot);
     expect(validateDirectorRequestCompletionV1(request, report, built)).toEqual({ accepted: true });
   });
 
@@ -192,11 +199,23 @@ describe('Director Snapshot Request Adapter V1', () => {
       .toEqual({ accepted: false, reason: 'unsupported-binding' });
   });
 
+  it('rejects a structurally cloned Visual Planning bundle at the request boundary', async () => {
+    const captured = source();
+    const built = await manifest();
+    const clonedBundle = { ...captured.request.visualPlanningBundle } as typeof captured.request.visualPlanningBundle;
+    expect(isTrustedValidatedVisualPlanningSnapshotBundleV1(clonedBundle)).toBe(false);
+    expect(() => createDirectorVisualAnalysisRequestV1(4, {
+      ...captured.request,
+      visualPlanningBundle: clonedBundle,
+    }, built, { startingMediaProjectId: null, startingMediaManifestFingerprint: null }))
+      .toThrow(/unsupported visual planning binding/u);
+  });
+
   it('fails closed after the originating Studio source lifetime ends', async () => {
     const captured = source();
     const built = await manifest();
     const lifetime = createDirectorRequestSourceLifetimeV1();
-    const request = createDirectorVisualAnalysisRequestV1(4, {
+    const request = createDirectorVisualAnalysisRequestV1(5, {
       ...captured.request,
       readCurrentProjectId: () => lifetime.read(() => PROJECT),
       readCurrentSource: () => lifetime.read(() => equivalentSource(visualInput())),

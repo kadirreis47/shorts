@@ -6,3 +6,4 @@ export * from './hookIntelligence';
 export * from './sceneRanking';
 export * from './retentionRiskMap';
 export * from './editDecisionPlanner';
+export * from './reportCurrentness';

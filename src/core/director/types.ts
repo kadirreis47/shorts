@@ -208,7 +208,28 @@ export interface DirectorAnalyzerDiagnostic {
   readonly affectedSceneIds: readonly string[];
 }
 
-export interface DirectorReport {
+export type DirectorSpatialSceneBindingV1 =
+  | Readonly<{
+      sceneId: string;
+      sceneIndex: number;
+      coverage: 'analyzed';
+      factualDigest: string;
+    }>
+  | Readonly<{
+      sceneId: string;
+      sceneIndex: number;
+      coverage: 'unavailable' | 'unsupported';
+    }>;
+
+export interface DirectorVisualPlanningBindingV1 {
+  readonly version: 1;
+  readonly snapshotVersion: 1;
+  readonly digestAlgorithm: 'SHA-256';
+  readonly semanticDigest: string;
+  readonly spatialScenes: readonly DirectorSpatialSceneBindingV1[];
+}
+
+export interface DirectorReportPayload {
   readonly projectId: string;
   readonly generatedAt: string;
   readonly manifestBindingVersion: '1.0' | null;
@@ -226,7 +247,6 @@ export interface DirectorReport {
   readonly decisions: readonly DirectorDecision[];
   readonly analyzerDiagnostics: readonly DirectorAnalyzerDiagnostic[];
   readonly deterministicVersion: string;
-  readonly reportVersion: '2.0';
   readonly executiveSummary: string;
   readonly dimensionScores: Readonly<Record<DirectorScoreDimension, number>>;
   readonly hookIntelligence: DirectorHookIntelligence;
@@ -244,6 +264,20 @@ export interface DirectorReport {
   readonly quickWins: readonly DirectorRecommendation[];
   readonly highImpactRecommendations: readonly DirectorRecommendation[];
 }
+
+/** Historical Director report produced before durable Visual Planning provenance. */
+export interface LegacyDirectorReportV2 extends DirectorReportPayload {
+  readonly reportVersion: '2.0';
+  readonly visualPlanningBinding?: never;
+}
+
+/** Director report durably bound to the request-time Visual Planning semantics. */
+export interface VisualBoundDirectorReportV2_1 extends DirectorReportPayload {
+  readonly reportVersion: '2.1';
+  readonly visualPlanningBinding: DirectorVisualPlanningBindingV1;
+}
+
+export type DirectorReport = LegacyDirectorReportV2 | VisualBoundDirectorReportV2_1;
 
 export interface DirectorAnalyzerSceneResult {
   readonly sceneId: string;
@@ -283,5 +317,5 @@ export interface DirectorEngineOptions {
 }
 
 export interface DirectorEngine {
-  analyze(input: DirectorInput, options?: DirectorAnalysisOptions): Promise<DirectorReport>;
+  analyze(input: DirectorInput, options?: DirectorAnalysisOptions): Promise<LegacyDirectorReportV2>;
 }

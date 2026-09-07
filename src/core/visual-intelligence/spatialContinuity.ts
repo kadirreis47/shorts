@@ -98,6 +98,25 @@ export interface CreateSpatialContinuityEvidenceReportInput {
   readonly compositionDefaults: SceneCompositionDefaults;
 }
 
+/** Session-only material used to derive compact durable verification digests. */
+export type SpatialContinuityVerificationSceneV1 =
+  | Readonly<{
+      sceneId: string;
+      sceneIndex: number;
+      coverage: 'analyzed';
+      analyzedFreshnessCanonical: string;
+    }>
+  | Readonly<{
+      sceneId: string;
+      sceneIndex: number;
+      coverage: 'unavailable' | 'unsupported';
+    }>;
+
+export interface SpatialContinuityEvidenceBundleV1 {
+  readonly report: SpatialContinuityEvidenceReportV1;
+  readonly verificationScenes: readonly SpatialContinuityVerificationSceneV1[];
+}
+
 /**
  * Pure session-only continuity evidence. It evaluates current final display crops,
  * never creates a proposal, and never owns canonical scene mutation.
@@ -105,6 +124,13 @@ export interface CreateSpatialContinuityEvidenceReportInput {
 export function createSpatialContinuityEvidenceReport(
   input: CreateSpatialContinuityEvidenceReportInput,
 ): SpatialContinuityEvidenceReportV1 {
+  return createSpatialContinuityEvidenceBundleV1(input).report;
+}
+
+/** Evaluates Spatial Continuity once and retains only authority-neutral verification material. */
+export function createSpatialContinuityEvidenceBundleV1(
+  input: CreateSpatialContinuityEvidenceReportInput,
+): SpatialContinuityEvidenceBundleV1 {
   const evaluationTimeMs = evaluationTime(input.evaluationTimeMs);
   const output = dimensions(input.outputDimensions);
   const scenes = input.scenes.map((scene, sceneIndex) => deriveScene(input, scene, sceneIndex, output, evaluationTimeMs));
@@ -121,7 +147,20 @@ export function createSpatialContinuityEvidenceReport(
     outputDimensions: output,
     scenes: scenes.map((item) => item.freshness),
   });
-  return Object.freeze({ version: SPATIAL_CONTINUITY_EVIDENCE_VERSION, freshnessFingerprint, coverage, sceneSignatures: signatures, boundaries });
+  const report = Object.freeze({ version: SPATIAL_CONTINUITY_EVIDENCE_VERSION, freshnessFingerprint, coverage, sceneSignatures: signatures, boundaries });
+  const verificationScenes = Object.freeze(scenes.map((item): SpatialContinuityVerificationSceneV1 => item.kind === 'analyzed'
+    ? Object.freeze({
+      sceneId: item.scene.sceneId,
+      sceneIndex: item.sceneIndex,
+      coverage: 'analyzed',
+      analyzedFreshnessCanonical: canonicalSerialize(item.analyzedFreshness),
+    })
+    : Object.freeze({
+      sceneId: item.scene.sceneId,
+      sceneIndex: item.sceneIndex,
+      coverage: item.kind,
+    })));
+  return Object.freeze({ report, verificationScenes });
 }
 
 type DerivedScene = Readonly<{
@@ -130,6 +169,7 @@ type DerivedScene = Readonly<{
   kind: SpatialContinuityCoverageKind;
   signature?: SpatialContinuitySceneSignatureV1;
   freshness: unknown;
+  analyzedFreshness?: unknown;
 }>;
 
 function deriveScene(
@@ -204,17 +244,26 @@ function deriveScene(
     incomingTransition: effective.transition,
     durationMs: durationMs(scene.duration),
   });
+  const geometryFreshness = immutableGeometry(geometry);
+  const evidenceFreshnessValue = evidenceFreshness(evidence);
   return Object.freeze({
     scene, sceneIndex,
     kind: 'analyzed',
     signature,
+    analyzedFreshness: {
+      sceneId: scene.sceneId,
+      sceneIndex,
+      state: 'analyzed',
+      geometry: geometryFreshness,
+      evidence: evidenceFreshnessValue,
+    },
     freshness: {
       ...base,
       state: 'analyzed',
-      geometry: immutableGeometry(geometry),
+      geometry: geometryFreshness,
       framing: framing ?? null,
       framingBinding: binding ? historicalBinding(geometry, mediaIdentity) : null,
-      evidence: evidenceFreshness(evidence),
+      evidence: evidenceFreshnessValue,
     },
   });
 }

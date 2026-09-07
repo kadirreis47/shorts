@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   createSpatialContinuityEvidenceReport,
   createValidatedVisualPlanningSnapshot,
+  createValidatedVisualPlanningSnapshotBundleV1,
   createVisualRhythmEvidenceReport,
   createVisualSpatialEvidenceRecord,
+  isTrustedValidatedVisualPlanningSnapshotBundleV1,
   isValidatedVisualPlanningSnapshotCurrent,
   type CreateSpatialContinuityEvidenceReportInput,
   type ValidatedVisualPlanningSnapshotV1,
@@ -150,6 +152,17 @@ describe('Validated Visual Planning Snapshot V1', () => {
     expect(Object.isFrozen(first.canonical.orderedScenes)).toBe(true);
     expect(Object.isFrozen(first.spatialContinuity.boundaries[0].findings)).toBe(true);
     expect(Object.isFrozen(first.visualRhythm.runs[0].sceneIds)).toBe(true);
+  });
+
+  it('creates an immutable runtime-certified bundle at the same Spatial evaluation boundary', () => {
+    const source = input({ unavailableSceneIds: [IDS[1]] });
+    const bundle = createValidatedVisualPlanningSnapshotBundleV1(source);
+    expect(isTrustedValidatedVisualPlanningSnapshotBundleV1(bundle)).toBe(true);
+    expect(Object.keys(bundle)).toEqual(['snapshot']);
+    expect(Object.isFrozen(bundle)).toBe(true);
+    expect(Object.isFrozen(bundle.snapshot)).toBe(true);
+    expect(isTrustedValidatedVisualPlanningSnapshotBundleV1({ ...bundle })).toBe(false);
+    expect(JSON.stringify(bundle)).not.toMatch(/analyzedFreshnessCanonical|executionAuthority|expiresAt|idga1_|evaluationTime/u);
   });
 
   it('preserves canonical order and copies only bounded factual planning material', () => {

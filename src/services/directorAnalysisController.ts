@@ -1,5 +1,10 @@
 import type { MediaEngine } from '@/core/media';
 import { createManifestRevisionId } from '@/core/editing';
+import {
+  bindDirectorReportV2_1,
+  createDirectorVisualPlanningBindingV1,
+  type VisualBoundDirectorReportV2_1,
+} from '@/core/director';
 import { useMediaStore } from '@/store/mediaStore';
 import {
   DirectorLifecycleRejectedError,
@@ -152,6 +157,7 @@ function createPreSubmitFailureLifecycle(
   return Object.freeze({
     canEmitLifecycleEvent: () => currentLifecycleRejection(request, source) === null,
     ownsRequestLifecycle: () => ownsGeneration(request) && safeCurrentProjectId(source) === source.projectId,
+    bindReport: async () => { throw new DirectorLifecycleRejectedError('inconsistent-request'); },
     validateCompletion: () => Object.freeze({ accepted: false as const, reason: 'inconsistent-request' as const }),
   });
 }
@@ -161,12 +167,21 @@ function createLifecycle(
   source: DirectorSnapshotRequestSourceV1,
   envelope: DirectorVisualAnalysisRequestV1,
 ): DirectorRequestLifecycleV1 {
+  let boundReport: VisualBoundDirectorReportV2_1 | null = null;
   const lifecycle: DirectorRequestLifecycleV1 = {
     canEmitLifecycleEvent: () => currentLifecycleRejection(request, source) === null,
     ownsRequestLifecycle: () => ownsGeneration(request) && safeCurrentProjectId(source) === source.projectId,
+    bindReport: async (report) => {
+      if (boundReport !== null) throw new DirectorLifecycleRejectedError('inconsistent-request');
+      const visualPlanningBinding = await createDirectorVisualPlanningBindingV1(envelope.visualPlanningBundle);
+      const created = bindDirectorReportV2_1(report, visualPlanningBinding);
+      boundReport = created;
+      return created;
+    },
     validateCompletion: (report) => {
       const lifecycleRejection = currentLifecycleRejection(request, source);
       if (lifecycleRejection) return Object.freeze({ accepted: false as const, reason: lifecycleRejection });
+      if (report !== boundReport) return Object.freeze({ accepted: false as const, reason: 'inconsistent-request' as const });
       return validateDirectorRequestCompletionV1(envelope, report, useMediaStore.getState().manifest);
     },
   };

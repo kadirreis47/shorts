@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDirectorEngine } from '@/core/director';
+import { bindDirectorReportV2_1, createDirectorEngine, type LegacyDirectorReportV2 } from '@/core/director';
 import { TypedEventBus } from '@/core/events';
 import type { ApplicationEventMap } from '@/core/events';
 import { createDirectorApplicationService, type DirectorApplicationOptions, type DirectorRequestLifecycleV1 } from '@/services/directorApplicationService';
@@ -10,12 +10,28 @@ import { directorInput } from './fixtures';
 function testLifecycle(
   overrides: Partial<DirectorRequestLifecycleV1> = {},
 ): DirectorRequestLifecycleV1 {
-  return {
+  const lifecycle: DirectorRequestLifecycleV1 = {
     canEmitLifecycleEvent: () => true,
     ownsRequestLifecycle: () => true,
+    bindReport: bindTestReport,
     validateCompletion: () => ({ accepted: true }),
-    ...overrides,
   };
+  return { ...lifecycle, ...overrides };
+}
+
+async function bindTestReport(report: LegacyDirectorReportV2) {
+  return bindDirectorReportV2_1(report, Object.freeze({
+    version: 1,
+    snapshotVersion: 1,
+    digestAlgorithm: 'SHA-256',
+    semanticDigest: '0'.repeat(64),
+    spatialScenes: Object.freeze(report.sceneScores.map((scene) => Object.freeze({
+      sceneId: scene.sceneId,
+      sceneIndex: scene.sceneIndex,
+      coverage: 'analyzed' as const,
+      factualDigest: '1'.repeat(64),
+    }))),
+  }));
 }
 
 function testOptions(
@@ -40,6 +56,7 @@ describe('DirectorApplicationService', () => {
     const service = createDirectorApplicationService(createDirectorEngine(), bus);
     const report = await service.analyzeInput(directorInput(), testOptions());
     expect(report.projectId).toBe('project-director');
+    expect(report.reportVersion).toBe('2.1');
     expect(started).toHaveBeenCalledOnce();
     expect(analyzerCompleted).toHaveBeenCalledTimes(7);
     const recommendationCount = new Set(report.sceneScores.flatMap((scene) => scene.recommendations.map((item) => item.id))).size;

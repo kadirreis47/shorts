@@ -1,4 +1,5 @@
 import type { ApplicationEventMap, EventBus } from '@/core/events';
+import { isVisualBoundDirectorReportV2_1 } from '@/core/director';
 import { useDirectorReportStore } from '@/store/directorReportStore';
 export interface DirectorMonitor { start(): void; stop(): void; }
 export function createDirectorMonitor(eventBus: EventBus<ApplicationEventMap>): DirectorMonitor {
@@ -16,6 +17,10 @@ export function createDirectorMonitor(eventBus: EventBus<ApplicationEventMap>): 
       // This synchronous check and store call are the final report-admission
       // linearization point. It closes the event bus's Promise microtask gap.
       if (!isCompletionAdmission(admission)) return;
+      if (!isVisualBoundDirectorReportV2_1(report)) {
+        safelyFail(admission, new Error('Director completion requires a supported visual-bound 2.1 report.'));
+        return;
+      }
       try {
         if (!admission.validate(report)) return;
       } catch (error) {

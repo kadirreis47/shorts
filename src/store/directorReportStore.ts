@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { DirectorReport } from '@/core/director';
+import { isSupportedDirectorReport, type DirectorReport } from '@/core/director';
 import { createPersistentStorage } from '@/persistence/storeStorage';
 
 export type DirectorAnalysisStatus = 'idle' | 'running' | 'completed' | 'failed';
@@ -32,18 +32,13 @@ function normalizeReports(value: unknown): Record<string, DirectorReport> {
   if (!isRecord(value)) return {};
   const reports: Record<string, DirectorReport> = {};
   for (const [projectId, report] of Object.entries(value)) {
-    if (isDirectorReport(report) && report.projectId === projectId) reports[projectId] = report;
+    if (isSupportedDirectorReport(report) && report.projectId === projectId) reports[projectId] = report;
   }
   return reports;
 }
 
 function newestReportId(reports: Record<string, DirectorReport>): string | null {
   return Object.values(reports).sort((left, right) => right.generatedAt.localeCompare(left.generatedAt) || left.projectId.localeCompare(right.projectId))[0]?.projectId ?? null;
-}
-
-function isDirectorReport(value: unknown): value is DirectorReport {
-  return isRecord(value) && typeof value.projectId === 'string' && typeof value.generatedAt === 'string' &&
-    typeof value.overallScore === 'number' && Array.isArray(value.sceneScores) && value.reportVersion === '2.0';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
